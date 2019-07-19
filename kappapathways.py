@@ -1,49 +1,348 @@
 #! /usr/bin/python3
 
 """
-Produce the pathway to EOI from given Kappa simulation.
+Find the pathway of a given event of interest in a Kappa simulation.
 
 # Example usage:
 
-from kappa_pathways import KappaPathway
+import kappapathways
 
-# Set EOI and kappa model.
-event_of_interest = "EGFR(Y1092{p})"
-kappa_model = "ptyr-model2-act.ka"
+# Set kappa model and event of interest.
+kappa_model = "signaling-model.ka"
+eoi = "EGFR(Y1092{p})"
 
-# Get pathway using KappaPathway class.
-pathway = KappaPathway(event_of_interest, kappa_model,
-                       sim_time=3600, seed=235866)
-output_path = "path-{}.dot".format(event_of_interest)
-output_file = open(output_path, "w")
-output_file.write(pathway.dot_file)
+# Simulation parameters.
+simtime = 3600
+simseed = 235866
 
+# Run KappaPathways.
+kappapathways.findpathway(kappa_model, eoi, simtime, simseed)
 """
 
 import os
 import shutil
 import json
 
-## Custom story range.
-#custom_first = None
-#custom_last = None
-#
-## Get the list of stories in current directory.
-#file_list = os.listdir(".")
-#num_list = []
-#for f in file_list:
-#    if "story" in f and "loop" not in f:
-#        dash = f.index("-")
-#        period = f.index(".")
-#        num = int(f[dash+1:period])
-#        num_list.append(num)
-#first_story = min(num_list)
-#last_story = max(num_list)
-#if custom_first != None:
-#    first_story = custom_first
-#if custom_last != None:
-#    last_story = custom_last
 
+class CausalNode(object):
+    """ An individual event node to use in causal graphs. """
+
+    def __init__(self, nodeid, label, rank=None, weight=None, display_options=None):
+        """ Initialize class CausalNode. """
+
+        self.nodeid = nodeid
+        self.label = label
+        self.rank = rank
+        self.weight = weight
+        self.display_options = display_options
+        self.check_types()
+
+
+    def check_types(self):
+        """ Check that CausalNode attributes have proper types. """
+
+        if not isinstance(self.nodeid, str):
+            raise TypeError("nodeid should be a string.")
+        if not isinstance(self.label, str):
+            raise TypeError("label should be a string.")
+        if self.rank != None:
+            if not isinstance(self.rank, int):
+                raise TypeError("rank should be an integer.")
+        if self.weight != None:
+            if not isinstance(self.weight, int):
+                if not isinstance(self.weight, float):
+                    raise TypeError("weight should be an integer or float.")
+        if self.display_options != None:
+            if not isinstance(self.display_options, str):
+                raise TypeError("display_options should be a string.")
+
+
+    def __repr__(self):
+        """ Representation of the CausalNode object. """
+
+        res =  "Node "
+        res += 'id: "{}",  label: "{}"'.format(self.nodeid, self.label)
+        if self.rank != None:
+            res += ",  rank: {}".format(self.rank)
+        if self.weight != None:
+            res += ",  weight: {}".format(self.weight) 
+
+        return res
+
+
+class CausalEdge(object):
+    """ An individual causal relationship to use in causal graphs. """
+
+    def __init__(self, source, target, weight=None, display_options=None):
+        """ Initialize class CausalEdge. """
+
+        self.source = source
+        self.target = target
+        self.weight = weight
+        self.display_options = display_options
+        self.check_types()
+
+
+    def check_types(self):
+        """ Check that CausalEdge attributes have proper types. """
+
+        if not isinstance(self.source, CausalNode):
+            raise TypeError("source should be a CausalNode.")
+        if not isinstance(self.target, CausalNode):
+            raise TypeError("target should be a CausalNode.")
+        if self.weight != None:
+            if not isinstance(self.weight, int):
+                if not isinstance(self.weight, float):
+                    raise TypeError("weight should be an integer or float.")
+        if self.display_options != None:
+            if not isinstance(self.display_options, str):
+                raise TypeError("display_options should be a string.")
+
+
+    def __repr__(self):
+        """ Representation of the CausalEdge object. """
+
+        res =  "Edge "
+        res += "source) {},  target) {}".format(self.source, self.target)
+        if self.weight != None:
+            res += ",  weight: {}".format(self.weight)
+
+        return res
+
+
+class CausalGraph(object):
+    """ General data structure for causal graphs. """
+
+    def __init__(self, filename=None):
+        """ Initialize class CausalGraph. """
+
+        self.filename = filename
+        self.nodes = []
+        self.edges = []
+        self.occurrence = 1
+        if self.filename != None:
+            self.read_dot(self.filename)
+        self.max_rank = 1
+
+
+    def read_dot(self, dotpath):
+        """
+        Read rules (nodes) and causal links (edges) from input causal core.
+        """
+
+        rank = None
+        self.label_mapping = {}
+        dotfile = open(dotpath, "r").readlines()
+        for line in dotfile:
+            if "rank = same" in line:
+                open_quote = line.index('"')
+                close_quote = line.rfind('"')
+                rank = int(line[open_quote+1:close_quote])
+            if "label=" in line:
+                tokens = line.split()
+                node_id = tokens[0]
+                if '"' in node_id:
+                    node_id = node_id[1:-1]
+                if "node" not in node_id:
+                    node_id = "node{}".format(node_id)
+                label_start = line.index("label=")+7
+                label_end = line.index(",")-1
+                label = "{}".format(line[label_start:label_end])
+                disp_opt = self.get_display_options(line)
+                self.nodes.append(CausalNode(node_id, label, rank,
+                                             display_options=disp_opt))
+                self.label_mapping[node_id] = label
+        tmp_edges = []
+        for line in dotfile:
+            if "->" in line:
+                tokens = line.split()
+                source_id = tokens[0]
+                if '"' in source_id:
+                    source_id = source_id[1:-1]
+                if "node" not in source_id:
+                    source_id = "node{}".format(source_id)
+                target_id = tokens[2]
+                if '"' in target_id:
+                    target_id = target_id[1:-1]
+                if "node" not in target_id:
+                    target_id = "node{}".format(target_id)
+                for node in self.nodes:
+                    if node.nodeid == source_id:
+                        source = node
+                    if node.nodeid == target_id:
+                        target = node
+                disp_opt = self.get_display_options(line)
+                tmp_edges.append(CausalEdge(source, target,
+                                            display_options=disp_opt))
+        for edge in tmp_edges:
+            self.edges.insert(0, edge)
+        if rank == None:
+            self.find_ranks()
+
+
+    @staticmethod
+    def get_display_options(input_line):
+        """
+        Get all display options from nodes or edges of a dot file, except
+        labels.
+        """
+
+        if "[" in input_line:
+            open_bracket = input_line.index("[")
+            close_bracket = input_line.index("]")
+            opt_str = input_line[open_bracket+1:close_bracket]
+            if "label=" in opt_str:
+                label_start = opt_str.index("label=")
+                opt_str2 = opt_str[label_start:]
+                comma = opt_str2.index(",")
+                label_end = label_start + comma
+                disp_opt = opt_str[:label_start] + opt_str[label_end+2:]
+            else:
+                disp_opt = opt_str
+        else:
+            disp_opt = ""
+
+        return disp_opt
+
+
+    def find_ranks(self):
+        """ Find the rank of each node in an initial causal core. """
+
+        allowed_nodes = get_start_nodes(self)
+        nodes_in_the_air = []
+        for node in self.nodes:
+            if node not in allowed_nodes:
+                nodes_in_the_air.append(node)
+        while len(nodes_in_the_air) > 0:
+            placed_nodes = []
+            for node in nodes_in_the_air:
+                # Determine if node can be placed.
+                can_place = True
+                required_nodes = []
+                for edge in self.edges:
+                    if edge.target == node:
+                       required_nodes.append(edge.source)
+                for required in required_nodes:
+                    if required not in allowed_nodes:
+                        can_place = False
+                        break
+                if can_place == True:
+                    # Find the rank of the required nodes and assign highest
+                    # rank + 1 to the newly placed node
+                    req_ranks = []
+                    for required in required_nodes:
+                        if required.rank != None:
+                            req_ranks.append(required.rank)
+                    if len(req_ranks) == 0:
+                        node.rank = 2
+                        for required in required_nodes:
+                            required.rank = 1
+                    else:
+                        node.rank = max(req_ranks) + 1
+                        for required in required_nodes:
+                            if required.rank == None:
+                                required.rank = max(req_ranks)
+                    placed_nodes.append(node)
+            for placed in placed_nodes:
+                allowed_nodes.append(placed)
+                nodes_in_the_air.remove(placed)
+        self.update_max_rank()
+        self.build_dot_file()
+
+
+    def update_max_rank(self):
+        """ Find the highest rank of a node in CausalGraph. """
+
+        all_ranks = []
+        for node in self.nodes:
+            if node.rank != None:
+                all_ranks.append(node.rank)
+        if len(all_ranks) > 0:
+            self.max_rank = max(all_ranks)
+
+
+    def build_dot_file(self):
+        """ build a dot file of the CausalGraph. """
+
+        dot_str = "digraph G{\n"
+        dot_str += '  label="Occurrence = {}" ;\n'.format(self.occurrence)
+        dot_str += '  labelloc="t" ;\n'
+        dot_str += "  ranksep=.3 ;\n"
+        for current_rank in range(1, self.max_rank+1):
+            rank_str = "{}".format(current_rank)
+            dot_str += ('{{ rank = same ; "{}" [shape=plaintext] ;\n'
+                        .format(rank_str))
+            for node in self.nodes:
+                if node.rank == current_rank:
+                    dot_str += ('"{}" [label="{}", '
+                                .format(node.nodeid, node.label))
+                    dot_str += "{}] ;\n".format(node.display_options)
+            dot_str += "}\n"
+        for rank in range(1, self.max_rank):
+            rank_str = "{}".format(rank)
+            next_rank = "{}".format(rank+1)
+            dot_str += ('"{}" -> "{}" [style="invis"] ;\n'
+                        .format(rank_str, next_rank))
+        for edge in self.edges:
+            dot_str += ('"{}" -> "{}" '
+                        .format(edge.source.nodeid, edge.target.nodeid))
+            dot_str += "[{}] ;\n".format(edge.display_options)
+        dot_str += "}"
+        self.dot_file = dot_str
+
+
+    def __repr__(self):
+        """ Representation of the CausalGraph object. """
+
+        res = "CausalGraph"
+        if self.filename != None:
+            res += " from file {}\n".format(self.filename)
+        else:
+            res += "\n"
+        #for node in self.nodes:
+        #    res+="{}\n".format(node.__repr__())
+        for edge in self.edges:
+            res+="{}\n".format(edge.__repr__())
+
+        return res
+
+
+def get_start_nodes(graph):
+    """
+    Find starting nodes as nodes that never appear as targets in CausalGraph
+    (Works only for graphs without loops).
+    """
+    
+    start_nodes = []
+    for node in graph.nodes:
+        rule_is_target = False
+        for edge in graph.edges:
+            if node == edge.target:
+                rule_is_target = True
+                break
+        if rule_is_target == False:
+            start_nodes.append(node)
+
+    return start_nodes
+
+
+def get_end_nodes(graph):
+    """
+    Find end nodes as nodes that never appear as sources in CausalGraph
+    (Works only for graphs without loops).
+    """
+
+    end_nodes = []
+    for node in graph.nodes:
+        rule_is_source = False
+        for edge in graph.edges:
+            if node == edge.source:
+                rule_is_source = True
+                break
+        if rule_is_source == False:
+            end_nodes.append(node)
+
+    return end_nodes
 
 
 class KappaPathway:
@@ -75,7 +374,6 @@ class KappaPathway:
         self.count_occur()
         self.sort_by_rank()
         self.build_new_dot()
-
 
 
     def add_eoi(self):
@@ -251,7 +549,6 @@ class KappaPathway:
                         current_rules.append(node["rule_name"])
         # Main path pushing loop.
         node_id = 1
-        print(self.linear_paths[162])
         while len(current_rules) > 0:
             for rule in current_rules:
                 # Check if rule appears at higher rank in other paths.
@@ -797,6 +1094,123 @@ class SimplifyStory(LoopStory):
                 self.cleared_edges.append(edge)
                 seen_ids.append(edge_id)
         
+
+class SpeciesPathway(LoopStory):
+    """ 
+    Convert rule-centric story (looped or not) into a species-centric pathway.
+    Two different versions can be made, with explicit site or with sites 
+    merged into the agent.
+    """
+
+    def __init__(self, story_path, kappa_path):
+        """ Initialize SpeciesPathway class. """
+
+        self.story_path = story_path
+        self.story_file = open(self.story_path, "r").readlines()
+        self.kappa_path = kappa_path
+        self.kappa_file = open(self.kappa_path, "r").readlines()
+        # Run class methods.
+        self.ignored_rules()
+        self.read_nodes_edges()
+        self.get_inout_edges()
+        self.find_start_nodes()
+        self.get_kappa_rules()
+        self.build_pathway()
+
+
+    def get_kappa_rules(self):
+        """ Build a dictionary of the rules from the input kappa model. """
+
+        self.kappa_rules = {}
+        for line in self.kappa_file:
+            if line[0] == "'":
+                quote = line.rfind("'")
+                rule_name = line[1:quote]
+                rule_strt = 0
+                for i in range(quote+1, len(line)):
+                    if line[i] != " ":
+                        rule_strt = i
+                        break
+                rule = line[rule_strt:-1]
+                self.kappa_rules[rule_name] = rule
+
+
+    def build_pathway(self):
+        """ 
+        Put nodes for the agent and sites for every rule 
+        that switches a state.
+        """
+
+        self.species_nodes = []
+        self.species_edges = []
+        current_nodes = self.start_nodes
+        while len(current_nodes) > 0:
+            next_nodes = []
+            for node in current_nodes:
+                rule_name = self.rule_names[node][1:-1]
+                rule = ""
+                if rule_name in self.kappa_rules.keys():
+                    rule = self.kappa_rules[rule_name]
+                rule_agents = self.parse_rule(rule)
+                modified_agents = []
+                for agent in rule_agents:
+                    for site in agent["sites"].keys():
+                        state = agent["sites"][site]["state"]
+                        if state != None:
+                            if "/" in state:
+                                modified_agents.append(agent["agent_type"])
+                if len(modified_agents) > 0:
+                    ranked_node = {"node_id": target,
+                                   "rule_name": self.rule_names[target],
+                                   "rank": self.node_ranks[target]}
+                    print("---", modified_agents)
+                for i in range(len(rule)):
+                    if rule[i] == "{":
+                        if rule[i+2] == "/":
+                            mod_rule = True
+                            break
+                #if mod_rule == True:
+                #    print(rule_name, "     ", rule)
+                for edge in self.story_edges:
+                    if edge["source"] == node:
+                        next_nodes.append(edge["target"])
+            current_nodes = next_nodes
+
+
+    def parse_rule(self, rule):
+        """ Create a dict for given rule. """
+
+        a = rule.index("@")
+        rate = rule[a+1:]
+        agents_list = rule[:a-1].split(', ')
+        parsed_agents = []
+        for agent in agents_list:
+            agent_dict = {}
+            parenthesis = agent.index("(")
+            agent_type = agent[:parenthesis]
+            agent_dict["agent_type"] = agent_type
+            sites = agent[parenthesis+1:-1].split()
+            site_dict = {}
+            for site in sites:
+                if "[" in site:
+                    open_bracket = site.index("[")
+                    close_bracket = site.index("]")
+                    site_id = site[:open_bracket]
+                    binding = site[open_bracket+1:close_bracket]
+                else:
+                    binding = None
+                if "{" in site:
+                    open_curl = site.index("{")
+                    close_curl = site.index("}")
+                    if "[" not in site:
+                        site_id = site[:open_curl]
+                    state = site[open_curl+1:close_curl]
+                else:
+                    state = None
+                site_dict[site_id] = {"binding": binding, "state": state}
+            agent_dict["sites"] = site_dict
+            parsed_agents.append(agent_dict)
+        return parsed_agents
 
 
 ## Use class LoopStory.
