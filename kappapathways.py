@@ -344,6 +344,96 @@ def get_end_nodes(graph):
 
     return end_nodes
 
+# -------------------- Causal Cores Generation Section ------------------------
+
+def getcausalcores(kappamodel, eoi, kasimpath, kaflowpath, simtime, simseed):
+    """ 
+    Generate initial causal cores of given event of interest by running KaSim 
+    and then KaFlow.
+    """
+
+    new_model = add_eoi(kappamodel, eoi)
+    trace_path = run_kasim(new_model, kasimpath, simtime, simseed)
+    run_kaflow(trace_path, eoi, kaflowpath)
+
+
+def add_eoi(kappamodel, eoi):
+    """ Create a new Kappa model where the EOI is added. """
+
+    if not os.path.exists(eoi):
+            os.mkdir(eoi)
+    last_dot = kappamodel.rfind(".")
+    prefix = kappamodel[:last_dot]
+    new_path = "{}/{}-eoi.ka".format(eoi, prefix)
+    shutil.copyfile(kappamodel, new_path)
+    new_file = open(new_path, "a")
+    new_file.write("%obs: '{}' |{}|\n".format(eoi, eoi))
+    new_file.write("%mod: [true] do $TRACK '{}' [true];\n".format(eoi))
+    ## Ask for DIN.
+    #din_file = "{}/din.json".format(eoi)
+    #new_file.write('\n%mod: [true] do $DIN "{}" [true];\n'.format(din_file))
+    new_file.close()
+    
+    return new_path
+
+
+def run_kasim(kappa_with_eoi, kasimpath, simtime=1000, simseed=None):
+    """ Run simulation with added EOI to produce trace. """
+
+    last_dot = kappa_with_eoi.rfind(".")
+    prefix = kappa_with_eoi[:last_dot]
+    output_path = "{}.csv".format(prefix)
+    trace_path = "{}.json".format(prefix)
+    if simtime <= 100:
+        plt_period = 0.1
+    else:
+        plt_period = 1
+    command_line = "{} -mode batch --no-log --no-log ".format(kasimpath)
+    command_line += "-u t -p {} -l {} ".format(plt_period, simtime)
+    command_line += ("-i '{}' -o '{}' -trace '{}'"
+                     .format(kappa_with_eoi, output_path, trace_path))
+    if simseed != None:
+        command_line += " -seed {}".format(simseed)
+    os.system(command_line)
+    print(command_line)
+    
+    return trace_path
+
+
+def run_kaflow(trace_path, eoi, kaflowpath):
+   """ Run KaFlow on the trace containing the EOI. """
+   
+   command_line = "{} -o '{}'/causalcore- ".format(kaflowpath, eoi)
+   command_line += "'{}'".format(trace_path)
+   os.system(command_line)
+
+# ---------------- End of Causal Cores Generation Section  --------------------
+
+# ==================== Causal Cores Merging Section ===========================
+
+def mergecores(eoi, rm_inital_cores=False):
+    """ Merge identical causal cores and count occurrence. """
+
+    causal_core_files = get_dot_files(eoi, "causalcore")
+    causal_cores = []
+    for core in causal_core_files:
+        core_path = "{}/{}".format(eoi, core)
+        causal_cores.append(CausalGraph(core_path))
+    print(causal_cores[0])
+
+
+def get_dot_files(eoi, prefix):
+        """ Get the number of the first and last stories. """
+
+        file_list = []
+        tmp_file_list = os.listdir("{}".format(eoi))
+        for file_name in tmp_file_list:
+            if prefix in file_name:
+                file_list.append(file_name)
+
+        return file_list
+
+# ================ End of Causal Cores Merging Section ========================
 
 class KappaPathway:
     """ Produce the pathway to EOI from given Kappa simulation. """
