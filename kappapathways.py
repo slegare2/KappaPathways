@@ -27,14 +27,13 @@ import json
 class CausalNode(object):
     """ An individual event node to use in causal graphs. """
 
-    def __init__(self, nodeid, label, rank=None, weight=None, display_options=None):
+    def __init__(self, nodeid, label, rank=None, weight=None):
         """ Initialize class CausalNode. """
 
         self.nodeid = nodeid
         self.label = label
         self.rank = rank
         self.weight = weight
-        self.display_options = display_options
         self.check_types()
 
 
@@ -52,9 +51,6 @@ class CausalNode(object):
             if not isinstance(self.weight, int):
                 if not isinstance(self.weight, float):
                     raise TypeError("weight should be an integer or float.")
-        if self.display_options != None:
-            if not isinstance(self.display_options, str):
-                raise TypeError("display_options should be a string.")
 
 
     def __repr__(self):
@@ -73,13 +69,12 @@ class CausalNode(object):
 class CausalEdge(object):
     """ An individual causal relationship to use in causal graphs. """
 
-    def __init__(self, source, target, weight=None, display_options=None):
+    def __init__(self, source, target, weight=None):
         """ Initialize class CausalEdge. """
 
         self.source = source
         self.target = target
         self.weight = weight
-        self.display_options = display_options
         self.check_types()
 
 
@@ -94,9 +89,6 @@ class CausalEdge(object):
             if not isinstance(self.weight, int):
                 if not isinstance(self.weight, float):
                     raise TypeError("weight should be an integer or float.")
-        if self.display_options != None:
-            if not isinstance(self.display_options, str):
-                raise TypeError("display_options should be a string.")
 
 
     def __repr__(self):
@@ -113,10 +105,11 @@ class CausalEdge(object):
 class CausalGraph(object):
     """ General data structure for causal graphs. """
 
-    def __init__(self, filename=None):
+    def __init__(self, filename=None, eoi=None):
         """ Initialize class CausalGraph. """
 
         self.filename = filename
+        self.eoi = eoi
         self.nodes = []
         self.edges = []
         self.occurrence = 1
@@ -148,9 +141,7 @@ class CausalGraph(object):
                 label_start = line.index("label=")+7
                 label_end = line.index(",")-1
                 label = "{}".format(line[label_start:label_end])
-                disp_opt = self.get_display_options(line)
-                self.nodes.append(CausalNode(node_id, label, rank,
-                                             display_options=disp_opt))
+                self.nodes.append(CausalNode(node_id, label, rank))
                 self.label_mapping[node_id] = label
         tmp_edges = []
         for line in dotfile:
@@ -171,44 +162,18 @@ class CausalGraph(object):
                         source = node
                     if node.nodeid == target_id:
                         target = node
-                disp_opt = self.get_display_options(line)
-                tmp_edges.append(CausalEdge(source, target,
-                                            display_options=disp_opt))
+                tmp_edges.append(CausalEdge(source, target))
         for edge in tmp_edges:
             self.edges.insert(0, edge)
         if rank == None:
             self.find_ranks()
 
 
-    @staticmethod
-    def get_display_options(input_line):
-        """
-        Get all display options from nodes or edges of a dot file, except
-        labels.
-        """
-
-        if "[" in input_line:
-            open_bracket = input_line.index("[")
-            close_bracket = input_line.index("]")
-            opt_str = input_line[open_bracket+1:close_bracket]
-            if "label=" in opt_str:
-                label_start = opt_str.index("label=")
-                opt_str2 = opt_str[label_start:]
-                comma = opt_str2.index(",")
-                label_end = label_start + comma
-                disp_opt = opt_str[:label_start] + opt_str[label_end+2:]
-            else:
-                disp_opt = opt_str
-        else:
-            disp_opt = ""
-
-        return disp_opt
-
-
     def find_ranks(self):
         """ Find the rank of each node in an initial causal core. """
 
-        allowed_nodes = get_start_nodes(self)
+        self.get_start_nodes()
+        allowed_nodes = self.start_nodes.copy()
         nodes_in_the_air = []
         for node in self.nodes:
             if node not in allowed_nodes:
@@ -246,8 +211,41 @@ class CausalGraph(object):
             for placed in placed_nodes:
                 allowed_nodes.append(placed)
                 nodes_in_the_air.remove(placed)
-        self.update_max_rank()
         self.build_dot_file()
+
+
+    def get_start_nodes(self):
+        """
+        Find starting nodes as nodes that never appear as targets in CausalGraph
+        (Works only for graphs without loops).
+        """
+
+        self.start_nodes = []
+        for node in self.nodes:
+            rule_is_target = False
+            for edge in self.edges:
+                if node == edge.target:
+                    rule_is_target = True
+                    break
+            if rule_is_target == False:
+                self.start_nodes.append(node)
+
+
+    def get_end_nodes(self):
+        """
+        Find end nodes as nodes that never appear as sources in CausalGraph
+        (Works only for graphs without loops).
+        """
+
+        self.end_nodes = []
+        for node in self.nodes:
+            rule_is_source = False
+            for edge in self.edges:
+                if node == edge.source:
+                    rule_is_source = True
+                    break
+            if rule_is_source == False:
+                self.end_nodes.append(node)
 
 
     def update_max_rank(self):
@@ -261,11 +259,25 @@ class CausalGraph(object):
             self.max_rank = max(all_ranks)
 
 
+    def sequentialize_ids(self):
+        """ Assign sequential node ids, getting rid of event numbers. """
+
+        self.update_max_rank()
+        node_number = 1
+        for current_rank in range(self.max_rank):
+            for node in self.nodes:
+                if node.rank == current_rank:
+                    node.nodeid = "node{}".format(node_number)
+                    node_number += 1
+
+
     def build_dot_file(self):
         """ build a dot file of the CausalGraph. """
 
+        self.update_max_rank()
         dot_str = "digraph G{\n"
-        dot_str += '  label="Occurrence = {}" ;\n'.format(self.occurrence)
+        dot_str += '  label="Occurrence = {}" '.format(self.occurrence)
+        dot_str += "fontsize=28 ;\n"
         dot_str += '  labelloc="t" ;\n'
         dot_str += "  ranksep=.3 ;\n"
         for current_rank in range(1, self.max_rank+1):
@@ -274,9 +286,18 @@ class CausalGraph(object):
                         .format(rank_str))
             for node in self.nodes:
                 if node.rank == current_rank:
+                    node_shape = "invhouse"
+                    node_color = "lightblue"
+                    if "Intro" in node.label:
+                        node_shape = "rectangle"
+                        node_color = "white"
+                    if node.label == self.eoi:
+                        node_shape = "ellipse"
+                        node_color = "indianred2"
                     dot_str += ('"{}" [label="{}", '
                                 .format(node.nodeid, node.label))
-                    dot_str += "{}] ;\n".format(node.display_options)
+                    dot_str += "shape={}, style=filled, ".format(node_shape)
+                    dot_str += "fillcolor={}] ;\n".format(node_color)
             dot_str += "}\n"
         for rank in range(1, self.max_rank):
             rank_str = "{}".format(rank)
@@ -284,9 +305,8 @@ class CausalGraph(object):
             dot_str += ('"{}" -> "{}" [style="invis"] ;\n'
                         .format(rank_str, next_rank))
         for edge in self.edges:
-            dot_str += ('"{}" -> "{}" '
+            dot_str += ('"{}" -> "{}"'
                         .format(edge.source.nodeid, edge.target.nodeid))
-            dot_str += "[{}] ;\n".format(edge.display_options)
         dot_str += "}"
         self.dot_file = dot_str
 
@@ -296,53 +316,15 @@ class CausalGraph(object):
 
         res = "CausalGraph"
         if self.filename != None:
-            res += " from file {}\n".format(self.filename)
-        else:
-            res += "\n"
+            res += " from file {}".format(self.filename)
+        res += " ,  Occurrence = {}\n".format(self.occurrence)
+        res += "\n"
         #for node in self.nodes:
         #    res+="{}\n".format(node.__repr__())
         for edge in self.edges:
             res+="{}\n".format(edge.__repr__())
 
         return res
-
-
-def get_start_nodes(graph):
-    """
-    Find starting nodes as nodes that never appear as targets in CausalGraph
-    (Works only for graphs without loops).
-    """
-    
-    start_nodes = []
-    for node in graph.nodes:
-        rule_is_target = False
-        for edge in graph.edges:
-            if node == edge.target:
-                rule_is_target = True
-                break
-        if rule_is_target == False:
-            start_nodes.append(node)
-
-    return start_nodes
-
-
-def get_end_nodes(graph):
-    """
-    Find end nodes as nodes that never appear as sources in CausalGraph
-    (Works only for graphs without loops).
-    """
-
-    end_nodes = []
-    for node in graph.nodes:
-        rule_is_source = False
-        for edge in graph.edges:
-            if node == edge.source:
-                rule_is_source = True
-                break
-        if rule_is_source == False:
-            end_nodes.append(node)
-
-    return end_nodes
 
 # -------------------- Causal Cores Generation Section ------------------------
 
@@ -411,29 +393,152 @@ def run_kaflow(trace_path, eoi, kaflowpath):
 
 # ==================== Causal Cores Merging Section ===========================
 
-def mergecores(eoi, rm_inital_cores=False):
-    """ Merge identical causal cores and count occurrence. """
+def mergecores(eoi, write_dots=True, rm_inital_cores=False):
+    """ Merge equivalent causal cores and count occurrence. """
 
     causal_core_files = get_dot_files(eoi, "causalcore")
+    print("Evaluating possible merges among {} causal cores."
+          .format(len(causal_core_files)))
     causal_cores = []
-    for core in causal_core_files:
-        core_path = "{}/{}".format(eoi, core)
-        causal_cores.append(CausalGraph(core_path))
-    print(causal_cores[0])
+    for core_file in causal_core_files:
+        core_path = "{}/{}".format(eoi, core_file)
+        causal_cores.append(CausalGraph(core_path, eoi))
+    merged_cores = []
+    while len(causal_cores) > 0:
+        equivalent_list = [0]
+        current_core = causal_cores[0]
+        for i in range(1, len(causal_cores)):
+            same_core = equivalent_graphs(current_core, causal_cores[i])
+            if same_core == True:
+                equivalent_list.append(i)
+        current_core.occurrence = len(equivalent_list)
+        merged_cores.append(current_core)
+        for i in range(len(equivalent_list)-1, -1, -1):
+            del(causal_cores[i])
+    sorted_cores = sorted(merged_cores, key=lambda x: x.occurrence, reverse=True)
+    for i in range(len(sorted_cores)):
+        sorted_cores[i].filename = "core-{}.dot".format(i+1)
+    for graph in sorted_cores:
+        graph.sequentialize_ids()
+        graph.build_dot_file()
+    if write_dots == True:
+        for graph in sorted_cores:
+            output_path = "{}/{}".format(eoi, graph.filename)
+            outfile = open(output_path, "w")
+            outfile.write(graph.dot_file)
+            outfile.close()
+    if rm_inital_cores == True:
+        for core_file in causal_core_files:
+            file_path = "{}/{}".format(eoi, core_file)
+            os.remove(file_path)
+
+    return sorted_cores
 
 
-def get_dot_files(eoi, prefix):
-        """ Get the number of the first and last stories. """
+def get_dot_files(eoi, prefix=None):
+    """ Get the number of the first and last stories. """
 
-        file_list = []
-        tmp_file_list = os.listdir("{}".format(eoi))
-        for file_name in tmp_file_list:
-            if prefix in file_name:
+    tmp_file_list = os.listdir("{}".format(eoi))
+    file_list = []
+    for file_name in tmp_file_list:
+        if "dot" in file_name:
+            if prefix == None or prefix in file_name:
                 file_list.append(file_name)
+    file_dicts = []
+    for file_name in file_list:
+        dash = file_name.rfind("-")
+        period = file_name.rfind(".")
+        number = int(file_name[dash+1:period])
+        file_dicts.append({"file": file_name, "num": number})
+    sorted_dicts = sorted(file_dicts, key=lambda x: x["num"])
+    sorted_list = []
+    for d in sorted_dicts:
+        sorted_list.append(d["file"])
 
-        return file_list
+    return sorted_list
+
+
+def equivalent_graphs(graph1, graph2):
+    """
+    Equivalent causal graphs have the same edges between the same rules, but
+    the exact time of their events can differ.
+    """
+
+    if graph1.max_rank == graph2.max_rank:
+        graph2_indexes = list(range(len(graph2.edges)))
+        all_edges_found = True
+        for edge1 in graph1.edges:
+            for i in graph2_indexes:
+                edge2 = graph2.edges[i]
+                same_edge = equivalent_edges(edge1, edge2)
+                if same_edge == True:
+                    graph2_indexes.remove(i)
+                    break
+            if same_edge == False:
+                all_edges_found = False
+                break
+        # All the edges from graph2 should have been used
+        # at this point for both graphs to be equivalent.
+        if all_edges_found == True:
+            if len(graph2_indexes) > 0:
+                equi_graphs = False
+            else:
+                equi_graphs = True
+        else:
+            equi_graphs = False
+    else:
+        equi_graphs = False
+
+    return equi_graphs
+
+
+def equivalent_edges(edge1, edge2):
+    """ Find whether two edges are between the same rules at same rank. """
+
+    same_source = False
+    if edge1.source.label == edge2.source.label:
+        if edge1.source.rank == edge2.source.rank:
+            same_source = True
+    same_target = False
+    if edge1.target.label == edge2.target.label:
+        if edge1.target.rank == edge2.target.rank:
+            same_target = True
+    if same_source == True and same_target == True:
+        equi_edges = True
+    else:
+        equi_edges = False
+
+    return equi_edges
+
+
+def sort_graphs(graph_list):
+    """ Sort a list a graphs by graph occurence. """
+
+    sorted_graphs = sorted(graph_list, key=lambda x: x.occurrence,
+                           reverse=True)
 
 # ================ End of Causal Cores Merging Section ========================
+
+# +++++++++++++++++++++++ Cores Looping Section +++++++++++++++++++++++++++++++
+
+
+
+# +++++++++++++++++ End of  Cores Looping Section +++++++++++++++++++++++++++++
+
+def drawpngs(eoi, graphvizpath):
+    """ Draw a png for every dot file found with given event of interest. """
+
+    dot_files = get_dot_files(eoi)
+    print("Drawing {} graphs.".format(len(dot_files)))
+    for dot_file in dot_files:
+        print(dot_file)
+        period = dot_file.rfind(".")
+        command_line = "{} -Tpng ".format(graphvizpath)
+        command_line += "'{}'/{} > ".format(eoi, dot_file)
+        command_line += "'{}'/{}.png".format(eoi, dot_file[:period])
+        os.system(command_line)
+
+
 
 class KappaPathway:
     """ Produce the pathway to EOI from given Kappa simulation. """
