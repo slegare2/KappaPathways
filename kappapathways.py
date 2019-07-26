@@ -71,7 +71,7 @@ class CausalNode(object):
 class CausalEdge(object):
     """ An individual causal relationship to use in causal graphs. """
 
-    def __init__(self, source, target, weight=None):
+    def __init__(self, source, target, weight=1):
         """ Initialize class CausalEdge. """
 
         self.source = source
@@ -139,17 +139,18 @@ class CausalGraph(object):
                 close_quote = line.rfind('"')
                 rank = int(line[open_quote+1:close_quote])
             if "label=" in line and "Occurrence" not in line:
-                tokens = line.split()
-                node_id = tokens[0]
-                if '"' in node_id:
-                    node_id = node_id[1:-1]
-                if "node" not in node_id:
-                    node_id = "node{}".format(node_id)
-                label_start = line.index("label=")+7
-                label_end = line.index(",")-1
-                label = "{}".format(line[label_start:label_end])
-                self.nodes.append(CausalNode(node_id, label, rank))
-                self.label_mapping[node_id] = label
+                if "->" not in line:
+                    tokens = line.split()
+                    node_id = tokens[0]
+                    if '"' in node_id:
+                        node_id = node_id[1:-1]
+                    if "node" not in node_id:
+                        node_id = "node{}".format(node_id)
+                    label_start = line.index("label=")+7
+                    label_end = line.index(",")-1
+                    label = "{}".format(line[label_start:label_end])
+                    self.nodes.append(CausalNode(node_id, label, rank))
+                    self.label_mapping[node_id] = label
         tmp_edges = []
         for line in dotfile:
             if "->" in line and 'style="invis"' not in line:
@@ -169,7 +170,13 @@ class CausalGraph(object):
                         source = node
                     if node.nodeid == target_id:
                         target = node
-                tmp_edges.append(CausalEdge(source, target))
+                if "weight=" in line:
+                    weight_start = line.index("weight=")+7
+                    weight_end = line.index("]")
+                    weight = int(line[weight_start:weight_end])
+                else:
+                    weight = 1
+                tmp_edges.append(CausalEdge(source, target, weight))
         for edge in tmp_edges:
             self.edges.insert(0, edge)
         if rank == None:
@@ -302,7 +309,7 @@ class CausalGraph(object):
         self.sequentialize_ids()
 
 
-    def build_dot_file(self):
+    def build_dot_file(self, edge_labels=False):
         """ build a dot file of the CausalGraph. """
 
         self.get_max_rank()
@@ -317,6 +324,7 @@ class CausalGraph(object):
             dot_str += '  prevcores="{}"\n'.format(self.prevcores)
         dot_str += '  labelloc="t" ;\n'
         dot_str += "  ranksep=.3 ;\n"
+        # Draw nodes.
         for current_rank in range(1, self.max_rank+1):
             rank_str = "{}".format(current_rank)
             dot_str += ('{{ rank = same ; "{}" [shape=plaintext] ;\n'
@@ -341,9 +349,26 @@ class CausalGraph(object):
             next_rank = "{}".format(rank+1)
             dot_str += ('"{}" -> "{}" [style="invis"] ;\n'
                         .format(rank_str, next_rank))
+        # Draw edges.
+        all_weights = []
         for edge in self.edges:
-            dot_str += ('"{}" -> "{}" ;\n'
+            all_weights.append(edge.weight)
+        minweight = min(all_weights)
+        minpenwidth = 1
+        maxpenwidth = 20
+        for edge in self.edges:
+            dot_str += ('"{}" -> "{}" '
                         .format(edge.source.nodeid, edge.target.nodeid))
+            edge_color = "black"
+            pensize = edge.weight/minweight * minpenwidth
+            if pensize > maxpenwidth:
+                pensize = maxpenwidth
+                edge_color = "red"
+            dot_str += "[penwidth={}".format(pensize)
+            dot_str += ", color={}".format(edge_color)
+            if edge_labels == True:
+                dot_str += ', label="   {}"'.format(edge.weight)
+            dot_str += ", weight={}] ;\n".format(edge.weight)
         dot_str += "}"
         self.dot_file = dot_str
 
@@ -439,7 +464,8 @@ def run_kaflow(trace_path, eoi, kaflowpath):
 
 # ==================== Causal Cores Merging Section ===========================
 
-def mergecores(eoi, causalgraphs=None, writedots=True, rmprev=False):
+def mergecores(eoi, causalgraphs=None, writedots=True, rmprev=False,
+               edge_labels=False):
     """ Merge equivalent causal cores and count occurrence. """
 
     if causalgraphs == None:
@@ -451,19 +477,22 @@ def mergecores(eoi, causalgraphs=None, writedots=True, rmprev=False):
     else:
        causal_cores = causalgraphs
        causal_core_files = None
-    print("Evaluating possible merges among {} causal cores."
-          .format(len(causal_cores)))
+    #print("Evaluating possible merges among {} causal graphs."
+    #      .format(len(causal_cores)))
     merged_cores = []
     while len(causal_cores) > 0:
         current_core = causal_cores[0]
         equivalent_list = [0]
-        occur = current_core.occurrence
         for i in range(1, len(causal_cores)):
-            same_core = equivalent_graphs(current_core, causal_cores[i])
+            same_core, equi_edges = equivalent_graphs(current_core,
+                                                      causal_cores[i])
             if same_core == True:
                 equivalent_list.append(i)
-                occur += causal_cores[i].occurrence
-        current_core.occurrence = occur
+                current_core.occurrence += causal_cores[i].occurrence
+                for j in range(len(current_core.edges)):
+                    equi_index = equi_edges[j]
+                    w = causal_cores[i].edges[equi_index].weight
+                    current_core.edges[j].weight += w
         prevcores = []
         for index in equivalent_list:
             file_name = causal_cores[index].filename
@@ -482,7 +511,7 @@ def mergecores(eoi, causalgraphs=None, writedots=True, rmprev=False):
         sorted_cores[i].filename = "core-{}.dot".format(i+1)
     for graph in sorted_cores:
         graph.sequentialize_ids()
-        graph.build_dot_file()
+        graph.build_dot_file(edge_labels)
     if writedots == True:
         for graph in sorted_cores:
             output_path = "{}/{}".format(eoi, graph.filename)
@@ -532,6 +561,7 @@ def equivalent_graphs(graph1, graph2):
     the exact time of their events can differ.
     """
 
+    equi_edges = []
     if graph1.max_rank == graph2.max_rank:
         graph2_indexes = list(range(len(graph2.edges)))
         all_edges_found = True
@@ -540,6 +570,7 @@ def equivalent_graphs(graph1, graph2):
                 edge2 = graph2.edges[i]
                 same_edge = equivalent_edges(edge1, edge2)
                 if same_edge == True:
+                    equi_edges.append(i)
                     graph2_indexes.remove(i)
                     break
             if same_edge == False:
@@ -557,7 +588,7 @@ def equivalent_graphs(graph1, graph2):
     else:
         equi_graphs = False
 
-    return equi_graphs
+    return equi_graphs, equi_edges
 
 
 def equivalent_edges(edge1, edge2):
@@ -582,7 +613,8 @@ def equivalent_edges(edge1, edge2):
 
 # +++++++++++++++++++++++ Cores Looping Section +++++++++++++++++++++++++++++++
 
-def loopcores(eoi, causalgraphs=None, writedots=True, rmprev=False):
+def loopcores(eoi, ignorelist=None, causalgraphs=None, writedots=True,
+              rmprev=False, writepremerge=False, edge_labels=False):
     """ Build looped event paths by merging identical nodes within cores. """
 
     if causalgraphs == None:
@@ -596,20 +628,23 @@ def loopcores(eoi, causalgraphs=None, writedots=True, rmprev=False):
        core_files = None
     for core in cores:
         remove_intro(core)
+        remove_ignored(core, ignorelist)
         merge_same_labels(core)
         fuse_edges(core)
         rerank_nodes(core)
     for core in cores:
-        core.build_dot_file()
-    ## Write looped cores before they are merged for debugging.
-    #for i in range(len(cores)):
-    #    cores[i].filename = "loopedcore-{}.dot".format(i+1)
-    #for graph in cores:
-    #        output_path = "{}/{}".format(eoi, graph.filename)
-    #        outfile = open(output_path, "w")
-    #        outfile.write(graph.dot_file)
-    #        outfile.close()
-    looped_paths = mergecores(eoi, cores, writedots=False)
+        core.build_dot_file(edge_labels)
+    # Write looped cores before they are merged for debugging.
+    if writepremerge == True:
+        for i in range(len(cores)):
+            cores[i].filename = "loopedcore-{}.dot".format(i+1)
+        for graph in cores:
+                output_path = "{}/{}".format(eoi, graph.filename)
+                outfile = open(output_path, "w")
+                outfile.write(graph.dot_file)
+                outfile.close()
+    looped_paths = mergecores(eoi, cores, writedots=False,
+                              edge_labels=edge_labels)
     for i in range(len(looped_paths)):
         looped_paths[i].filename = "evpath-{}.dot".format(i+1)
     if writedots == True:
@@ -645,6 +680,29 @@ def remove_intro(graph):
         del(graph.edges[i])
     for node in graph.nodes:
         node.rank = node.rank - 1
+    graph.update()
+
+
+def remove_ignored(graph, ignorelist):
+    """ Remove nodes whose label contains a string defined in ignorelist. """
+
+    ignored_nodes = []
+    for i in range(len(graph.nodes)):
+        if any(ignorestr in graph.nodes[i].label for ignorestr in ignorelist):
+            ignored_nodes.insert(0, i)
+    for i in ignored_nodes:
+        del(graph.nodes[i])
+    ignored_edges = []
+    for i in range(len(graph.edges)):
+        source = graph.edges[i].source.label
+        target = graph.edges[i].target.label
+        if any(ignorestr in source for ignorestr in ignorelist):
+            ignored_edges.insert(0, i)
+        if any(ignorestr in target for ignorestr in ignorelist):
+            if i not in ignored_edges:
+                ignored_edges.insert(0, i)
+    for i in ignored_edges:
+        del(graph.edges[i])
     graph.update()
 
 
@@ -695,7 +753,7 @@ def merge_nodes(node_list, graph):
             
 
 def fuse_edges(graph):
-    """ Remove duplicate edges between two same nodes. """
+    """ Remove duplicate edges between two same nodes but sum weights. """
 
     unique_edges = []
     for edge1 in graph.edges:
@@ -710,6 +768,16 @@ def fuse_edges(graph):
                 break
         if new_edge == True:
             unique_edges.append(edge1)
+    for unique_edge in unique_edges:
+        unique_source = unique_edge.source.nodeid
+        unique_target = unique_edge.target.nodeid
+        w = 0
+        for edge in graph.edges:
+            source = edge.source.nodeid
+            target = edge.target.nodeid
+            if unique_source == source and unique_target == target:
+                w += edge.weight
+        unique_edge.weight = w
     graph.edges = unique_edges
     graph.update()
 
@@ -774,7 +842,8 @@ def climb_up(bottom, top, graph):
 
 # .................. Event Paths Merging Section ..............................
 
-def mergepaths(eoi, causalgraphs=None, writedot=True, rmprev=False):
+def mergepaths(eoi, causalgraphs=None, writedot=True, rmprev=False,
+               edge_labels=False):
     """ Merge event paths into a single pathway. """
 
     if causalgraphs == None:
@@ -796,38 +865,159 @@ def mergepaths(eoi, causalgraphs=None, writedot=True, rmprev=False):
                 n_id = "node{}".format(node_number)
                 pathway.nodes.append(CausalNode(n_id, node.label, node.rank))
                 node_number += 1
-    seen_edges = []
+
+
     for event_path in event_paths:
         for edge in event_path.edges:
-            edge_type = {"source": edge.source.label,
-                         "target": edge.target.label}
-            if edge_type not in seen_edges:
-                seen_edges.append(edge_type)
-                for node in pathway.nodes:
-                    if node.label == edge.source.label:
-                        source = node
-                    if node.label == edge.target.label:
-                        target = node
-                pathway.edges.append(CausalEdge(source, target))
+            for node in pathway.nodes:
+                if node.label == edge.source.label:
+                    source = node
+                if node.label == edge.target.label:
+                    target = node
+            pathway.edges.append(CausalEdge(source, target, edge.weight))
+    fuse_edges(pathway)
+
     pathway.update()
-    #rerank_nodes(pathway) 
+    rerank_nodes(pathway)
     pathway.occurrence = None
-    pathway.build_dot_file()
-    pathway.filename = "pathway.dot"
+    pathway.build_dot_file(edge_labels)
+    pathway.filename = "event_pathway.dot"
     if writedot == True:
-        output_path = "{}/{}".format(eoi, pathway.filename)
-        outfile = open(output_path, "w")
-        outfile.write(pathway.dot_file)
-        outfile.close()
+        output_path1 = "{}/{}".format(eoi, pathway.filename)
+        outfile1 = open(output_path1, "w")
+        outfile1.write(pathway.dot_file)
+        outfile1.close()
+        output_path2 = "{}-{}.dot".format(pathway.filename[:-4], eoi)
+        outfile2 = open(output_path2, "w")
+        outfile2.write(pathway.dot_file)
+        outfile2.close()
     if rmprev == True:
         if path_files == None:
             path_files = get_dot_files(eoi, "evpath")
         for path_file in path_files:
             file_path = "{}/{}".format(eoi, path_file)
             os.remove(file_path)
-            
+
+    return pathway
 
 # ............... End of Event Paths Merging Section ..........................
+
+# """"""""""""""" Species-Pathway Conversion Section """"""""""""""""""""""""""
+
+def convertpathway(eoi, causalgraph, kappamodel):
+    """
+    Convert a CausalGraph where node are events to a pathway where nodes are
+    species.
+    """
+
+    if not isinstance(causalgraph, CausalGraph):
+        graph_file = causalgraph
+        causalgraph = CausalGraph(graph_file, eoi)
+    kappa_rules = get_kappa_rules(kappamodel)
+    build_pathway(causalgraph)
+
+
+def get_kappa_rules(kappamodel):
+    """ Build a dictionary of the rules from the input kappa model. """
+
+    kappa_file = open(kappamodel, "r").readlines()
+    kappa_rules = {}
+    for line in kappa_file:
+        if line[0] == "'":
+            quote = line.rfind("'")
+            rule_name = line[1:quote]
+            rule_strt = 0
+            for i in range(quote+1, len(line)):
+                if line[i] != " ":
+                    rule_strt = i
+                    break
+            rule = line[rule_strt:-1]
+            kappa_rules[rule_name] = rule
+
+    return kappa_rules
+
+
+def build_pathway(graph):
+    """
+    Put nodes for the agent and sites for every rule
+    that switches a state.
+    """
+
+    species_pathway = CausalGraph()
+
+    self.species_nodes = []
+    self.species_edges = []
+    current_nodes = self.start_nodes
+    while len(current_nodes) > 0:
+        next_nodes = []
+        for node in current_nodes:
+            rule_name = self.rule_names[node][1:-1]
+            rule = ""
+            if rule_name in self.kappa_rules.keys():
+                rule = self.kappa_rules[rule_name]
+            rule_agents = self.parse_rule(rule)
+            modified_agents = []
+            for agent in rule_agents:
+                for site in agent["sites"].keys():
+                    state = agent["sites"][site]["state"]
+                    if state != None:
+                        if "/" in state:
+                            modified_agents.append(agent["agent_type"])
+            if len(modified_agents) > 0:
+                ranked_node = {"node_id": target,
+                               "rule_name": self.rule_names[target],
+                               "rank": self.node_ranks[target]}
+                print("---", modified_agents)
+            for i in range(len(rule)):
+                if rule[i] == "{":
+                    if rule[i+2] == "/":
+                        mod_rule = True
+                        break
+            #if mod_rule == True:
+            #    print(rule_name, "     ", rule)
+            for edge in self.story_edges:
+                if edge["source"] == node:
+                    next_nodes.append(edge["target"])
+        current_nodes = next_nodes
+
+
+def parse_rule(self, rule):
+    """ Create a dict for given rule. """
+
+    a = rule.index("@")
+    rate = rule[a+1:]
+    agents_list = rule[:a-1].split(', ')
+    parsed_agents = []
+    for agent in agents_list:
+        agent_dict = {}
+        parenthesis = agent.index("(")
+        agent_type = agent[:parenthesis]
+        agent_dict["agent_type"] = agent_type
+        sites = agent[parenthesis+1:-1].split()
+        site_dict = {}
+        for site in sites:
+            if "[" in site:
+                open_bracket = site.index("[")
+                close_bracket = site.index("]")
+                site_id = site[:open_bracket]
+                binding = site[open_bracket+1:close_bracket]
+            else:
+                binding = None
+            if "{" in site:
+                open_curl = site.index("{")
+                close_curl = site.index("}")
+                if "[" not in site:
+                    site_id = site[:open_curl]
+                state = site[open_curl+1:close_curl]
+            else:
+                state = None
+            site_dict[site_id] = {"binding": binding, "state": state}
+        agent_dict["sites"] = site_dict
+        parsed_agents.append(agent_dict)
+
+    return parsed_agents
+
+# """"""""""" End of Species-Pathway Conversion Section """""""""""""""""""""""
 
 def drawpngs(eoi, graphvizpath):
     """ Draw a png for every dot file found with given event of interest. """
