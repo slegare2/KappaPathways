@@ -7,16 +7,24 @@ Find the pathway of a given event of interest in a Kappa simulation.
 
 import kappapathways
 
-# Set kappa model and event of interest.
-kappa_model = "signaling-model.ka"
+# Set event of interest and kappa model.
 eoi = "EGFR(Y1092{p})"
+kappamodel = "model.ka"
+
+# Set list of rule strings to ignore.
+ignorelist = [" unbinds", " ina"]
 
 # Simulation parameters.
 simtime = 3600
 simseed = 235866
 
+# Set path to KaSim and KaFlow.
+kasimpath = "/home/user/.opam/4.07.0/bin/KaSim"
+kaflowpath = "/home/user/programfiles/KaFlow/KaFlow"
+
 # Run KappaPathways.
-kappapathways.findpathway(kappa_model, eoi, simtime, simseed)
+kappapathways.findpathway(eoi, kappamodel, kasimpath, kaflowpath, 
+                          simtime, simseed, ignorelist)
 """
 
 import os
@@ -107,11 +115,12 @@ class CausalEdge(object):
 class CausalGraph(object):
     """ General data structure for causal graphs. """
 
-    def __init__(self, filename=None, eoi=None):
+    def __init__(self, filename=None, eoi=None, nodestype="event"):
         """ Initialize class CausalGraph. """
 
         self.filename = filename
         self.eoi = eoi
+        self.nodestype = nodestype # event or species
         self.nodes = []
         self.edges = []
         self.occurrence = 1
@@ -130,6 +139,14 @@ class CausalGraph(object):
         self.label_mapping = {}
         dotfile = open(dotpath, "r").readlines()
         for line in dotfile:
+            if "nodestype=" in line:
+                type_index = line.index("nodestype")
+                quote = line.rfind('"')
+                self.nodestype = line[type_index+11:quote]
+            if "eoi=" in line:
+                eoi_index = line.index("eoi")
+                quote = line.rfind('"')
+                self.eoi = line[eoi_index+5:quote]
             if "Occurrence" in line:
                 occu = line.index("Occurrence")
                 quote = line.rfind('"')
@@ -181,6 +198,11 @@ class CausalGraph(object):
             self.edges.insert(0, edge)
         if rank == None:
             self.find_ranks()
+        if self.eoi == None:
+            self.get_max_rank()
+            for node in self.nodes:
+                if node.rank == self.max_rank:
+                    self.eoi = node.label
         self.build_dot_file()
 
 
@@ -309,7 +331,7 @@ class CausalGraph(object):
         self.sequentialize_ids()
 
 
-    def build_dot_file(self, edge_labels=False):
+    def build_dot_file(self, edgelabels=False):
         """ build a dot file of the CausalGraph. """
 
         self.get_max_rank()
@@ -317,13 +339,19 @@ class CausalGraph(object):
         self.get_end_nodes()
         self.sequentialize_ids()
         dot_str = "digraph G{\n"
+        dot_str += '  nodestype="{}"\n'.format(self.nodestype)
+        if self.eoi != None:
+            dot_str += '  eoi="{}"\n'.format(self.eoi)
         if self.occurrence != None:
             dot_str += '  label="Occurrence = {}" '.format(self.occurrence)
             dot_str += "fontsize=28 ;\n"
         if self.prevcores != None:
             dot_str += '  prevcores="{}"\n'.format(self.prevcores)
         dot_str += '  labelloc="t" ;\n'
-        dot_str += "  ranksep=.5 ;\n"
+        if "core" in self.filename:
+            dot_str += "  ranksep=0.5 ;\n"
+        else:
+            dot_str += "  ranksep=1.0 ;\n"
         # Draw nodes.
         for current_rank in range(1, self.max_rank+1):
             rank_str = "{}".format(current_rank)
@@ -339,6 +367,8 @@ class CausalGraph(object):
                     if node.label == self.eoi:
                         node_shape = "ellipse"
                         node_color = "indianred2"
+                    if self.nodestype == "species":
+                        node_shape = "ellipse"
                     dot_str += ('"{}" [label="{}", '
                                 .format(node.nodeid, node.label))
                     dot_str += "shape={}, style=filled, ".format(node_shape)
@@ -368,7 +398,7 @@ class CausalGraph(object):
                 pensize = maxpenwidth
             dot_str += "[penwidth={}".format(pensize)
             dot_str += ", color={}".format(edge_color)
-            if edge_labels == True:
+            if edgelabels == True:
                 dot_str += ', label="  {}"'.format(edge.weight)
             dot_str += ", weight={}] ;\n".format(edge.weight)
         dot_str += "}"
@@ -390,89 +420,20 @@ class CausalGraph(object):
 
         return res
 
-
-class Pathway(CausalGraph):
-    """ Redefinition of the build_dot_file method for pathways. """
-
-    def build_dot_file(self, edge_labels=False):
-        """ build a dot file of the Pathway. """
-
-        self.get_max_rank()
-        self.get_start_nodes()
-        self.get_end_nodes()
-        self.sequentialize_ids()
-        dot_str = "digraph G{\n"
-        if self.occurrence != None:
-            dot_str += '  label="Occurrence = {}" '.format(self.occurrence)
-            dot_str += "fontsize=28 ;\n"
-        if self.prevcores != None:
-            dot_str += '  prevcores="{}"\n'.format(self.prevcores)
-        dot_str += '  labelloc="t" ;\n'
-        dot_str += "  ranksep=.5 ;\n"
-        # Draw nodes.
-        for current_rank in range(1, self.max_rank+1):
-            rank_str = "{}".format(current_rank)
-            dot_str += ('{{ rank = same ; "{}" [shape=plaintext] ;\n'
-                        .format(rank_str))
-            for node in self.nodes:
-                if node.rank == current_rank:
-                    node_shape = "ellipse"
-                    node_color = "lightblue"
-                    if "Intro" in node.label:
-                        node_shape = "rectangle"
-                        node_color = "white"
-                    if node.label == self.eoi:
-                        node_shape = "ellipse"
-                        node_color = "indianred2"
-                    dot_str += ('"{}" [label="{}", '
-                                .format(node.nodeid, node.label))
-                    dot_str += "shape={}, style=filled, ".format(node_shape)
-                    dot_str += "fillcolor={}] ;\n".format(node_color)
-            dot_str += "}\n"
-        for rank in range(1, self.max_rank):
-            rank_str = "{}".format(rank)
-            next_rank = "{}".format(rank+1)
-            dot_str += ('"{}" -> "{}" [style="invis"] ;\n'
-                        .format(rank_str, next_rank))
-        # Draw edges.
-        all_weights = []
-        for edge in self.edges:
-            all_weights.append(edge.weight)
-        if len(all_weights) > 0:
-            minweight = min(all_weights)
-        else:
-            minweight = 1
-        minpenwidth = 1
-        maxpenwidth = 20
-        for edge in self.edges:
-            dot_str += ('"{}" -> "{}" '
-                        .format(edge.source.nodeid, edge.target.nodeid))
-            edge_color = "black"
-            pensize = edge.weight/minweight * minpenwidth
-            if pensize > maxpenwidth:
-                pensize = maxpenwidth
-            dot_str += "[penwidth={}".format(pensize)
-            dot_str += ", color={}".format(edge_color)
-            if edge_labels == True:
-                dot_str += ', label="  {}"'.format(edge.weight)
-            dot_str += ", weight={}] ;\n".format(edge.weight)
-        dot_str += "}"
-        self.dot_file = dot_str
-
 # -------------------- Causal Cores Generation Section ------------------------
 
-def getcausalcores(kappamodel, eoi, kasimpath, kaflowpath, simtime=None, simseed=None):
+def getcausalcores(eoi, kappamodel, kasimpath, kaflowpath, simtime=1000, simseed=None):
     """ 
     Generate initial causal cores of given event of interest by running KaSim 
     and then KaFlow.
     """
 
-    new_model = add_eoi(kappamodel, eoi)
+    new_model = add_eoi(eoi, kappamodel)
     trace_path = run_kasim(new_model, kasimpath, simtime, simseed)
-    run_kaflow(trace_path, eoi, kaflowpath)
+    run_kaflow(eoi, trace_path, kaflowpath)
 
 
-def add_eoi(kappamodel, eoi):
+def add_eoi(eoi, kappamodel):
     """ Create a new Kappa model where the EOI is added. """
 
     if not os.path.exists(eoi):
@@ -492,7 +453,7 @@ def add_eoi(kappamodel, eoi):
     return new_path
 
 
-def run_kasim(kappa_with_eoi, kasimpath, simtime=1000, simseed=None):
+def run_kasim(kappa_with_eoi, kasimpath, simtime, simseed):
     """ Run simulation with added EOI to produce trace. """
 
     last_dot = kappa_with_eoi.rfind(".")
@@ -524,7 +485,7 @@ def run_kasim(kappa_with_eoi, kasimpath, simtime=1000, simseed=None):
     return trace_path
 
 
-def run_kaflow(trace_path, eoi, kaflowpath):
+def run_kaflow(eoi, trace_path, kaflowpath):
    """ Run KaFlow on the trace containing the EOI. """
 
    subprocess.run(("{}".format(kaflowpath),
@@ -535,8 +496,8 @@ def run_kaflow(trace_path, eoi, kaflowpath):
 
 # ==================== Causal Cores Merging Section ===========================
 
-def mergecores(eoi, causalgraphs=None, writedots=True, rmprev=False,
-               edge_labels=False):
+def mergecores(eoi, causalgraphs=None, edgelabels=False, writedots=True,
+               rmprev=False, printmsg=True):
     """ Merge equivalent causal cores and count occurrence. """
 
     if causalgraphs == None:
@@ -582,7 +543,7 @@ def mergecores(eoi, causalgraphs=None, writedots=True, rmprev=False,
         sorted_cores[i].filename = "core-{}.dot".format(i+1)
     for graph in sorted_cores:
         graph.sequentialize_ids()
-        graph.build_dot_file(edge_labels)
+        graph.build_dot_file(edgelabels)
     if writedots == True:
         for graph in sorted_cores:
             output_path = "{}/{}".format(eoi, graph.filename)
@@ -595,6 +556,9 @@ def mergecores(eoi, causalgraphs=None, writedots=True, rmprev=False,
         for core_file in causal_core_files:
             file_path = "{}/{}".format(eoi, core_file)
             os.remove(file_path)
+    if printmsg == True:
+        print("Merging equivalent causal cores, {} unique cores obtained."
+              .format(len(sorted_cores)))
 
     return sorted_cores
 
@@ -684,8 +648,8 @@ def equivalent_edges(edge1, edge2):
 
 # +++++++++++++++++++++++ Cores Looping Section +++++++++++++++++++++++++++++++
 
-def loopcores(eoi, ignorelist=None, causalgraphs=None, writedots=True,
-              rmprev=False, writepremerge=False, edge_labels=False):
+def loopcores(eoi, causalgraphs=None, ignorelist=None, edgelabels=False,
+              writedots=True, rmprev=False, writepremerge=False):
     """ Build looped event paths by merging identical nodes within cores. """
 
     if causalgraphs == None:
@@ -704,7 +668,7 @@ def loopcores(eoi, ignorelist=None, causalgraphs=None, writedots=True,
         fuse_edges(core)
         rerank_nodes(core)
     for core in cores:
-        core.build_dot_file(edge_labels)
+        core.build_dot_file(edgelabels)
     # Write looped cores before they are merged for debugging.
     if writepremerge == True:
         for i in range(len(cores)):
@@ -715,9 +679,9 @@ def loopcores(eoi, ignorelist=None, causalgraphs=None, writedots=True,
                 outfile.write(graph.dot_file)
                 outfile.close()
     looped_paths = mergecores(eoi, cores, writedots=False,
-                              edge_labels=edge_labels)
+                              edgelabels=edgelabels, printmsg=False)
     for i in range(len(looped_paths)):
-        looped_paths[i].filename = "evpath-{}.dot".format(i+1)
+        looped_paths[i].filename = "eventpath-{}.dot".format(i+1)
     if writedots == True:
         for graph in looped_paths:
             output_path = "{}/{}".format(eoi, graph.filename)
@@ -730,6 +694,11 @@ def loopcores(eoi, ignorelist=None, causalgraphs=None, writedots=True,
         for core_file in core_files:
             file_path = "{}/{}".format(eoi, core_file)
             os.remove(file_path)
+    print("Finding loops in cores.")
+    print("Merging equivalent looped cores, {} event paths obtained."
+          .format(len(looped_paths)))
+
+    return looped_paths
 
 
 def remove_intro(graph):
@@ -913,12 +882,12 @@ def climb_up(bottom, top, graph):
 
 # .................. Event Paths Merging Section ..............................
 
-def mergepaths(eoi, causalgraphs=None, writedot=True, rmprev=False,
-               edge_labels=False):
+def mergepaths(eoi, causalgraphs=None, edgelabels=False, writedot=True,
+               rmprev=False):
     """ Merge event paths into a single pathway. """
 
     if causalgraphs == None:
-        path_files = get_dot_files(eoi, "evpath")
+        path_files = get_dot_files(eoi, "eventpath")
         event_paths = []
         for path_file in path_files:
             path_path = "{}/{}".format(eoi, path_file)
@@ -936,8 +905,6 @@ def mergepaths(eoi, causalgraphs=None, writedot=True, rmprev=False,
                 n_id = "node{}".format(node_number)
                 pathway.nodes.append(CausalNode(n_id, node.label, node.rank))
                 node_number += 1
-
-
     for event_path in event_paths:
         for edge in event_path.edges:
             for node in pathway.nodes:
@@ -947,28 +914,22 @@ def mergepaths(eoi, causalgraphs=None, writedot=True, rmprev=False,
                     target = node
             pathway.edges.append(CausalEdge(source, target, edge.weight))
     fuse_edges(pathway)
-
-    pathway.update()
     rerank_nodes(pathway) 
     pathway.occurrence = None
-    pathway.build_dot_file(edge_labels)
-    pathway.filename = "event_pathway.dot"
+    pathway.build_dot_file(edgelabels)
+    pathway.filename = "eventpathway.dot"
     if writedot == True:
         output_path1 = "{}/{}".format(eoi, pathway.filename)
         outfile1 = open(output_path1, "w")
         outfile1.write(pathway.dot_file)
         outfile1.close()
-        pathway.filename = "{}-{}.dot".format(pathway.filename[:-4], eoi)
-        output_path2 = "{}".format(pathway.filename)
-        outfile2 = open(output_path2, "w")
-        outfile2.write(pathway.dot_file)
-        outfile2.close()
     if rmprev == True:
         if path_files == None:
             path_files = get_dot_files(eoi, "evpath")
         for path_file in path_files:
             file_path = "{}/{}".format(eoi, path_file)
             os.remove(file_path)
+    print("Merging all event paths into one event pathway.")
 
     return pathway        
 
@@ -976,17 +937,19 @@ def mergepaths(eoi, causalgraphs=None, writedot=True, rmprev=False,
 
 # """"""""""""""" Species Pathway Conversion Section """"""""""""""""""""""""""
 
-def speciespathway(eoi, causalgraph, kappamodel, writedot=True,
-                   edge_labels=False):
+def speciespathway(eoi, kappamodel, causalgraph=None, edgelabels=False):
     """
     Convert a CausalGraph where node are events to a pathway where nodes are
     species.
     """
 
-    if isinstance(causalgraph, CausalGraph):
+    if causalgraph == None:
+        graph_path = "{}/eventpathway.dot".format(eoi)
+        pathway = CausalGraph(graph_path, eoi)
+    elif isinstance(causalgraph, CausalGraph):
         pathway = causalgraph
     else:
-        pathway = Pathway(causalgraph, eoi)
+        pathway = CausalGraph(causalgraph, eoi)
     kappa_rules = get_kappa_rules(kappamodel)
     kappa_rules["{}".format(eoi)] = "|{}|".format(eoi)
     mod_nodes = get_mod_nodes(pathway, kappa_rules)
@@ -997,25 +960,26 @@ def speciespathway(eoi, causalgraph, kappamodel, writedot=True,
         if node in mod_nodes:
             node.label = node.species
     rebranch(pathway, mod_nodes)
-    #pathway = build_pathway(eoi, causalgraph, kappa_rules)
     merge_same_labels(pathway)
     fuse_edges(pathway)
-    pathway.eoi = eoi
-    pathway.update()
-    #rerank_nodes(pathway)
+    rerank_nodes(pathway)
     pathway.occurrence = None
-    pathway.build_dot_file(edge_labels)
     pathway.filename = "pathway.dot"
-    if writedot == True:
-        output_path1 = "{}/{}".format(eoi, pathway.filename)
-        outfile1 = open(output_path1, "w")
-        outfile1.write(pathway.dot_file)
-        outfile1.close()
-        pathway.filename = "{}-{}.dot".format(pathway.filename[:-4], eoi)
-        output_path2 = "{}".format(pathway.filename)
-        outfile2 = open(output_path2, "w")
-        outfile2.write(pathway.dot_file)
-        outfile2.close()
+    pathway.nodestype = "species"
+    pathway.build_dot_file(edgelabels)
+    output_path1 = "{}/{}".format(eoi, pathway.filename)
+    outfile1 = open(output_path1, "w")
+    outfile1.write(pathway.dot_file)
+    outfile1.close()
+    pathway.filename = "{}-{}.dot".format(pathway.filename[:-4], eoi)
+    output_path2 = "{}".format(pathway.filename)
+    outfile2 = open(output_path2, "w")
+    outfile2.write(pathway.dot_file)
+    outfile2.close()
+    print("Converting event pathway into species pathway.")
+    print("File {} created.".format(pathway.filename))
+
+    return pathway
 
     
 def get_kappa_rules(kappamodel):
@@ -1114,8 +1078,11 @@ def get_mod_nodes(graph, kappa_rules):
                 modified_agent["sites"] = modified_sites
                 modified_agents.append(modified_agent)
         if len(modified_agents) > 0:
-            species = label_species(modified_agents)
+            species, kappa_species = label_species(modified_agents)
             node.species = species
+            if graph.eoi == kappa_species:
+                graph.eoi = species
+            #node.species = kappa_species
             modification_rules.append(node)
 
     return modification_rules
@@ -1136,7 +1103,23 @@ def label_species(agent_list):
                 species += "-{}".format(site)
                 #species += " {}".format(sites[site]["state"])
 
-    return species
+    kappa_species = ""
+    for i in range(len(agent_list)):
+        agent = agent_list[i]
+        if i > 0:
+            kappa_species += ", "
+        kappa_species += "{}(".format(agent["type"])
+        sites = agent["sites"]
+        j = 0
+        for site in sites.keys():
+            if j > 0:
+                species += " "
+            kappa_species += "{}".format(site)
+            kappa_species += "{{{}}}".format(sites[site]["state"])
+            j += 1
+        kappa_species += ")"
+
+    return species, kappa_species
 
 
 def add_first_nodes(graph, kappa_rules, mod_nodes):
@@ -1206,6 +1189,7 @@ def add_first_nodes(graph, kappa_rules, mod_nodes):
             added_nodes.append(new_node)
             new_edge = CausalEdge(new_node, modified_node, path_weights[i])
             graph.edges.append(new_edge)
+        modified_node.rank = 1
             
     return added_nodes
     
@@ -1237,69 +1221,38 @@ def rebranch(graph, mod_nodes):
                                           up_edge.weight)
                     graph.edges.append(new_edge)
             del(graph.nodes[j])
-        
-
-def build_pathway(eoi, graph, kappa_rules):
-    """ 
-    Put nodes for the agent and sites for every rule 
-    that switches a state.
-    """
-
-    species_pathway = Pathway()
-    selected_nodes = []
-    corr_event_species = []
-    for current_rank in range(1, graph.max_rank+1):
-        for node in graph.nodes:
-            if node.rank == current_rank:
-                rule = kappa_rules[node.label]
-                rule_agents = parse_rule(rule)
-                modified_sites = []
-                for agent in rule_agents:
-                    for site in agent["sites"].keys():
-                        state = agent["sites"][site]["state"]
-                        if state != None:
-                            if "/" in state:
-                                slash = state.index("/")
-                                final_state = state[slash+1:]
-                                mod_site = {"agent_type": agent["agent_type"],
-                                            "site": site,
-                                            "final_state": final_state}
-                                modified_sites.append(mod_site)
-                if len(modified_sites) > 0 or node.label == eoi:
-                    if node.label == eoi:
-                        species = eoi
-                    else:
-                        species = ""
-                        for i in range(len(modified_sites)):
-                            mod_site = modified_sites[i]
-                            if i > 0:
-                                species += ", "
-                            species += "{}".format(mod_site["agent_type"])
-                            if "act" not in mod_site["site"]:
-                                species += " - {}".format(mod_site["site"])
-                                species += " {}".format(mod_site["final_state"])
-                    species_node = CausalNode(node.nodeid, species,
-                                              current_rank)
-                    species_pathway.nodes.append(species_node)
-                    # Find edges that connect the newly added node to
-                    # previously added ones.
-                    upward_paths = climb_up(node, selected_nodes, graph)
-                    original_sources = []
-                    for upward_path in upward_paths:
-                        original_sources.append(upward_path[-1])
-                    for source in original_sources:
-                        for corr in corr_event_species:
-                            if corr["event"].nodeid == source.nodeid:
-                                new_edge = CausalEdge(corr["species"],
-                                                      species_node)
-                                species_pathway.edges.append(new_edge)
-                    selected_nodes.append(node)
-                    corr_event_species.append({"event": node,
-                                               "species": species_node})
-
-    return species_pathway
+    graph.update()
 
 # """"""""""" End of Species Pathway Conversion Section """""""""""""""""""""""
+
+def findpathway(eoi, kappamodel, kasimpath, kaflowpath, simtime=1000,
+                simseed=None, ignorelist=None, edgelabels=False):
+    """ Use KappaPathways functions to get the pathway to given EOI. """
+
+    # 1) Get Causal Cores.
+    getcausalcores(eoi, kappamodel, kasimpath, kaflowpath, simtime, simseed)
+
+    # 2) Merge Equivalent Causal Cores.
+    mergedcores = mergecores(eoi, edgelabels=edgelabels, writedots=True,
+                             rmprev=True)
+
+    # 3) Loop causal cores to create event paths.
+    loopedcores = loopcores(eoi, causalgraphs=mergedcores,
+                            ignorelist=ignorelist, edgelabels=edgelabels,
+                            writedots=True, rmprev=False, writepremerge=False)
+    #loopedcores = loopcores(eoi,
+    #                        ignorelist=ignorelist, edgelabels=edgelabels,
+    #                        writedots=True, rmprev=False, writepremerge=False)
+
+    # 4) Merge all event paths into one event pathway.
+    eventpath = mergepaths(eoi, causalgraphs=loopedcores,
+                           edgelabels=edgelabels, writedot=True, rmprev=False)
+
+    # 5) Convert an event pathway into a species pathway.
+    speciespathway(eoi, kappamodel, causalgraph=eventpath,
+                   edgelabels=edgelabels)
+
+
 
 def drawpngs(eoi, graphvizpath):
     """ Draw a png for every dot file found with given event of interest. """
@@ -1315,4 +1268,57 @@ def drawpngs(eoi, graphvizpath):
                             "-o", "{}.png".format(file_path)))
         except KeyboardInterrupt:
             exit(0)
+
+
+def togglelabels():
+    """
+    Add or remove edge labels on all dot files found in current directory
+    and all other directories found in current directory.
+    """
+
+    current_files = os.listdir(".")
+    for current_file in current_files:
+        if "dot" in current_file:
+            toggle_edge_labels(".", current_file)
+    directories = filter(os.path.isdir, os.listdir('.'))
+    for directory in directories:
+        dot_files = os.listdir("{}".format(directory))
+        for dot_file in dot_files:
+            if "dot" in dot_file:
+                toggle_edge_labels(directory, dot_file)
+
+
+def toggle_edge_labels(dir_path, dot_file):
+    """ Add or remove edge labels in dot file. """
+
+    input_path = "{}/{}".format(dir_path, dot_file)
+    input_file = open(input_path, "r").readlines()
+    new_file = ""
+    for line in input_file:
+        if "->" in line and "penwidth" in line:
+            if "label" not in line: # Add labels.
+                wpos = line.index("weight=")
+                bracket = line.index("]")
+                weight = line[wpos+7:bracket]
+                comma = line.rfind(",")
+                new_line = line[:comma+2]
+                new_line += 'label="  {}", '.format(weight)
+                new_line += line[wpos:]
+                new_file += new_line
+            else: # Remove labels.
+                labelpos = line.index("label=")
+                comma = line.rfind(",")
+                new_line = line[:labelpos] + line[comma+1:]
+                new_file += new_line
+        else:
+            new_file += line
+
+    period = dot_file.rfind(".")
+    prefix = dot_file[:period]
+    save_path = "{}/{}-save.dot".format(dir_path, prefix)
+    shutil.copyfile(input_path, save_path)
+    os.remove(input_path)
+    output_file = open(input_path, "w")
+    output_file.write(new_file)
+    os.remove(save_path)
 
