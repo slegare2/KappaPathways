@@ -13,7 +13,7 @@ import kappapathway
 ```
 
 KappaPathways requires KaSim [https://github.com/Kappa-Dev/KaSim] and KaFlow [https://github.com/jonathan-laurent/KaFlow].
-Graphviz [https://www.graphviz.org] and xdot [https://pypi.org/project/xdot] are also recommended to visualize the results.
+To visualize the results, Graphviz [https://www.graphviz.org] and xdot [https://pypi.org/project/xdot] are also recommended.
 
 An example usage is provided in script *run_kappapathways.py*.
 To try it, create a new working directory.
@@ -35,6 +35,6 @@ python3 run_kappapathways.py
 This should create a dot file of the pathway to the selected event of interest
 and a directory containing the intermediary files used to build the pathway.
 
-Pathways to different event of interest can be obtained by changing the value of
+Pathways to different events of interest can be obtained by changing the value of
 variable `eoi`.
 
