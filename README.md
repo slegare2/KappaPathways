@@ -12,13 +12,20 @@ sys.path.append('/home/user/path_to/KappaPathways')
 import kappapathway
 ```
 
-KappaPathways requires KaSim and KaFlow.
-Graphviz and xdot are also recommended to visualize the results.
+KappaPathways requires KaSim [https://github.com/Kappa-Dev/KaSim] and KaFlow [https://github.com/jonathan-laurent/KaFlow].
+Graphviz [https://www.graphviz.org] and xdot [https://pypi.org/project/xdot] are also recommended to visualize the results.
 
 An example usage is provided in script run_kappapathways.py.
 To try it, create a new working directory.
 Copy run_kappapathways.py and ptyr-model2-act.ka to the new directory.
 In run_kappapathways.py, change the paths to KappaPathways, KaSim and KaFlow.
+
+```python
+# Set path to KaSim and KaFlow.
+kasimpath = "/home/user/path_to/KaSim"
+kaflowpath = "/home/user/path_to/KaFlow"
+```
+
 Then do
 
 ```
