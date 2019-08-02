@@ -9,7 +9,7 @@ add it to sys.path before importing:
 ```python
 import sys
 sys.path.append('/home/user/path_to/KappaPathways')
-import kappapathway
+import kappapathways
 ```
 
 KappaPathways requires KaSim [https://github.com/Kappa-Dev/KaSim] and KaFlow [https://github.com/jonathan-laurent/KaFlow].
