@@ -1,14 +1,15 @@
-#! /usr/bin/python3
-
 """
 Find the pathway to a given event of interest from a Kappa simulation
 using KappaPathways.
 """
 
-import os
 import sys
 sys.path.append('/home/user/path_to/KappaPathways')
 import kappapathways
+
+# Set path to KaSim and KaFlow.
+kasimpath = "/home/user/path_to/KaSim"
+kaflowpath = "/home/user/path_to/KaFlow"
 
 # Set event of interest.
 eoi = "EGFR(Y1092{p})"
@@ -30,16 +31,12 @@ ignorelist = [" unbinds", " ina", " dephos"]
 simtime = 3600
 simseed = None
 
-# Set path to KaSim and KaFlow.
-kasimpath = "/home/user/path_to/KaSim"
-kaflowpath = "/home/user/path_to/KaFlow"
-
 
 # Run KappaPathways.
 kappapathways.findpathway(eoi, kappamodel, kasimpath, kaflowpath,
                           simtime, simseed, ignorelist, edgelabels=False)
 
 # Optionally, make png files from the dot graphs. Requires Graphviz.
-#graphvizpath = "/usr/bin/dot"
+#graphvizpath = "path_to/dot"
 #kappapathways.drawpngs(eoi, graphvizpath)
 
