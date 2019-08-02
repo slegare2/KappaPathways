@@ -32,6 +32,8 @@ import shutil
 import subprocess
 import warnings
 import json
+import math
+import statistics
 
 
 class CausalNode(object):
@@ -351,7 +353,7 @@ class CausalGraph(object):
         if "core" in self.filename:
             dot_str += "  ranksep=0.5 ;\n"
         else:
-            dot_str += "  ranksep=1.0 ;\n"
+            dot_str += "  ranksep=1.25 ;\n"
         # Draw nodes.
         for current_rank in range(1, self.max_rank+1):
             rank_str = "{}".format(current_rank)
@@ -380,20 +382,24 @@ class CausalGraph(object):
             dot_str += ('"{}" -> "{}" [style="invis"] ;\n'
                         .format(rank_str, next_rank))
         # Draw edges.
+        minpenwidth = 0.5
+        medpenwidth = 3
+        maxpenwidth = 6.5
         all_weights = []
         for edge in self.edges:
             all_weights.append(edge.weight)
-        if len(all_weights) > 0:
-            minweight = min(all_weights)
-        else:
-            minweight = 1
-        minpenwidth = 1
-        maxpenwidth = 20
+        average_weight = statistics.mean(all_weights)
+        #median_weight = statistics.median(all_weights)
         for edge in self.edges:
             dot_str += ('"{}" -> "{}" '
                         .format(edge.source.nodeid, edge.target.nodeid))
             edge_color = "black"
-            pensize = edge.weight/minweight * minpenwidth
+            #pensize = edge.weight/average_weight * medpenwidth
+            #pensize = edge.weight/median_weight * medpenwidth
+            ratio = edge.weight/average_weight
+            pensize = math.log(ratio,2) + medpenwidth
+            if pensize < minpenwidth:
+                pensize = minpenwidth
             if pensize > maxpenwidth:
                 pensize = maxpenwidth
             dot_str += "[penwidth={}".format(pensize)
@@ -828,7 +834,7 @@ def rerank_nodes(graph):
     by the longest loopless path to a node of rank 1.
     """
 
-    for node in graph.nodes:
+    for node in graph.nodes: 
         paths = climb_up(node, graph.start_nodes, graph)
         lengths = []
         for path in paths:
@@ -916,8 +922,8 @@ def mergepaths(eoi, causalgraphs=None, edgelabels=False, writedot=True,
     fuse_edges(pathway)
     rerank_nodes(pathway) 
     pathway.occurrence = None
-    pathway.build_dot_file(edgelabels)
     pathway.filename = "eventpathway.dot"
+    pathway.build_dot_file(edgelabels)
     if writedot == True:
         output_path1 = "{}/{}".format(eoi, pathway.filename)
         outfile1 = open(output_path1, "w")
@@ -952,7 +958,7 @@ def speciespathway(eoi, kappamodel, causalgraph=None, edgelabels=False):
         pathway = CausalGraph(causalgraph, eoi)
     kappa_rules = get_kappa_rules(kappamodel)
     kappa_rules["{}".format(eoi)] = "|{}|".format(eoi)
-    mod_nodes = get_mod_nodes(pathway, kappa_rules)
+    mod_nodes = get_mod_nodes(eoi, pathway, kappa_rules)
     added_nodes = add_first_nodes(pathway, kappa_rules, mod_nodes)
     for node in added_nodes:
         mod_nodes.append(node)
@@ -1051,7 +1057,7 @@ def parse_rule(rule):
     return parsed_agents
 
 
-def get_mod_nodes(graph, kappa_rules):
+def get_mod_nodes(eoi, graph, kappa_rules):
     """
     Create a list of the nodes that correspond to a rule where a state is
     modified. Also change the label of those nodes to the species they produce.
@@ -1077,6 +1083,23 @@ def get_mod_nodes(graph, kappa_rules):
                 modified_agent["type"] = agent["type"]
                 modified_agent["sites"] = modified_sites
                 modified_agents.append(modified_agent)
+        # Also add the EOI if it is a binding.
+        if node.label == eoi:
+            for agent in rule_agents:
+                modified_agent = {}
+                modified_sites = {}
+                sites = agent["sites"]
+                for site in sites.keys():
+                    #state = sites[site]["state"]
+                    #if state != None:
+                    #    modified_sites[site] = {"state": state}
+                    binding = sites[site]["binding"]
+                    if binding != None:
+                        modified_sites[site] = {"binding": binding}
+                if len(modified_sites.keys()) > 0:
+                    modified_agent["type"] = agent["type"]
+                    modified_agent["sites"] = modified_sites
+                    modified_agents.append(modified_agent)
         if len(modified_agents) > 0:
             species, kappa_species = label_species(modified_agents)
             node.species = species
@@ -1115,7 +1138,10 @@ def label_species(agent_list):
             if j > 0:
                 species += " "
             kappa_species += "{}".format(site)
-            kappa_species += "{{{}}}".format(sites[site]["state"])
+            if "binding" in sites[site].keys():
+                kappa_species += "[{}]".format(sites[site]["binding"])
+            if "state" in sites[site].keys():
+                kappa_species += "{{{}}}".format(sites[site]["state"])
             j += 1
         kappa_species += ")"
 
@@ -1240,9 +1266,6 @@ def findpathway(eoi, kappamodel, kasimpath, kaflowpath, simtime=1000,
     loopedcores = loopcores(eoi, causalgraphs=mergedcores,
                             ignorelist=ignorelist, edgelabels=edgelabels,
                             writedots=True, rmprev=False, writepremerge=False)
-    #loopedcores = loopcores(eoi,
-    #                        ignorelist=ignorelist, edgelabels=edgelabels,
-    #                        writedots=True, rmprev=False, writepremerge=False)
 
     # 4) Merge all event paths into one event pathway.
     eventpath = mergepaths(eoi, causalgraphs=loopedcores,
