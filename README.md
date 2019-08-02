@@ -36,5 +36,5 @@ This should create a dot file of the pathway to the selected event of interest
 and a directory containing the intermediary files used to build the pathway.
 
 Pathways to different events of interest can be obtained by changing the value of
-variable `eoi`.
+variable `eoi` in *run_kappapathways.py*.
 
