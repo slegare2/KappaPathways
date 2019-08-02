@@ -4,7 +4,7 @@ No setup script is provided yet.
 
 To use KappaPathways, clone or download git repository.
 Then, in any python script that would use KappaPathways,
-add it to sys.path before importing like:
+add it to sys.path before importing:
 
 ```python
 import sys
@@ -15,10 +15,10 @@ import kappapathway
 KappaPathways requires KaSim [https://github.com/Kappa-Dev/KaSim] and KaFlow [https://github.com/jonathan-laurent/KaFlow].
 Graphviz [https://www.graphviz.org] and xdot [https://pypi.org/project/xdot] are also recommended to visualize the results.
 
-An example usage is provided in script run_kappapathways.py.
+An example usage is provided in script *run_kappapathways.py*.
 To try it, create a new working directory.
-Copy run_kappapathways.py and ptyr-model2-act.ka to the new directory.
-In run_kappapathways.py, change the paths to KappaPathways, KaSim and KaFlow.
+Copy *run_kappapathways.py* and *ptyr-model2-act.ka* to the new directory.
+Inside *run_kappapathways.py*, change the paths to KappaPathways, KaSim and KaFlow.
 
 ```python
 # Set path to KaSim and KaFlow.
