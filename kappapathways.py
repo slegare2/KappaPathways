@@ -1,30 +1,8 @@
 #! /usr/bin/python3
 
 """
-Find the pathway of a given event of interest in a Kappa simulation.
-
-# Example usage:
-
-import kappapathways
-
-# Set event of interest and kappa model.
-eoi = "EGFR(Y1092{p})"
-kappamodel = "model.ka"
-
-# Set list of rule strings to ignore.
-ignorelist = [" unbinds", " ina"]
-
-# Simulation parameters.
-simtime = 3600
-simseed = 235866
-
-# Set path to KaSim and KaFlow.
-kasimpath = "/home/user/.opam/4.07.0/bin/KaSim"
-kaflowpath = "/home/user/programfiles/KaFlow/KaFlow"
-
-# Run KappaPathways.
-kappapathways.findpathway(eoi, kappamodel, kasimpath, kaflowpath, 
-                          simtime, simseed, ignorelist)
+Module KappaPathways.
+Obtain the pathway to a given event of interest from a Kappa simulation.
 """
 
 import os
