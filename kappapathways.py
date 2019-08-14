@@ -402,7 +402,8 @@ class CausalGraph(object):
                 if node.rank == current_rank:
                     node_shape = "invhouse"
                     node_color = "lightblue"
-                    if "Intro" in node.label:
+                    #if "Intro" in node.label:
+                    if node.intro == True:
                         node_shape = "rectangle"
                         node_color = "white"
                     if node.label == self.eoi:
@@ -936,6 +937,538 @@ def speciespathway(eoi, kappamodel, causalgraph=None, edgelabels=False,
     else:
         pathway = CausalGraph(causalgraph, eoi)
     # Doing the work.
+    gather_rules(eoi, kappamodel, pathway)
+    mod_nodes = get_mod_nodes(eoi, pathway)
+    #rebranch(pathway, mod_nodes)
+    #fuse_edges(pathway)
+    arrow_relationships(eoi, pathway)
+    new_links = linkresnodes(pathway)
+    # Build new causal graph with the sites as nodes.
+    species_pathway = CausalGraph()
+    species_pathway.filename = "pathway.dot"
+    species_pathway.eoi = eoi
+    species_pathway.nodestype = "species"
+    species_pathway.occurrence = None
+    mod_sites = []
+    for rule_node in pathway.nodes:
+        for rule_res in rule_node.res:
+            include_node = False
+            for link in new_links:
+                if link.source == rule_res or link.target == rule_res:
+                    include_node = True
+                    break
+            if include_node == True:
+                species_pathway.nodes.append(rule_res)
+                if rule_node in mod_nodes:
+                    mod_sites.append(rule_res)
+    for link in new_links:
+        species_pathway.edges.append(link)
+    rebranch(species_pathway, mod_sites)
+    fuse_edges(species_pathway)
+    species_pathway.rank_nodes()
+    # Remove intro nodes if the agent in their label is the same as their target.
+    nodes_to_remove = []
+    for i in range(len(species_pathway.nodes)):
+        node = species_pathway.nodes[i]
+        if node.intro == True:
+            targets = []
+            for edge in species_pathway.edges:
+                if edge.source == node:
+                    targets.append(edge.target)
+            target_agents = []
+            for target in targets:
+                par = target.label.index("(")
+                agent = target.label[:par]
+                target_agents.append(agent)
+            par = node.label.index("(")
+            source_agent = node.label[:par]
+            if source_agent in target_agents:
+                nodes_to_remove.insert(0, i)
+    edges_to_remove = []
+    for j in range(len(species_pathway.edges)):
+        edge = species_pathway.edges[j]
+        for i in nodes_to_remove:
+            node = species_pathway.nodes[i]
+            if edge.source == node:
+                edges_to_remove.insert(0, j)
+                break
+    for i in edges_to_remove:
+        del(species_pathway.edges[i])
+    for i in nodes_to_remove:
+        del(species_pathway.nodes[i])
+    # Simplify labels.
+    for node in species_pathway.nodes:
+        par = node.label.index("(")
+        agent = node.label[:par]
+        if "[" in node.label:
+            bracket = node.label.index("[")
+            site = node.label[par+1:bracket]
+            new_label = "{}-{}".format(agent, site)
+        elif "{" in node.label:
+            open_brace = node.label.index("{")
+            close_brace = node.label.index("}")
+            site = node.label[par+1:open_brace]
+            state = node.label[open_brace+1:close_brace]
+            new_label = "{}-{} {}".format(agent, site, state)
+        if node.label == species_pathway.eoi:
+            species_pathway.eoi = new_label
+        node.label = new_label
+    species_pathway.build_dot_file(edgelabels)
+    # Writing section.
+    output_path1 = "{}/{}".format(eoi, species_pathway.filename)
+    outfile1 = open(output_path1, "w")
+    outfile1.write(species_pathway.dot_file)
+    outfile1.close()
+    species_pathway.filename = ("{}-{}.dot"
+                                .format(species_pathway.filename[:-4], eoi))
+    output_path2 = "{}".format(species_pathway.filename)
+    outfile2 = open(output_path2, "w")
+    outfile2.write(species_pathway.dot_file)
+    outfile2.close()
+    print("Converting event pathway into species pathway.")
+    print("File {} created.".format(pathway.filename))
+
+
+def gather_rules(eoi, kappamodel, graph):
+    """ Assign rule to every node. """
+
+    kappa = read_kappa_file(kappamodel)
+    kappa["eoi"] = read_eoi(eoi, kappamodel)
+    kappa["intros"] = build_creation_rules(kappa)
+    for node in graph.nodes:
+        if node.intro == True:
+            node.rule = kappa["intros"][node.label]
+        elif node.label == eoi:
+            node.rule = kappa["eoi"][node.label]
+        else:
+            node.rule = kappa["rules"][node.label]
+
+
+def read_kappa_file(kappamodel):
+    """ Build a dictionary of the rules from the original kappa model. """
+
+    kappa_file = open(kappamodel, "r").readlines()
+    kappa = {}
+    kappa["agents"] = {}
+    kappa["inits"] = {}
+    kappa["rules"] = {}
+    for line in kappa_file:
+        if line[:7] == "%agent:":
+            agent_def = line[7:-1].strip()
+            par = agent_def.index("(")
+            agent_type = agent_def[:par]
+            kappa["agents"][agent_type] = agent_def
+        if line[:6] == "%init:":
+            amount = line[6:-1].strip()
+            space = amount.index(" ")
+            init_def = amount[space:].strip()
+            init_agents = init_def.split(",")
+            agent_type = ""
+            first_agent = True
+            for init_agent in init_agents:
+                if first_agent == False:
+                    agent_type += ", "
+                else:
+                    first_agent = False
+                agent_str = init_agent.strip()
+                par = agent_str.index("(")
+                agent_type += init_def[:par]
+            kappa["inits"][agent_type] = init_def
+        if line[0] == "'":
+            quote = line.rfind("'")
+            rule_name = line[1:quote]
+            a = line.index("@")
+            rule = line[quote+1:a].strip()
+            kappa["rules"][rule_name] = rule
+
+    return kappa
+
+
+def read_eoi(eoi, kappamodel):
+    """ Read EOI from the kappa file with added event of interest. """
+
+    period = kappamodel.rfind(".")
+    prefix = kappamodel[:period]
+    kappa_path = "{}/{}-eoi.ka".format(eoi, prefix)
+    kappa_file = open(kappa_path, "r").readlines()
+    eoi_dict = {}
+    for line in kappa_file:
+        if line[:5] == "%obs:":
+            open_quote = line.index("'")
+            close_quote = line.rfind("'")
+            obs = line[open_quote+1:close_quote]
+            if obs == eoi:
+                obs_def = line[close_quote+1:-1].strip()
+                if "|" in obs_def:
+                    obs_def = obs_def[1:-1]
+                eoi_dict[obs] = obs_def
+
+    return eoi_dict
+
+
+def build_creation_rules(kappa_dict):
+    """
+    Build a creation rule for each Intro node from the init and agent
+    definitions.
+    """
+
+    creations = {}
+    for intro in kappa_dict["inits"].keys():
+        init = kappa_dict["inits"][intro]
+        init_agents = init.split(",")
+        intro_rule = ""
+        first_agent = True
+        for init_agent_tmp in init_agents:
+            init_agent = init_agent_tmp.strip()
+            if first_agent == False:
+                intro_rule += ", "
+            else:
+                first_agent = False
+            init_dict = build_site_dict(init_agent)
+            agent_name = init_dict["name"]
+            def_agent = kappa_dict["agents"][agent_name]
+            def_dict = build_site_dict(def_agent)
+            intro_rule += "{}(".format(agent_name)
+            init_names = init_dict.keys()
+            default_bind = "."
+            first_site = True
+            for init_name in init_names:
+                if init_name != "name":
+                    if first_site == False:
+                        intro_rule += " "
+                    else:
+                       first_site = False
+                    intro_rule += "{}".format(init_name)
+                    init_site = init_dict[init_name]
+                    def_site = def_dict[init_name]
+                    init_bind = init_site["binding"]
+                    init_state = init_site["state"]
+                    if def_site["state"] == None:
+                        if init_bind == None:
+                            intro_rule += "[.]"
+                        else:
+                            intro_rule += "[{}]".format(init_bind)
+                    elif def_site["state"] != None:
+                        comma = def_site["state"].index(",")
+                        default_state = def_site["state"][:comma]
+                        if init_bind == None and init_state == None:
+                            intro_rule += "[{}]{{{}}}".format(default_bind,
+                                                              default_state)
+                        elif init_bind != None and init_state == None:
+                            intro_rule += "[{}]{{{}}}".format(init_bind,
+                                                              default_state)
+                        elif init_bind == None and init_state != None:
+                            intro_rule += "[{}]{{{}}}".format(default_bind,
+                                                              init_state)
+                        elif init_bind != None and init_state != None:
+                            intro_rule += "[{}]{{{}}}".format(init_bind,
+                                                              init_state)
+            for def_name in def_dict.keys():
+                if def_name not in init_names:
+                    if first_site == False:
+                        intro_rule += " "
+                    else:
+                       first_site = False
+                    def_site = def_dict[def_name]
+                    intro_rule += "{}[{}]".format(def_name, default_bind)
+                    if def_site["state"] != None:
+                        comma = def_site["state"].index(",")
+                        default_state = def_site["state"][:comma]
+                        intro_rule += "{{{}}}".format(default_state)
+            intro_rule += ")"
+        intro_label = "Intro {}" .format(intro)
+        creations[intro_label] = intro_rule
+
+    return creations
+
+
+def build_site_dict(agent_str):
+    """
+    Build a dictionary of the sites of an agent given a string of that agent.
+    """
+
+    site_dict = {}
+    par = agent_str.index("(")
+    site_dict["name"] = agent_str[:par]
+    site_list = agent_str[par+1:-1].split()
+    for site in site_list:
+        open_bracket = 10000
+        open_curl = 10000
+        if "[" in site:
+            open_bracket = site.index("[")
+            close_bracket = site.index("]")
+            binding = site[open_bracket+1:close_bracket]
+        else:
+            binding = None
+        if "{" in site:
+            open_curl = site.index("{")
+            close_curl = site.index("}")
+            state = site[open_curl+1:close_curl]
+        else:
+            state = None
+        if open_bracket < 10000 or open_curl < 10000:
+            name_end = min([open_bracket, open_curl])
+            site_name = site[:name_end]
+        else:
+            site_name = site
+        site_dict[site_name] = {"binding": binding, "state": state}
+
+    return site_dict
+
+
+def build_site_str(site_dict):
+    """
+    Build a string of and agent given a dict of its sites.
+    This is the reverse of what build_site_dict does.
+    """
+
+    agent_str = "{}(".format(site_dict["name"])
+    first_site = True
+    for site in site_dict.keys():
+        if site != "name":
+            if first_site == False:
+                agent_str += " "
+            else:
+                first_site = False
+            agent_str += "{}".format(site)
+            if site_dict[site]["binding"] != None:
+                agent_str += "[{}]".format(site_dict[site]["binding"])
+            if site_dict[site]["state"] != None:
+                agent_str += "{{{}}}".format(site_dict[site]["state"])
+    agent_str += ")"
+
+    return agent_str
+
+
+def get_mod_nodes(eoi, graph):
+    """ Get modification nodes based on corresponding rule. """
+
+    mod_nodes = []
+    for node in graph.nodes:
+        is_mod = False
+        parts = node.rule.split()
+        for part in parts:
+            if "{" in part:
+                open_brace = part.index("{")
+                close_brace = part.index("}")
+                if "/" in part[open_brace+1:close_brace]:
+                    is_mod = True
+                    break
+        if "Intro" in node.label:
+            is_mod = True
+        if node.label == eoi:
+            is_mod = True
+        if is_mod == True:
+            mod_nodes.append(node)
+
+    return mod_nodes
+
+
+def arrow_relationships(eoi, graph):
+    """
+    Add required site nodes and resulting site nodes to each modification node.
+    """
+
+    node_index = 1
+    for node in graph.nodes:
+        req_sites, res_sites = individual_sites(node.rule)
+        bond_numbers = get_bond_numbers(req_sites, res_sites)
+        req_list = relative_bonds(req_sites, bond_numbers)
+        res_list = relative_bonds(res_sites, bond_numbers)
+        req = []
+        for site in req_list:
+            node_id = "site{}".format(node_index)
+            req.append(CausalNode(node_id, site, intro=node.intro))
+            node_index += 1
+        res = []
+        for site in res_list:
+            node_id = "site{}".format(node_index)
+            res.append(CausalNode(node_id, site))
+            node_index += 1
+        if node.intro == True:
+            node.res = req
+            node.req = []
+        else:
+            node.req = req
+            node.res = res
+        if node.label == eoi:
+            for req_node in node.req:
+                if "[" in req_node.label:
+                    node.res.append(req_node)
+        print(node.rule)
+        print(node.req)
+        print(node.res)
+        print("----")
+
+
+def individual_sites(rule):
+    """
+    Return lists of individual required and resulting sites from a kappa rule.
+    """
+
+    req_sites = []
+    res_sites = []
+    agents_list = rule.split(",")
+    for agent_tmp in agents_list:
+        agent = agent_tmp.strip()
+        site_dict = build_site_dict(agent)
+        for site_key in site_dict.keys():
+            site = site_dict[site_key]
+            if site_key != "name":
+                if site["binding"] != None:
+                    if "/" in site["binding"]:
+                        slash = site["binding"].index("/")
+                        preslash = site["binding"][:slash]
+                        #indiv_site = {"name": site_dict["name"],
+                        #              site_key: {"binding": preslash}}
+                        site_str = "{}({}".format(site_dict["name"], site_key)
+                        site_str += "[{}])".format(preslash)
+                        req_sites.append(site_str)
+                        postslash = site["binding"][slash+1:]
+                        #indiv_site = {"name": site_dict["name"],
+                        #              site_key: {"binding": postslash}}
+                        site_str = "{}({}".format(site_dict["name"], site_key)
+                        site_str += "[{}])".format(postslash)
+                        res_sites.append(site_str)
+                    else:
+                        #indiv_site = {"name": site_dict["name"],
+                        #              site_key: {"binding": site["binding"]}}
+                        site_str = "{}({}".format(site_dict["name"], site_key)
+                        site_str += "[{}])".format(site["binding"])
+                        req_sites.append(site_str)
+                if site["state"] != None:
+                    if "/" in site["state"]:
+                        slash = site["state"].index("/")
+                        preslash = site["state"][:slash]
+                        #indiv_site = {"name": site_dict["name"],
+                        #              site_key: {"state": preslash}}
+                        site_str = "{}({}".format(site_dict["name"], site_key)
+                        site_str += "{{{}}})".format(preslash)
+                        req_sites.append(site_str)
+                        postslash = site["state"][slash+1:]
+                        #indiv_site = {"name": site_dict["name"],
+                        #              site_key: {"state": postslash}}
+                        site_str = "{}({}".format(site_dict["name"], site_key)
+                        site_str += "{{{}}})".format(postslash)
+                        res_sites.append(site_str)
+                    else:
+                        #indiv_site = {"name": site_dict["name"],
+                        #              site_key: {"state": site["state"]}}
+                        site_str = "{}({}".format(site_dict["name"], site_key)
+                        site_str += "{{{}}})".format(site["state"])
+                        req_sites.append(site_str)
+
+    return req_sites, res_sites
+
+
+def get_bond_numbers(req_sites, res_sites):
+    """ Find which agent binds to which agent. """
+
+    bond_numbers_tmp = {}
+    for site_list in [req_sites, res_sites]:
+        for site in site_list:
+            if "[" in site:
+                bracket = site.index("[")
+                number = site[bracket+1:-2]
+                if number != ".":
+                    par = site.index("(")
+                    ag = site[:par]
+                    s = site[par+1:bracket]
+                    if number not in bond_numbers_tmp.keys():
+                        bond_numbers_tmp[number] = ["{}.{}".format(s, ag)]
+                    else:
+                        bond_numbers_tmp[number].append("{}.{}".format(s, ag))
+    print("REQ:", req_sites)
+    print("RES:", res_sites)
+    bond_numbers = {}
+    for number in bond_numbers_tmp.keys():
+        partners = bond_numbers_tmp[number]
+        print(partners)
+        bond_numbers[number] = {partners[0]: partners[1],
+                                partners[1]: partners[0]}
+
+    return bond_numbers
+
+
+def relative_bonds(sites, bond_numbers):
+    """ Change bond numbers to relative bonds and remove duplicates. """
+
+    new_sites = []
+    for site in sites:
+        if "[" in site:
+            bracket = site.index("[")
+            number = site[bracket+1:-2]
+            if number != ".":
+                par = site.index("(")
+                ag = site[:par]
+                s = site[par+1:bracket]
+                current_site = "{}.{}".format(s, ag)
+                new_site = "{}({}".format(ag, s)
+                new_bond = bond_numbers[number][current_site]
+                new_site += "[{}])".format(new_bond)
+                new_sites.append(new_site)
+            else:
+                new_sites.append(site)
+        else:
+            new_sites.append(site)
+    sites_set = list(set(new_sites))
+    #site_dicts = []
+    #for site in sites_set:
+    #    site_dict = build_site_dict(site)
+    #    site_dicts.append(site_dict)
+
+    return sites_set
+    #return site_dicts
+
+
+def linkresnodes(graph):
+    """
+    For each rule, link any of its res nodes with all the res nodes of a
+    subsequent rule if the given res node from the first rule has the same
+    label as any req node from the subsequent rule.
+    """
+
+    links = []
+    for node in graph.nodes:
+        target_rules = []
+        for edge in graph.edges:
+            if edge.source == node:
+                target_rule = edge.target
+                w = edge.weight
+                print("--", node.label, node.res)
+                print(">>", target_rule.label, target_rule.req)
+                for node_res in node.res:
+                    link_res_nodes = False
+                    for target_req in target_rule.req:
+                        print(node_res, "||", target_req)
+                        if node_res.label == target_req.label:
+                            print("same")
+                            link_res_nodes = True
+                            break
+                    if link_res_nodes == True:
+                        for target_res in target_rule.res:
+                            links.append(CausalEdge(node_res, target_res,
+                                                    weight=w))
+
+    return links
+
+
+def oldspeciespathway(eoi, kappamodel, causalgraph=None, edgelabels=False,
+                   hideintro=False):
+    """
+    Convert a CausalGraph where node are events to a pathway where nodes are
+    species.
+    """
+
+    # Reading section.
+    if causalgraph == None:
+        graph_path = "{}/eventpathway.dot".format(eoi)
+        pathway = CausalGraph(graph_path, eoi)
+    elif isinstance(causalgraph, CausalGraph):
+        pathway = causalgraph
+    else:
+        pathway = CausalGraph(causalgraph, eoi)
+    # Doing the work.
     kappa_rules = get_kappa_rules(kappamodel)
     kappa_rules["{}".format(eoi)] = "|{}|".format(eoi)
     mod_nodes = get_mod_nodes(eoi, pathway, kappa_rules)
@@ -1040,59 +1573,59 @@ def parse_rule(rule):
     return parsed_agents
 
 
-def get_mod_nodes(eoi, graph, kappa_rules):
-    """
-    Create a list of the nodes that correspond to a rule where a state is
-    modified. Also change the label of those nodes to the species they produce.
-    """
-
-    modification_rules = []
-    for node in graph.nodes:
-        if node.intro == False:
-            rule = kappa_rules[node.label]
-            rule_agents = parse_rule(rule)
-            modified_agents = []
-            for agent in rule_agents:
-                modified_agent = {}
-                modified_sites = {}
-                sites = agent["sites"]
-                for site in sites.keys():
-                    state = sites[site]["state"]
-                    if state != None:
-                        if "/" in state:
-                            slash = state.index("/")
-                            final_state = state[slash+1:]
-                            modified_sites[site] = {"state": final_state}
-                if len(modified_sites.keys()) > 0:
-                    modified_agent["type"] = agent["type"]
-                    modified_agent["sites"] = modified_sites
-                    modified_agents.append(modified_agent)
-            # Also add the EOI if it is a binding.
-            if node.label == eoi:
-                for agent in rule_agents:
-                    modified_agent = {}
-                    modified_sites = {}
-                    sites = agent["sites"]
-                    for site in sites.keys():
-                        #state = sites[site]["state"]
-                        #if state != None:
-                        #    modified_sites[site] = {"state": state}
-                        binding = sites[site]["binding"]
-                        if binding != None:
-                            modified_sites[site] = {"binding": binding}
-                    if len(modified_sites.keys()) > 0:
-                        modified_agent["type"] = agent["type"]
-                        modified_agent["sites"] = modified_sites
-                        modified_agents.append(modified_agent)
-            if len(modified_agents) > 0:
-                species, kappa_species = label_species(modified_agents)
-                node.species = species
-                if graph.eoi == kappa_species:
-                    graph.eoi = species
-                #node.species = kappa_species
-                modification_rules.append(node)
-
-    return modification_rules
+#def get_mod_nodes(eoi, graph, kappa_rules):
+#    """
+#    Create a list of the nodes that correspond to a rule where a state is
+#    modified. Also change the label of those nodes to the species they produce.
+#    """
+#
+#    modification_rules = []
+#    for node in graph.nodes:
+#        if node.intro == False:
+#            rule = kappa_rules[node.label]
+#            rule_agents = parse_rule(rule)
+#            modified_agents = []
+#            for agent in rule_agents:
+#                modified_agent = {}
+#                modified_sites = {}
+#                sites = agent["sites"]
+#                for site in sites.keys():
+#                    state = sites[site]["state"]
+#                    if state != None:
+#                        if "/" in state:
+#                            slash = state.index("/")
+#                            final_state = state[slash+1:]
+#                            modified_sites[site] = {"state": final_state}
+#                if len(modified_sites.keys()) > 0:
+#                    modified_agent["type"] = agent["type"]
+#                    modified_agent["sites"] = modified_sites
+#                    modified_agents.append(modified_agent)
+#            # Also add the EOI if it is a binding.
+#            if node.label == eoi:
+#                for agent in rule_agents:
+#                    modified_agent = {}
+#                    modified_sites = {}
+#                    sites = agent["sites"]
+#                    for site in sites.keys():
+#                        #state = sites[site]["state"]
+#                        #if state != None:
+#                        #    modified_sites[site] = {"state": state}
+#                        binding = sites[site]["binding"]
+#                        if binding != None:
+#                            modified_sites[site] = {"binding": binding}
+#                    if len(modified_sites.keys()) > 0:
+#                        modified_agent["type"] = agent["type"]
+#                        modified_agent["sites"] = modified_sites
+#                        modified_agents.append(modified_agent)
+#            if len(modified_agents) > 0:
+#                species, kappa_species = label_species(modified_agents)
+#                node.species = species
+#                if graph.eoi == kappa_species:
+#                    graph.eoi = species
+#                #node.species = kappa_species
+#                modification_rules.append(node)
+#
+#    return modification_rules
 
 
 def label_species(agent_list):
