@@ -445,7 +445,7 @@ class CausalGraph(object):
                         node_shape = "ellipse"
                         node_color = "indianred2"
                     if self.nodestype == "species":
-                        node_shape = "ellipse"
+                        node_shape = "ellipse" # "circle"
                     if hideintro == True and node.intro == True:
                         dot_str += "//"
                     dot_str += ('"{}" [label="{}", '
@@ -973,10 +973,226 @@ def speciespathway3(eoi, kappamodel, causalgraph=None, edgelabels=False,
         event_pathway = CausalGraph(causalgraph, eoi)
     # Doing the work
     get_rules(eoi, kappamodel, event_pathway)
-    get_req_and_res(eoi, event_pathway)
+    get_req_res(eoi, event_pathway)
+    mod_nodes = get_mod_nodes(eoi, event_pathway)
+    complete_req(event_pathway, mod_nodes)
+    rebranch(event_pathway, mod_nodes)
+    fuse_edges(event_pathway)
+    simplify_req_res(event_pathway)
+    new_edges = build_species_and_edges(event_pathway)
+    species_pathway = build_species_graph(eoi, event_pathway, new_edges)
+    species_pathway.rank_nodes()
+    species_pathway.build_dot_file(edgelabels, hideintro)
+    # Writing section.
+    output_path1 = "{}/{}".format(eoi, species_pathway.filename)
+    outfile1 = open(output_path1, "w")
+    outfile1.write(species_pathway.dot_file)
+    outfile1.close()
+    species_pathway.filename = ("{}-{}.dot"
+                                .format(species_pathway.filename[:-4], eoi))
+    output_path2 = "{}".format(species_pathway.filename)
+    outfile2 = open(output_path2, "w")
+    outfile2.write(species_pathway.dot_file)
+    outfile2.close()
+    print("Converting event pathway into species pathway.")
+    print("File {} created.".format(species_pathway.filename))
 
 
-def get_req_and_res(eoi, graph):
+def build_species_graph(eoi, graph, edge_list):
+    """
+    Create the new causal graph with species instead of rules as nodes.
+    """
+
+    species_pathway = CausalGraph()
+    species_pathway.filename = "pathway.dot"
+    species_pathway.eoi = eoi
+    species_pathway.nodestype = "species"
+    species_pathway.occurrence = None
+    for event_node in graph.nodes:
+       for species_node in event_node.species_nodes:
+           found_as_source = False
+           found_as_target = False
+           for edge in edge_list:
+               if edge.source == species_node:
+                   found_as_source = True
+               if edge.target == species_node:
+                   found_as_target = True
+               if species_node.intro == True and found_as_source == True:
+                   include_node = True
+               elif species_node.label == eoi and found_as_target == True:
+                   include_node = True
+               elif found_as_source == True and found_as_target == True:
+                   include_node = True
+               else:
+                   include_node = False
+               if include_node == True:
+                   species_pathway.nodes.append(species_node)
+    species_pathway.edges = edge_list
+
+    return species_pathway
+
+
+def build_species_and_edges(graph):
+    """ Build nodes from res species and the edges to connecte them. """
+
+    # Create nodes.
+    species_id = 1
+    for mod_node in graph.nodes:
+        species_nodes = []
+        for res in mod_node.res_species:
+            node_id = "species{}".format(species_id)
+            if res["state"] != None:
+                label = "{}({}{{{}}})".format(res["agent"], res["site"],
+                                              res["state"])
+            else:
+                label = "{}({}[{}])".format(res["agent"], res["site"],
+                                            res["bound_agent"])
+            new_node = CausalNode(node_id, label, rank=mod_node.rank,
+                                  intro=mod_node.intro)
+            new_node.species = res
+            species_nodes.append(new_node)
+            species_id += 1
+        mod_node.species_nodes = species_nodes
+    # Create edges.
+    new_edges = []
+    for mod_node in graph.nodes:
+        for edge in graph.edges:
+            if edge.source == mod_node:
+                target_mod_node = edge.target
+                for src in mod_node.species_nodes:
+                    if species_in(src.species, target_mod_node.full_req):
+                        for trgt in target_mod_node.species_nodes:
+                            new_edges.append(CausalEdge(src, trgt,
+                                                        weight=edge.weight))
+
+    return new_edges
+
+
+def simplify_req_res(graph):
+    """
+    Remove bindings and unbindings from res. Also remove in req all
+    agents found in res, except if there is only one agent type in req.
+    """
+
+    for event_node in graph.nodes:
+        if event_node.intro == False:
+            res_to_remove = []
+            for i in range(len(event_node.res_species)):
+                if event_node.res_species[i]["state"] == None:
+                    res_to_remove.insert(0, i)
+            for i in res_to_remove:
+                del(event_node.res_species[i])
+            req_agents = []
+            for req in event_node.full_req:
+                if req["agent"] not in req_agents:
+                    req_agents.append(req["agent"])
+            if len(req_agents) > 1:
+                res_agents = []
+                for res in event_node.res_species:
+                    if res["agent"] not in res_agents:
+                        res_agents.append(res["agent"])
+                req_to_remove = []
+                for i in range(len(event_node.full_req)):
+                    if event_node.full_req[i]["agent"] in res_agents:
+                        req_to_remove.insert(0, i)
+                for i in req_to_remove:
+                    del(event_node.full_req[i])
+            else:
+                req_to_remove = []
+                for i in range(len(event_node.full_req)):
+                    req_ag = event_node.full_req[i]["agent"]
+                    req_site = event_node.full_req[i]["site"]
+                    for res in event_node.res_species:
+                        if req_ag == res["agent"] and req_site == res["site"]:
+                            req_to_remove.insert(0, i)
+                            break
+                for i in req_to_remove:
+                    del(event_node.full_req[i])
+
+
+def complete_req(graph, mod_nodes):
+    """
+    Extend req_species of each mod node with the req of upstream nodes.
+    """
+
+    mod_no_intro = []
+    for mod_node in mod_nodes:
+        if mod_node.intro == False:
+            mod_no_intro.append(mod_node)
+    for mod_node in mod_no_intro:
+        top_nodes = []
+        for top_node in mod_nodes:
+            if top_node != mod_node:
+                top_nodes.append(top_node)
+        paths = graph.climb_up(mod_node, top_nodes)
+        all_reqs = []
+        for path in paths:
+            path_reqs = []
+            for i in range(len(path)-1):
+                current_node = path[i]
+                for current_req in current_node.req_species:
+                    if not species_in(current_req, path_reqs):
+                        path_reqs.append(current_req.copy())
+                up_node = path[i+1]
+                for up_res in up_node.res_species:
+                    res_ag = up_res["agent"]
+                    res_site = up_res["site"]
+                    for path_req in path_reqs:
+                        req_ag = path_req["agent"]
+                        req_site = path_req["site"]
+                        if req_ag == res_ag and req_site == res_site:
+                            if up_res["bound_agent"] != None:
+                                if path_req["bound_agent"] == "_":
+                                    bnd_ag = up_res["bound_agent"]
+                                    bnd_site = up_res["bound_site"]
+                                    path_req["bound_agent"] = bnd_ag
+                                    path_req["bound_site"] = bnd_site
+                                    partner = {"agent": bnd_ag,
+                                               "site": bnd_site,
+                                               "bound_agent": req_ag,
+                                               "bound_site": req_site,
+                                               "state": None}
+                                    path_reqs.append(partner)
+            all_reqs.append(path_reqs)
+        # Assemble all the species collected from each path into one set.
+        comp_req_set = []
+        for path_reqs in all_reqs:
+            for path_req in path_reqs:
+                if not species_in(path_req, comp_req_set):
+                    comp_req_set.append(path_req)
+        mod_node.full_req = comp_req_set
+
+
+def get_mod_nodes(eoi, graph):
+    """ Get modification nodes based on resulting species with state. """
+
+    mod_nodes = []
+    for event_node in graph.nodes:
+        if event_node.intro == True or event_node.label == eoi:
+            mod_nodes.append(event_node)
+        else:
+            is_mod = False
+            for res in event_node.res_species:
+                if res["state"] != None:
+                    is_mod = True
+                    break
+            if is_mod == True:
+                mod_nodes.append(event_node)
+    ## Remove any species that does not denote a state change
+    ## from the res of mod nodes.
+    #for mod_node in mod_nodes:
+    #    if mod_node.intro == False:
+    #        species_to_remove = []
+    #        for i in range(len(mod_node.res_species)):
+    #            if mod_node.res_species[i]["state"] == None:
+    #                species_to_remove.insert(0, i)
+    #        for i in species_to_remove:
+    #            del(mod_node.res_species[i])
+
+    return mod_nodes
+
+
+def get_req_res(eoi, graph):
     """
     For each event node, get the requirements and results of
     the associated rule.
@@ -1001,28 +1217,33 @@ def get_req_and_res(eoi, graph):
                         res_species.append(after_species)
                     else:
                         req_species.append(species)
-            #if "/" not in species["binding"] and "/" not in species["state"]:
-            #    req_species.append(species)
-            #else:
-            #    if "/" in species["binding"]:
-            #        char = "binding"
-            #    elif "/" in species["state"]:
-            #        char = "state"
-            #    slash = species[char].index("/")
-            #    before = species[char][:slash]
-            #    after = species[char][slash+1:]
-            #    before_species = species.copy()
-            #    after_species = species.copy()
-            #    before_species[char] = before
-            #    after_species[char] = after
-            #    req_species.append(before_species)
-            #    res_species.append(after_species)
-        print(event_node.rule)
-        print(req_species)
-        print(res_species)
-        req_type_bond, res_type_bond = type_bonds(req_species, res_species)
-        # And then remove duplicates.
-
+        req_type, res_type = type_bonds(req_species, res_species)
+        req_set = []
+        res_set = []
+        for req_entry in req_type:
+            is_in = False
+            for req_set_entry in req_set:
+                are_equal = compare_species(req_entry, req_set_entry)
+                if are_equal == True:
+                    is_in = True
+                    break
+            if is_in == False:
+                req_set.append(req_entry)
+        for res_entry in res_type:
+            is_in = False
+            for res_set_entry in res_set:
+                are_equal = compare_species(res_entry, res_set_entry)
+                if are_equal == True:
+                    is_in = True
+                    break
+            if is_in == False:
+                res_set.append(res_entry)
+        if event_node.intro == False:
+            event_node.req_species = req_set
+            event_node.res_species = res_set
+        elif event_node.intro == True:
+            event_node.req_species = []
+            event_node.res_species = req_set
 
 
 def build_species(rule_str):
@@ -1071,57 +1292,59 @@ def build_species(rule_str):
     return species_list
 
 
-#def type_bonds(sites, bond_numbers):
 def type_bonds(req_species, res_species):
     """ Change link numbers to semi-link with type. """
 
     bond_numbers = get_bond_numbers(req_species, res_species)
-    new_species = []
+    list_index = 0
     for species_list in [req_species, res_species]:
+        new_species = []
         for species in species_list:
             if species["binding"] != None:
                 number = species["binding"]
                 if number != "." and number != "_":
-                    par = site.index("(")
-                    ag = site[:par]
-                    s = site[par+1:bracket]
-                    new_sp = {"agent": species["agent"],}
-                    current_site = "{}.{}".format(s, ag)
-                    new_site = "{}({}".format(ag, s)
+                    current_site = "{}.{}".format(species["site"],
+                                                  species["agent"])
                     new_bond = bond_numbers[number][current_site]
-                    new_site += "[{}])".format(new_bond)
-                    new_species.append(new_sp)
+                    period = new_bond.index(".")
+                    bnd_agent = new_bond[period+1:]
+                    bnd_site = new_bond[:period]
                 else:
-                    new_species.append(species)
+                    bnd_agent = number
+                    bnd_site = number
             else:
-                new_species.append(new_sp)
-    sites_set = list(set(new_sites))
-    #site_dicts = []
-    #for site in sites_set:
-    #    site_dict = build_site_dict(site)
-    #    site_dicts.append(site_dict)
+                bnd_agent = None
+                bnd_site = None
+            new_sp = {"agent": species["agent"],
+                      "site": species["site"],
+                      "bound_agent": bnd_agent,
+                      "bound_site": bnd_site,
+                      "state": species["state"]}
+            new_species.append(new_sp)
+        if list_index == 0:
+            new_req = new_species
+            list_index += 1
+        else:
+            new_res = new_species
 
-    return sites_set
-    #return site_dicts
+    return new_req, new_res
 
 
 def get_bond_numbers(req_species, res_species):
     """ Find which agent binds to which agent. """
 
     bond_numbers_tmp = {}
-    for site_list in [req_species, res_species]:
-        for site in site_list:
-            if "[" in site:
-                bracket = site.index("[")
-                number = site[bracket+1:-2]
+    for species_list in [req_species, res_species]:
+        for species in species_list:
+            if species["binding"] != None:
+                number = species["binding"]
                 if number != "." and number != "_":
-                    par = site.index("(")
-                    ag = site[:par]
-                    s = site[par+1:bracket]
+                    bond_type = "{}.{}".format(species["site"],
+                                               species["agent"])
                     if number not in bond_numbers_tmp.keys():
-                        bond_numbers_tmp[number] = ["{}.{}".format(s, ag)]
+                        bond_numbers_tmp[number] = [bond_type]
                     else:
-                        bond_numbers_tmp[number].append("{}.{}".format(s, ag))
+                        bond_numbers_tmp[number].append(bond_type)
     bond_numbers = {}
     for number in bond_numbers_tmp.keys():
         partners = bond_numbers_tmp[number]
@@ -1131,7 +1354,29 @@ def get_bond_numbers(req_species, res_species):
     return bond_numbers
 
 
-#def compare_species
+def species_in(species, species_list):
+    """ Check if a species in found inside a species list. """
+
+    is_in = False
+    for sp in species_list:
+        are_equal = compare_species(species, sp)
+        if are_equal == True:
+            is_in = True
+            break
+
+    return is_in
+
+
+def compare_species(species1, species2):
+    """ Check if two species with type_bonds are identical. """
+
+    are_identical = True
+    for char in ["agent", "site", "bound_agent", "bound_site", "state"]:
+        if species1[char] != species2[char]:
+            are_identical = False
+            break
+
+    return are_identical
 
 
 def speciespathway(eoi, kappamodel, causalgraph=None, edgelabels=False,
@@ -1467,28 +1712,28 @@ def build_site_str(site_dict):
     return agent_str
 
 
-def get_mod_nodes(eoi, graph):
-    """ Get modification nodes based on corresponding rule. """
-
-    mod_nodes = []
-    for node in graph.nodes:
-        is_mod = False
-        parts = node.rule.split()
-        for part in parts:
-            if "{" in part:
-                open_brace = part.index("{")
-                close_brace = part.index("}")
-                if "/" in part[open_brace+1:close_brace]:
-                    is_mod = True
-                    break
-        if node.intro == True:
-            is_mod = True
-        if node.label == eoi:
-            is_mod = True
-        if is_mod == True:
-            mod_nodes.append(node)
-
-    return mod_nodes
+#def get_mod_nodes(eoi, graph):
+#    """ Get modification nodes based on corresponding rule. """
+#
+#    mod_nodes = []
+#    for node in graph.nodes:
+#        is_mod = False
+#        parts = node.rule.split()
+#        for part in parts:
+#            if "{" in part:
+#                open_brace = part.index("{")
+#                close_brace = part.index("}")
+#                if "/" in part[open_brace+1:close_brace]:
+#                    is_mod = True
+#                    break
+#        if node.intro == True:
+#            is_mod = True
+#        if node.label == eoi:
+#            is_mod = True
+#        if is_mod == True:
+#            mod_nodes.append(node)
+#
+#    return mod_nodes
 
 
 def arrow_relationships(eoi, graph):
@@ -1589,30 +1834,30 @@ def individual_sites(rule):
     return req_sites, res_sites
 
 
-def get_bond_numbers(req_sites, res_sites):
-    """ Find which agent binds to which agent. """
-
-    bond_numbers_tmp = {}
-    for site_list in [req_sites, res_sites]:
-        for site in site_list:
-            if "[" in site:
-                bracket = site.index("[")
-                number = site[bracket+1:-2]
-                if number != "." and number != "_":
-                    par = site.index("(")
-                    ag = site[:par]
-                    s = site[par+1:bracket]
-                    if number not in bond_numbers_tmp.keys():
-                        bond_numbers_tmp[number] = ["{}.{}".format(s, ag)]
-                    else:
-                        bond_numbers_tmp[number].append("{}.{}".format(s, ag))
-    bond_numbers = {}
-    for number in bond_numbers_tmp.keys():
-        partners = bond_numbers_tmp[number]
-        bond_numbers[number] = {partners[0]: partners[1],
-                                partners[1]: partners[0]}
-
-    return bond_numbers
+#def get_bond_numbers(req_sites, res_sites):
+#    """ Find which agent binds to which agent. """
+#
+#    bond_numbers_tmp = {}
+#    for site_list in [req_sites, res_sites]:
+#        for site in site_list:
+#            if "[" in site:
+#                bracket = site.index("[")
+#                number = site[bracket+1:-2]
+#                if number != "." and number != "_":
+#                    par = site.index("(")
+#                    ag = site[:par]
+#                    s = site[par+1:bracket]
+#                    if number not in bond_numbers_tmp.keys():
+#                        bond_numbers_tmp[number] = ["{}.{}".format(s, ag)]
+#                    else:
+#                        bond_numbers_tmp[number].append("{}.{}".format(s, ag))
+#    bond_numbers = {}
+#    for number in bond_numbers_tmp.keys():
+#        partners = bond_numbers_tmp[number]
+#        bond_numbers[number] = {partners[0]: partners[1],
+#                                partners[1]: partners[0]}
+#
+#    return bond_numbers
 
 
 def type_bonds2(sites, bond_numbers):
@@ -2107,17 +2352,16 @@ def toggleintros():
     current directory and all other directories found in current directory.
     """
 
-    #current_files = os.listdir(".")
-    #for current_file in current_files:
-    #    if "dot" in current_file and "path" in current_file:
-    #        toggle_intro_nodes(".", current_file)
+    current_files = os.listdir(".")
+    for current_file in current_files:
+        if "dot" in current_file and "path" in current_file:
+            toggle_intro_nodes(".", current_file)
     directories = filter(os.path.isdir, os.listdir('.'))
     for directory in directories:
-        if "EGFR" in directory:
-            dot_files = os.listdir("{}".format(directory))
-            for dot_file in dot_files:
-                if "dot" in dot_file and "path" in dot_file:
-                    toggle_intro_nodes(directory, dot_file)
+        dot_files = os.listdir("{}".format(directory))
+        for dot_file in dot_files:
+            if "dot" in dot_file and "path" in dot_file:
+                toggle_intro_nodes(directory, dot_file)
 
 
 def toggle_intro_nodes(dir_path, dot_file):
