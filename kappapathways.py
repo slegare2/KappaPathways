@@ -377,7 +377,8 @@ class CausalGraph(object):
     def cleanup(self):
         """
         Remove nodes that do not have a path to an intro node and an eoi node
-        and any edge that points to or from these nodes
+        and any edge that points to or from these nodes. Then remove intro
+        nodes that do not have any targets anymore.
         """
 
         self.intro_nodes = []
@@ -394,7 +395,7 @@ class CausalGraph(object):
                 paths_up = self.climb_up(node, self.intro_nodes)
                 paths_down = self.slide_down(node, self.eoi_nodes)
                 if len(paths_up) == 0 or len(paths_down) == 0:
-                    nodes_to_clean.insert(0,i)
+                    nodes_to_clean.insert(0, i)
         edges_to_clean = []
         for j in range(len(self.edges)):
             source = self.edges[j].source
@@ -402,11 +403,25 @@ class CausalGraph(object):
             for i in nodes_to_clean:
                 node = self.nodes[i]
                 if source == node or target == node:
-                    edges_to_clean.insert(0,j)
+                    edges_to_clean.insert(0, j)
         for j in edges_to_clean:
             del(self.edges[j])
         for i in nodes_to_clean:
             del(self.nodes[i])
+        intros_to_clean = []
+        for i in range(len(self.nodes)):
+            node = self.nodes[i]
+            if node.intro == True:
+                remove_intro = True
+                for edge in self.edges:
+                    if edge.source == node:
+                        remove_intro = False
+                        break
+                if remove_intro == True:
+                    intros_to_clean.insert(0, i)
+        for i in intros_to_clean:
+            del(self.nodes[i])
+            
                 
 
     def build_dot_file(self, edgelabels=False, hideintro=False):
@@ -750,7 +765,8 @@ def loopcores(eoi, causalgraphs=None, ignorelist=None, edgelabels=False,
     else:
        cores = causalgraphs
        core_files = None
-    # Doing the work. 
+    # Doing the work.
+    flush_ignored(cores, core_files, ignorelist)
     for core in cores:
         remove_ignored(core, ignorelist)
         merge_same_labels(core)
@@ -790,6 +806,32 @@ def loopcores(eoi, causalgraphs=None, ignorelist=None, edgelabels=False,
     return looped_paths
 
 
+def flush_ignored(graph_list, graph_files, ignorelist):
+    """
+    Temporary fix to completely remove all cores that contain
+    an ignored term in any of its node.
+    """
+
+    init_len = len(graph_list)
+    graphs_to_remove = []
+    for i in range(len(graph_list)):
+        graph = graph_list[i]
+        remove_graph = False
+        for node in graph.nodes:
+            if any(ignorestr in node.label for ignorestr in ignorelist):
+                remove_graph = True
+                break
+        if remove_graph == True:
+            graphs_to_remove.insert(0, i)
+    for i in graphs_to_remove:
+        slash = graph_list[i].filename.index("/")
+        fname = graph_list[i].filename[slash+1:]
+        graph_files.remove(fname)
+        del(graph_list[i])
+    print("Ignoring {} cores out of {} because they contain reverse rules."
+          .format(len(graphs_to_remove), init_len))
+
+
 def remove_ignored(graph, ignorelist):
     """ Remove nodes whose label contains a string defined in ignorelist. """
 
@@ -810,6 +852,7 @@ def remove_ignored(graph, ignorelist):
                 ignored_edges.insert(0, i)
     for i in ignored_edges:
         del(graph.edges[i])
+    graph.cleanup()
 
 
 def merge_same_labels(graph):
@@ -979,8 +1022,14 @@ def speciespathway3(eoi, kappamodel, causalgraph=None, edgelabels=False,
     rebranch(event_pathway, mod_nodes)
     fuse_edges(event_pathway)
     simplify_req_res(event_pathway)
+    init_species = get_init_species(event_pathway)
     new_edges = build_species_and_edges(event_pathway)
     species_pathway = build_species_graph(eoi, event_pathway, new_edges)
+    clean_remaining_intros(species_pathway)
+    change_intro_species(species_pathway)
+    remove_initial_bnd(species_pathway, init_species)
+    merge_same_labels(species_pathway)
+    fuse_edges(species_pathway)
     species_pathway.rank_nodes()
     species_pathway.build_dot_file(edgelabels, hideintro)
     # Writing section.
@@ -998,6 +1047,122 @@ def speciespathway3(eoi, kappamodel, causalgraph=None, edgelabels=False,
     print("File {} created.".format(species_pathway.filename))
 
 
+def remove_initial_bnd(graph, init_species):
+    """ Remove all binding species that were present as init. """
+
+    nodes_to_remove = []
+    for i in range(len(graph.nodes)):
+        node = graph.nodes[i]
+        if species_in(node.species, init_species):
+            nodes_to_remove.insert(0, i)
+    edges_to_remove = []
+    for j in range(len(graph.edges)):
+        source = graph.edges[j].source
+        target = graph.edges[j].target
+        for i in nodes_to_remove:
+            node = graph.nodes[i]
+            if source == node or target == node:
+                if j not in edges_to_remove:
+                    edges_to_remove.insert(0, j)
+    for j in edges_to_remove:
+        del(graph.edges[j])
+    for i in nodes_to_remove:
+        del(graph.nodes[i])
+
+
+def remove_free_events(graph):
+    """ Remove all free species. """
+
+    nodes_to_remove = []
+    for i in range(len(graph.nodes)):
+        node = graph.nodes[i]
+        if node.intro == False:
+            if node.species["bound_agent"] == ".":
+                nodes_to_remove.insert(0, i)
+    edges_to_remove = []
+    for j in range(len(graph.edges)):
+        source = graph.edges[j].source
+        target = graph.edges[j].target
+        for i in nodes_to_remove:
+            node = graph.nodes[i]
+            if source == node or target == node:
+                if j not in edges_to_remove:
+                    edges_to_remove.insert(0, j)
+    for j in edges_to_remove:
+        del(graph.edges[j])
+    for i in nodes_to_remove:
+        del(graph.nodes[i])
+
+
+def clean_remaining_intros(graph):
+    """
+    Remove intro nodes if they represent a state and their agent is the
+    same as that of their target.
+    """
+
+    intros_to_remove = []
+    for i in range(len(graph.nodes)):
+        node = graph.nodes[i]
+        if node.intro == True and node.species["state"] != None:
+            remove_node = False
+            for edge in graph.edges:
+                if edge.source == node:
+                    target = edge.target
+                    if target.species["agent"] == node.species["agent"]:
+                        remove_node = True
+                        break
+            if remove_node == True:
+                intros_to_remove.insert(0, i)
+    edges_to_remove = []
+    for j in range(len(graph.edges)):
+        source = graph.edges[j].source
+        target = graph.edges[j].target
+        for i in intros_to_remove:
+            node = graph.nodes[i]
+            if source == node or target == node:
+                edges_to_remove.insert(0, j)
+    for j in edges_to_remove:
+        del(graph.edges[j])
+    for i in intros_to_remove:
+        del(graph.nodes[i])
+
+
+def change_intro_species(graph):
+    """
+    Change the label of intro nodes to the req of their target instead
+    of their own res.
+    """
+
+    for node in graph.nodes:
+        if node.intro == True:
+            target_reqs = []
+            for edge in graph.edges:
+                if edge.source == node:
+                    for req in edge.target.full_req:
+                        target_reqs.append(req)
+            n_ag = node.species["agent"]
+            n_site = node.species["site"]
+            n_bnd = node.species["bound_agent"]
+            n_state = node.species["state"]
+            for req in target_reqs:
+                t_ag = req["agent"]
+                t_site = req["site"]
+                t_bnd = req["bound_agent"]
+                t_state =req["state"]
+                if n_ag == t_ag and n_site == t_site:
+                    if n_bnd == None and t_bnd == None: # This is a state.
+                        new_lbl = "{}({}{{{}}})".format(t_ag, t_site, t_state)
+                        node.species["state"] = t_state
+                    if n_state == None and t_state == None: # This is a bind.
+                        new_lbl = "{}({}".format(t_ag, t_site)
+                        if t_bnd == ".":
+                            new_lbl += "[.]"
+                        new_lbl += ")"
+                        node.species["bound_agent"] = t_bnd
+                        node.species["bound_site"] = req["bound_site"]
+            node.label = new_lbl
+
+
 def build_species_graph(eoi, graph, edge_list):
     """
     Create the new causal graph with species instead of rules as nodes.
@@ -1009,25 +1174,29 @@ def build_species_graph(eoi, graph, edge_list):
     species_pathway.nodestype = "species"
     species_pathway.occurrence = None
     for event_node in graph.nodes:
-       for species_node in event_node.species_nodes:
-           found_as_source = False
-           found_as_target = False
-           for edge in edge_list:
-               if edge.source == species_node:
-                   found_as_source = True
-               if edge.target == species_node:
-                   found_as_target = True
-               if species_node.intro == True and found_as_source == True:
-                   include_node = True
-               elif species_node.label == eoi and found_as_target == True:
-                   include_node = True
-               elif found_as_source == True and found_as_target == True:
-                   include_node = True
-               else:
-                   include_node = False
-               if include_node == True:
-                   species_pathway.nodes.append(species_node)
-    species_pathway.edges = edge_list
+        for species_node in event_node.species_nodes:
+            found_as_source = False
+            found_as_target = False
+            for edge in edge_list:
+                if edge.source == species_node:
+                    found_as_source = True
+                if edge.target == species_node:
+                    found_as_target = True
+            if species_node.intro == True and found_as_source == True:
+                include_node = True
+            elif species_node.label == eoi and found_as_target == True:
+                include_node = True
+            elif found_as_source == True and found_as_target == True:
+                include_node = True
+            else:
+                include_node = False
+            if include_node == True:
+                species_pathway.nodes.append(species_node)
+    final_edges = []
+    for edge in edge_list:
+        if edge.target in species_pathway.nodes:
+            final_edges.append(edge)
+    species_pathway.edges = final_edges
 
     return species_pathway
 
@@ -1050,6 +1219,8 @@ def build_species_and_edges(graph):
             new_node = CausalNode(node_id, label, rank=mod_node.rank,
                                   intro=mod_node.intro)
             new_node.species = res
+            if mod_node.intro == False:
+                new_node.full_req = mod_node.full_req
             species_nodes.append(new_node)
             species_id += 1
         mod_node.species_nodes = species_nodes
@@ -1060,7 +1231,32 @@ def build_species_and_edges(graph):
             if edge.source == mod_node:
                 target_mod_node = edge.target
                 for src in mod_node.species_nodes:
-                    if species_in(src.species, target_mod_node.full_req):
+                    #if species_in(src.species, target_mod_node.full_req):
+                    src_ag = src.species["agent"]
+                    src_site = src.species["site"]
+                    src_bnd = src.species["bound_agent"]
+                    src_bndsite = src.species["bound_site"]
+                    src_state = src.species["state"]
+                    add_edge = False
+                    for target_req in target_mod_node.full_req:
+                        trg_ag = target_req["agent"]
+                        trg_site = target_req["site"]
+                        trg_bnd = target_req["bound_agent"]
+                        trg_bndsite = target_req["bound_site"]
+                        trg_state = target_req["state"]
+                        if src_ag == trg_ag and src_site == trg_site:
+                            if src_bnd == None and trg_bnd == None:
+                                if mod_node.intro == True:
+                                    add_edge = True
+                                elif src_state == trg_state:
+                                    add_edge = True
+                            elif src_state == None and trg_state == None:
+                                if mod_node.intro == True:
+                                    add_edge = True
+                                elif src_bnd == trg_bnd:
+                                    if src_bndsite == trg_bndsite:
+                                        add_edge = True
+                    if add_edge == True:
                         for trgt in target_mod_node.species_nodes:
                             new_edges.append(CausalEdge(src, trgt,
                                                         weight=edge.weight))
@@ -1068,20 +1264,33 @@ def build_species_and_edges(graph):
     return new_edges
 
 
+def get_init_species(graph):
+    """ Create a list of all initial species. """
+
+    init_species = []
+    for node in graph.nodes:
+        if node.intro == True:
+            for res in node.res_species:
+                init_species.append(res.copy())
+
+    return init_species
+
+
 def simplify_req_res(graph):
     """
-    Remove bindings and unbindings from res. Also remove in req all
-    agents found in res, except if there is only one agent type in req.
+    (Remove bindings and unbindings from res.** Not removed anymore)
+    Remove all binding req where the agent is found in res, except if there is only
+    one agent type in req.
     """
 
     for event_node in graph.nodes:
         if event_node.intro == False:
-            res_to_remove = []
-            for i in range(len(event_node.res_species)):
-                if event_node.res_species[i]["state"] == None:
-                    res_to_remove.insert(0, i)
-            for i in res_to_remove:
-                del(event_node.res_species[i])
+            #res_to_remove = []
+            #for i in range(len(event_node.res_species)):
+            #    if event_node.res_species[i]["state"] == None:
+            #        res_to_remove.insert(0, i)
+            #for i in res_to_remove:
+            #    del(event_node.res_species[i])
             req_agents = []
             for req in event_node.full_req:
                 if req["agent"] not in req_agents:
@@ -1094,7 +1303,8 @@ def simplify_req_res(graph):
                 req_to_remove = []
                 for i in range(len(event_node.full_req)):
                     if event_node.full_req[i]["agent"] in res_agents:
-                        req_to_remove.insert(0, i)
+                        if event_node.full_req[i]["state"] == None:
+                            req_to_remove.insert(0, i)
                 for i in req_to_remove:
                     del(event_node.full_req[i])
             else:
@@ -1130,8 +1340,26 @@ def complete_req(graph, mod_nodes):
             path_reqs = []
             for i in range(len(path)-1):
                 current_node = path[i]
+                #for current_req in current_node.req_species:
+                #    if not species_in(current_req, path_reqs):
+                #        path_reqs.append(current_req.copy())
                 for current_req in current_node.req_species:
-                    if not species_in(current_req, path_reqs):
+                    cur_ag = current_req["agent"]
+                    cur_site = current_req["site"]
+                    cur_bnd = current_req["bound_agent"]
+                    cur_state = current_req["state"]
+                    add_req = True
+                    for path_req in path_reqs:
+                        path_ag = path_req["agent"]
+                        path_site = path_req["site"]
+                        path_bnd = path_req["bound_agent"]
+                        path_state = path_req["state"]
+                        if path_ag == cur_ag and path_site == cur_site:
+                            if path_bnd == None and cur_bnd == None:
+                                add_req = False
+                            if path_state == None and cur_state == None:
+                                add_req = False
+                    if add_req == True:
                         path_reqs.append(current_req.copy())
                 up_node = path[i+1]
                 for up_res in up_node.res_species:
@@ -1154,13 +1382,19 @@ def complete_req(graph, mod_nodes):
                                                "state": None}
                                     path_reqs.append(partner)
             all_reqs.append(path_reqs)
-        # Assemble all the species collected from each path into one set.
+
         comp_req_set = []
         for path_reqs in all_reqs:
             for path_req in path_reqs:
                 if not species_in(path_req, comp_req_set):
                     comp_req_set.append(path_req)
         mod_node.full_req = comp_req_set
+    #for n in mod_nodes:
+    #    if n.intro == False:
+    #        print(n.rule)
+    #        for req in n.full_req:
+    #            print(req)
+            
 
 
 def get_mod_nodes(eoi, graph):
@@ -2354,14 +2588,16 @@ def toggleintros():
 
     current_files = os.listdir(".")
     for current_file in current_files:
-        if "dot" in current_file and "path" in current_file:
-            toggle_intro_nodes(".", current_file)
+        if "dot" in current_file:
+            if "path" in current_file or "looped" in current_file:
+                toggle_intro_nodes(".", current_file)
     directories = filter(os.path.isdir, os.listdir('.'))
     for directory in directories:
         dot_files = os.listdir("{}".format(directory))
         for dot_file in dot_files:
-            if "dot" in dot_file and "path" in dot_file:
-                toggle_intro_nodes(directory, dot_file)
+            if "dot" in dot_file:
+                if "path" in dot_file or "looped" in dot_file:
+                    toggle_intro_nodes(directory, dot_file)
 
 
 def toggle_intro_nodes(dir_path, dot_file):
