@@ -187,7 +187,8 @@ class CausalEdge(object):
     nodes must be given as a NodeGroup object.
     """
 
-    def __init__(self, source, target, mednode, weight=1, loop=False):
+    def __init__(self, source, target, mednode, weight=1, loop=False,
+                 underlying=False):
         """ Initialize class CausalEdge. """
 
         self.source = source
@@ -195,6 +196,7 @@ class CausalEdge(object):
         self.mednode = mednode
         self.weight = weight
         self.loop = loop
+        self.underlying = underlying
         self.check_types()
 
 
@@ -229,17 +231,20 @@ class CausalEdge(object):
 class CausalGraph(object):
     """ General data structure for causal hypergraphs. """
 
-    def __init__(self, filename=None, eoi=None, nodestype="event"):
+    def __init__(self, filename=None, eoi=None, hypergraph=False,
+                 nodestype="event", showintro=True):
         """ Initialize class CausalGraph. """
 
         self.filename = filename
         self.eoi = eoi
-        self.hypergraph = False
+        self.hypergraph = hypergraph
         self.nodestype = nodestype # event or species
+        self.showintro = showintro
         self.nodes = []
         self.hyperedges = []
         self.mednodes = []
         self.mededges = []
+        self.coveredges = []
         self.occurrence = 1
         self.maxrank = None
         self.prevcores = None
@@ -253,7 +258,6 @@ class CausalGraph(object):
         """
 
         rank = None
-        #intros = False
         self.label_mapping = {}
         dotfile = open(dotpath, "r").readlines()
         for line in dotfile:
@@ -263,6 +267,8 @@ class CausalGraph(object):
                 type_index = line.index("nodestype")
                 quote = line.rfind('"')
                 self.nodestype = line[type_index+11:quote]
+            if 'showintro="False"' in line:
+                self.showintro = False
             if "eoi=" in line:
                 eoi_index = line.index("eoi")
                 quote = line.rfind('"')
@@ -297,17 +303,6 @@ class CausalGraph(object):
                     label_start = read_line.index("label=")+7
                     label_end = read_line[label_start:].index('"')+label_start
                     label = "{}".format(read_line[label_start:label_end])
-                    #if "intro=" in read_line:
-                    #    intros = True
-                    #    intro_start = read_line.index("intro=")+6
-                    #    intro_end = read_line[intro_start:].index("e")+intro_start+1
-                    #    intro_str = read_line[intro_start:intro_end]
-                    #    if intro_str == "True":
-                    #        is_intro = True
-                    #    elif intro_str == "False":
-                    #        is_intro = False
-                    #else:
-                    #    is_intro = False
                     if "intro=True" in read_line:
                         is_intro = True
                     else:
@@ -322,43 +317,48 @@ class CausalGraph(object):
                                                      first=is_first))
                         self.label_mapping[node_id] = label
                     else:
-                        self.mednodes.append(IntermediaryNode(ori_id,
-                                                              rank=medrank))
+                        interm_node = IntermediaryNode(ori_id, rank=medrank)
+                        self.mednodes.append(interm_node)
         tmp_edges = []
         for line in dotfile:
             if "->" in line and 'style="invis"' not in line:
-                if line[0:2] == "//":
-                    read_line = line[2:]
-                else:
-                    read_line = line
-                tokens = read_line.split()
-                source_id = tokens[0]
-                if '"' in source_id:
-                    source_id = source_id[1:-1]
-                if "node" not in source_id and "and" not in source_id:
-                    source_id = "node{}".format(source_id)
-                target_id = tokens[2]
-                if '"' in target_id:
-                    target_id = target_id[1:-1]
-                if "node" not in target_id and "and" not in target_id:
-                    target_id = "node{}".format(target_id)
-                for node in self.nodes:
-                    if node.nodeid == source_id:
-                        source = node
-                    if node.nodeid == target_id:
-                        target = node
-                for node in self.mednodes:
-                    if node.nodeid == source_id:
-                        source = node
-                    if node.nodeid == target_id:
-                        target = node
-                if "weight=" in line:
-                    weight_start = read_line.index("weight=")+7
-                    weight_end = read_line.index("]")
-                    weight = int(read_line[weight_start:weight_end])
-                else:
-                    weight = 1
-                tmp_edges.append(IntermediaryEdge(source, target, weight))
+                if 'cover="True"' not in line:
+                    if line[0:2] == "//":
+                        read_line = line[2:]
+                    else:
+                        read_line = line
+                    tokens = read_line.split()
+                    source_id = tokens[0]
+                    if '"' in source_id:
+                        source_id = source_id[1:-1]
+                    if "node" not in source_id and "and" not in source_id:
+                        source_id = "node{}".format(source_id)
+                    target_id = tokens[2]
+                    if '"' in target_id:
+                        target_id = target_id[1:-1]
+                    if "node" not in target_id and "and" not in target_id:
+                        target_id = "node{}".format(target_id)
+                    for node in self.nodes:
+                        if node.nodeid == source_id:
+                            source = node
+                        if node.nodeid == target_id:
+                            target = node
+                    for node in self.mednodes:
+                        if node.nodeid == source_id:
+                            source = node
+                        if node.nodeid == target_id:
+                            target = node
+                    if "weight=" in line:
+                        weight_start = read_line.index("weight=")+7
+                        rem = read_line[weight_start:]
+                        if "," in rem:
+                            weight_end = rem.index(",")+weight_start
+                        else:
+                            weight_end = rem.index("]")+weight_start
+                        weight = int(read_line[weight_start:weight_end])
+                    else:
+                        weight = 1
+                    tmp_edges.append(IntermediaryEdge(source, target, weight))
         for edge in tmp_edges:
             self.mededges.insert(0, edge)
         self.postprocess()
@@ -385,6 +385,7 @@ class CausalGraph(object):
             for node in self.nodes:
                 if node.rank == self.maxrank:
                     self.eoi = node.label
+        self.build_nointro()
 
 
     def create_hyperedges(self):
@@ -701,51 +702,51 @@ class CausalGraph(object):
 #            del(self.init_nodes[i])
 
 
-    def follow_edges(self, direction, from_node, to_nodes=[]):
-        """
-        Return a list of all acyclic paths from a given node to the top of the
-        graph (using direction="up") or to the bottom (using direction="down").
-        If to_nodes are provided, return only the paths the go from from_node
-        to any of the to_nodes.
-        """
-    
-        all_paths = [[from_node]]
-        ends_reached = False
-        while ends_reached == False:
-            ends_reached = True
-            for i in range(len(all_paths)):
-                path = all_paths[i]
-                next_nodes = []
-                for edge in self.edges:
-                    if direction == "up":
-                        if edge.target == path[-1]:
-                            next_nodes.append(edge.source)
-                    elif direction == "down":
-                        if edge.source == path[-1]:
-                            next_nodes.append(edge.target)
-                if len(next_nodes) > 0 and path[-1] not in to_nodes:
-                    ends_reached = False
-                    path_copy = path.copy()
-                    path.append(next_nodes[0])
-                    for i in range(1, len(next_nodes)):
-                        new_path = path_copy.copy()
-                        new_path.append(next_nodes[i])
-                        all_paths.append(new_path)
-            # Remove looping paths.
-            for i in range(len(all_paths)-1, -1, -1):
-                if len(all_paths[i]) != len(set(all_paths[i])):
-                    del(all_paths[i])
-        # Remove paths that do not end with one of the to_nodes if to_nodes
-        # was defined.
-        if len(to_nodes) > 0:
-            for i in range(len(all_paths)-1, -1, -1):
-                if all_paths[i][-1] not in to_nodes:
-                    del(all_paths[i])
-        # Remove the from_node in each path (the first node).
-        for i in range(len(all_paths)):
-            del(all_paths[i][0])
-    
-        return all_paths
+#    def follow_edges(self, direction, from_node, to_nodes=[]):
+#        """
+#        Return a list of all acyclic paths from a given node to the top of the
+#        graph (using direction="up") or to the bottom (using direction="down").
+#        If to_nodes are provided, return only the paths the go from from_node
+#        to any of the to_nodes.
+#        """
+#    
+#        all_paths = [[from_node]]
+#        ends_reached = False
+#        while ends_reached == False:
+#            ends_reached = True
+#            for i in range(len(all_paths)):
+#                path = all_paths[i]
+#                next_nodes = []
+#                for edge in self.edges:
+#                    if direction == "up":
+#                        if edge.target == path[-1]:
+#                            next_nodes.append(edge.source)
+#                    elif direction == "down":
+#                        if edge.source == path[-1]:
+#                            next_nodes.append(edge.target)
+#                if len(next_nodes) > 0 and path[-1] not in to_nodes:
+#                    ends_reached = False
+#                    path_copy = path.copy()
+#                    path.append(next_nodes[0])
+#                    for i in range(1, len(next_nodes)):
+#                        new_path = path_copy.copy()
+#                        new_path.append(next_nodes[i])
+#                        all_paths.append(new_path)
+#            # Remove looping paths.
+#            for i in range(len(all_paths)-1, -1, -1):
+#                if len(all_paths[i]) != len(set(all_paths[i])):
+#                    del(all_paths[i])
+#        # Remove paths that do not end with one of the to_nodes if to_nodes
+#        # was defined.
+#        if len(to_nodes) > 0:
+#            for i in range(len(all_paths)-1, -1, -1):
+#                if all_paths[i][-1] not in to_nodes:
+#                    del(all_paths[i])
+#        # Remove the from_node in each path (the first node).
+#        for i in range(len(all_paths)):
+#            del(all_paths[i][0])
+#    
+#        return all_paths
 
 
 #    def climb_up(self, bottom_node, top_nodes, ignore_heq=False):
@@ -853,59 +854,129 @@ class CausalGraph(object):
         self.hyperedges = sorted_edges
 
 
-    def cleanup(self):
-        """
-        Remove nodes that do not have a path to an intro node and an eoi node
-        and any edge that points to or from these nodes. Then remove intro
-        nodes that do not have any targets anymore.
-        """
-
-        self.intro_nodes = []
-        self.eoi_nodes = []
-        for node in self.nodes:
-            if node.intro == True:
-                self.intro_nodes.append(node)
-            if node.label == self.eoi:
-                self.eoi_nodes.append(node)
-        nodes_to_clean = []
-        for i in range(len(self.nodes)):
-            node = self.nodes[i]
-            if node.intro == False and node.label != self.eoi:
-                paths_up = self.climb_up(node, self.intro_nodes)
-                paths_down = self.slide_down(node, self.eoi_nodes)
-                if len(paths_up) == 0 or len(paths_down) == 0:
-                    nodes_to_clean.insert(0, i)
-        edges_to_clean = []
-        for j in range(len(self.edges)):
-            source = self.edges[j].source
-            target = self.edges[j].target
-            for i in nodes_to_clean:
-                node = self.nodes[i]
-                if source == node or target == node:
-                    edges_to_clean.insert(0, j)
-        for j in edges_to_clean:
-            del(self.edges[j])
-        for i in nodes_to_clean:
-            del(self.nodes[i])
-        intros_to_clean = []
-        for i in range(len(self.nodes)):
-            node = self.nodes[i]
-            if node.intro == True:
-                remove_intro = True
-                for edge in self.edges:
-                    if edge.source == node:
-                        remove_intro = False
-                        break
-                if remove_intro == True:
-                    intros_to_clean.insert(0, i)
-        for i in intros_to_clean:
-            del(self.nodes[i])
+#    def cleanup(self):
+#        """
+#        Remove nodes that do not have a path to an intro node and an eoi node
+#        and any edge that points to or from these nodes. Then remove intro
+#        nodes that do not have any targets anymore.
+#        """
+#
+#        self.intro_nodes = []
+#        self.eoi_nodes = []
+#        for node in self.nodes:
+#            if node.intro == True:
+#                self.intro_nodes.append(node)
+#            if node.label == self.eoi:
+#                self.eoi_nodes.append(node)
+#        nodes_to_clean = []
+#        for i in range(len(self.nodes)):
+#            node = self.nodes[i]
+#            if node.intro == False and node.label != self.eoi:
+#                paths_up = self.climb_up(node, self.intro_nodes)
+#                paths_down = self.slide_down(node, self.eoi_nodes)
+#                if len(paths_up) == 0 or len(paths_down) == 0:
+#                    nodes_to_clean.insert(0, i)
+#        edges_to_clean = []
+#        for j in range(len(self.edges)):
+#            source = self.edges[j].source
+#            target = self.edges[j].target
+#            for i in nodes_to_clean:
+#                node = self.nodes[i]
+#                if source == node or target == node:
+#                    edges_to_clean.insert(0, j)
+#        for j in edges_to_clean:
+#            del(self.edges[j])
+#        for i in nodes_to_clean:
+#            del(self.nodes[i])
+#        intros_to_clean = []
+#        for i in range(len(self.nodes)):
+#            node = self.nodes[i]
+#            if node.intro == True:
+#                remove_intro = True
+#                for edge in self.edges:
+#                    if edge.source == node:
+#                        remove_intro = False
+#                        break
+#                if remove_intro == True:
+#                    intros_to_clean.insert(0, i)
+#        for i in intros_to_clean:
+#            del(self.nodes[i])
             
-                
 
-    def build_dot_file(self, edgelabels=False, hideintro=False):
+    def build_nointro(self):
+        """
+        Create new hyperedges for the version of the graph that hides
+        intro nodes.
+        """
+
+        # Reset information about cover edges. 
+        for edge in self.hyperedges:
+            edge.underlying = False
+        self.coveredges = []
+        intermediary_id = self.find_max_med_id()+1
+        for edge1 in self.hyperedges:
+            edge_group = []
+            if edge1.underlying == False:
+                has_intro1, src1 = self.check_intro_src(edge1)
+                if has_intro1 == True:
+                    t1 = edge1.target
+                    edge_group.append(edge1)
+                    # Check all other hyperedges that have the same sources
+                    # and target as edge1, ignoring intro nodes.
+                    # They will all be grouped inside a single nointro edge.
+                    for edge2 in self.hyperedges:
+                        if edge2 != edge1 and edge2.underlying == False:
+                            has_intro2, src2 = self.check_intro_src(edge2)
+                            t2 = edge2.target
+                            if same_nodes(src1, src2) and t1 == t2:
+                                edge_group.append(edge2)
+            if len(edge_group) > 0:
+                # Compute weight of nointro edge as the sum of all its
+                # underlying edges. Also mark edges that were used as
+                # underlying.
+                w = 0
+                for edge in edge_group:
+                    w += edge.weight
+                    edge.underlying = True
+                # Create a new nointro edge.
+                if len(src1) > 0:
+                    src = NodeGroup(src1, "and")
+                    mednode = IntermediaryNode("and{}".format(intermediary_id))
+                    intermediary_id += 1
+                    self.coveredges.append(CausalEdge(src, t1, mednode, w))
+                    
+
+    def check_intro_src(self, chk_edge):
+        """
+        Check if an edge has intro nodes in its sources and return the
+        list of non-intro nodes in its sources.
+        """
+
+        has_intro = False
+        nodes_without_intro = []
+        for node in chk_edge.source.nodelist:
+            if node.intro == True:
+                has_intro = True
+            elif node.intro == False:
+                nodes_without_intro.append(node)
+
+        return has_intro, nodes_without_intro
+
+
+    def find_max_med_id(self):
+        """ Find the highest intermediary node id in the graph. """
+
+        intermediary_ids = []
+        for edge in self.hyperedges:
+            intermediary_ids.append(int(edge.mednode.nodeid[3:]))
+        max_med_id = max(intermediary_ids)
+
+        return max_med_id
+
+    def build_dot_file(self, edgelabels=False, showintro=True):
         """ build a dot file of the CausalGraph. """
 
+        self.build_nointro()
         # Write info about graph.
         dot_str = 'digraph G{\n'
         dot_str += '  hypergraph="{}" ;\n'.format(self.hypergraph)
@@ -935,7 +1006,7 @@ class CausalGraph(object):
         for int_rank in range((self.maxrank+1)*2):
             current_rank = int_rank/2
             rank_str = "{}".format(current_rank)
-            if hideintro == True and current_rank == 0:
+            if showintro == False and current_rank < 1:
                 dot_str += "//"
             if int_rank%2 == 0:
                 dot_str += ('{{ rank = same ; "{}" ['
@@ -954,8 +1025,8 @@ class CausalGraph(object):
                         node_shape = 'ellipse'
                         node_color = 'indianred2'
                     if self.nodestype == 'species':
-                        node_shape = 'ellipse' # 'circle'
-                    if hideintro == True and node.intro == True:
+                        node_shape = 'ellipse'
+                    if showintro == False and node.intro == True:
                         dot_str += '//'
                     dot_str += ('"{}" [label="{}", '
                                 .format(node.nodeid, node.label))
@@ -970,31 +1041,47 @@ class CausalGraph(object):
             # sources or more are drawn.
             for edge in self.hyperedges:
                 if edge.mednode.rank == current_rank:
-                    sources = []
-                    for node in edge.source.nodelist:
-                        if hideintro == False:
-                            sources.append(node)
-                        elif hideintro == True and node.intro == False:
-                            sources.append(node)
-                    if len(sources) > 1:
+                    # Include the mednode no matter what, but comment it
+                    # if showintro is False and edge is underlying.
+                    if len(edge.source.nodelist) > 1:
+                        if showintro == False and edge.underlying == True:
+                            dot_str += '//'
                         ratio = edge.weight/average_weight
                         pensize = math.log(ratio,2) + medpenwidth
                         if pensize < minpenwidth:
                             pensize = minpenwidth
                         if pensize > maxpenwidth:
                             pensize = maxpenwidth
-                        pensize = pensize/30.
+                        pensize = math.sqrt(pensize)/12
                         dot_str += '"{}" [label="", '.format(edge.mednode.nodeid)
                         dot_str += 'shape=point, style=filled, fillcolor=black, '
                         dot_str += 'hyperand=True, '
                         dot_str += 'width={}, height={}] ;\n'.format(pensize, pensize)
-            if hideintro == True and current_rank == 0:
+            # Intermediary nodes from cover edges, same as above but only
+            # if showintro is False.
+            if showintro == False:
+                for cedge in self.coveredges:
+                    if cedge.mednode.rank == current_rank:
+                        ratio = cedge.weight/average_weight
+                        pensize = math.log(ratio,2) + medpenwidth
+                        if pensize < minpenwidth:
+                            pensize = minpenwidth
+                        if pensize > maxpenwidth:
+                            pensize = maxpenwidth
+                        pensize = math.sqrt(pensize)/12
+                        dot_str += '"{}" [label="", '.format(cedge.mednode.nodeid)
+                        dot_str += 'shape=point, style=filled, fillcolor=black, '
+                        dot_str += 'hyperand=True, '
+                        dot_str += 'width={}, height={}, '.format(pensize, pensize)
+                        dot_str += 'cover="True"] ;\n'
+            # Close rank braces.
+            if showintro == False and current_rank < 1:
                 dot_str += "//"
             dot_str += "}\n"
         # Draw invisible ranking edges.
         for int_rank in range(self.maxrank*2):
             rank = int_rank/2
-            if hideintro == True and rank == 0:
+            if showintro == False and rank < 1:
                 dot_str += '//'
             next_rank = rank+0.5
             if int_rank%2 == 0:
@@ -1010,14 +1097,7 @@ class CausalGraph(object):
         # each source to the mednode and from the mednode to the target.
         # The weight of each intermediary edge should be the same.
         for edge in self.hyperedges:
-            sources = []
-            for node in edge.source.nodelist:
-                if hideintro == False:
-                    sources.append(node)
-                elif hideintro == True and node.intro == False:
-                    sources.append(node)
-            #if hideintro == True and edge.source.intro == True:
-            #    dot_str += '//'
+            sources = edge.source.nodelist
             edge_color = 'black'
             ratio = edge.weight/average_weight
             pensize = math.log(ratio,2) + medpenwidth
@@ -1026,6 +1106,8 @@ class CausalGraph(object):
             if pensize > maxpenwidth:
                 pensize = maxpenwidth
             if len(sources) == 1:
+                if showintro == False and edge.underlying == True:
+                    dot_str += "//" 
                 dot_str += ('"{}" -> "{}" '
                             .format(sources[0].nodeid, edge.target.nodeid))
                 dot_str += '[penwidth={}'.format(pensize)
@@ -1035,12 +1117,16 @@ class CausalGraph(object):
                 dot_str += ', weight={}] ;\n'.format(edge.weight)
             elif len(sources) > 1:
                 for node in sources:
+                    if showintro == False and edge.underlying == True:
+                        dot_str += "//"
                     dot_str += ('"{}" -> "{}" '
                             .format(node.nodeid, edge.mednode.nodeid))
                     dot_str += '[dir=none, penwidth={}'.format(pensize)
                     dot_str += ', color={}'.format(edge_color)
                     dot_str += ', weight={}] ;\n'.format(edge.weight)
                 # Intermediary edge to target.
+                if showintro == False and edge.underlying == True:
+                    dot_str += "//"
                 dot_str += ('"{}" -> "{}" '
                             .format(edge.mednode.nodeid, edge.target.nodeid))
                 dot_str += '[penwidth={}'.format(pensize)
@@ -1048,6 +1134,44 @@ class CausalGraph(object):
                 if edgelabels == True:
                     dot_str += ', label="  {}"'.format(edge.weight)
                 dot_str += ', weight={}] ;\n'.format(edge.weight)
+        # Draw cover edges if intro nodes are not shown.
+        if showintro == False:
+            for cedge in self.coveredges:
+                sources = cedge.source.nodelist
+                edge_color = 'black'
+                ratio = cedge.weight/average_weight
+                pensize = math.log(ratio,2) + medpenwidth
+                if pensize < minpenwidth:
+                    pensize = minpenwidth
+                if pensize > maxpenwidth:
+                    pensize = maxpenwidth
+                if len(sources) == 1:
+                    dot_str += ('"{}" -> "{}" '
+                                .format(sources[0].nodeid, cedge.target.nodeid))
+                    dot_str += '[penwidth={}'.format(pensize)
+                    dot_str += ', color={}'.format(edge_color)
+                    if edgelabels == True:
+                        dot_str += ', label="  {}"'.format(cedge.weight)
+                    dot_str += ', weight={}, '.format(cedge.weight)
+                    dot_str += 'cover="True"] ;\n'
+                elif len(sources) > 1:
+                    for node in sources:
+                        dot_str += ('"{}" -> "{}" '
+                                .format(node.nodeid, cedge.mednode.nodeid))
+                        dot_str += '[dir=none, penwidth={}'.format(pensize)
+                        dot_str += ', color={}'.format(edge_color)
+                        dot_str += ', weight={}, '.format(cedge.weight)
+                        dot_str += 'cover="True"] ;\n'
+                    # Intermediary edge to target.
+                    dot_str += ('"{}" -> "{}" '
+                                .format(edge.mednode.nodeid, cedge.target.nodeid))
+                    dot_str += '[penwidth={}'.format(pensize)
+                    dot_str += ', color={}'.format(edge_color)
+                    if edgelabels == True:
+                        dot_str += ', label="  {}"'.format(cedge.weight)
+                    dot_str += ', weight={}, '.format(cedge.weight)
+                    dot_str += 'cover="True"] ;\n'
+        # Close graph.
         dot_str += "}"
         self.dot_file = dot_str
            
@@ -1143,7 +1267,7 @@ def run_kaflow(eoi, trace_path, kaflowpath):
 
 # ==================== Causal Cores Merging Section ===========================
 
-def mergecores(eoi, causalgraphs=None, edgelabels=False, hideintro=False,
+def mergecores(eoi, causalgraphs=None, edgelabels=False, showintro=True,
                writedots=True, rmprev=False, printmsg=True):
     """ Merge equivalent causal cores and count occurrence. """
 
@@ -1189,7 +1313,7 @@ def mergecores(eoi, causalgraphs=None, edgelabels=False, hideintro=False,
     for i in range(len(sorted_cores)):
         sorted_cores[i].filename = "core-{}.dot".format(i+1)
     for graph in sorted_cores:
-        graph.build_dot_file(edgelabels, hideintro)
+        graph.build_dot_file(edgelabels, showintro)
     # Writing section.
     if writedots == True:
         for graph in sorted_cores:
@@ -1327,7 +1451,7 @@ def same_nodes(node_list1, node_list2):
 # +++++++++++++++++++++++ Cores Looping Section +++++++++++++++++++++++++++++++
 
 def loopcores(eoi, causalgraphs=None, ignorelist=None, edgelabels=False,
-              hideintro=True, writedots=True, rmprev=False,
+              showintro=False, writedots=True, rmprev=False,
               writepremerge=False):
     """ Build looped event paths by merging identical nodes within cores. """
 
@@ -1349,7 +1473,7 @@ def loopcores(eoi, causalgraphs=None, ignorelist=None, edgelabels=False,
         fuse_edges(core)
         core.rank_sequential()
         #core.old_rank_nodes()
-        core.build_dot_file(edgelabels, hideintro)
+        core.build_dot_file(edgelabels, showintro)
     # Writing section.
     if writepremerge == True:
         for i in range(len(cores)):
@@ -1360,7 +1484,7 @@ def loopcores(eoi, causalgraphs=None, ignorelist=None, edgelabels=False,
                 outfile.write(graph.dot_file)
                 outfile.close()
     looped_paths = mergecores(eoi, cores, writedots=False,
-                              edgelabels=edgelabels, hideintro=hideintro,
+                              edgelabels=edgelabels, showintro=showintro,
                               printmsg=False)
     for i in range(len(looped_paths)):
         looped_paths[i].filename = "eventpath-{}.dot".format(i+1)
@@ -1530,7 +1654,7 @@ def fuse_edges(graph):
 # .................. Event Paths Merging Section ..............................
 
 def mergepaths(eoi, causalgraphs=None, threshold=0.0, edgelabels=False,
-               hideintro=True, writedot=True, rmprev=False):
+               showintro=False, writedot=True, rmprev=False):
     """ Merge event paths into a single pathway. """
 
     # Reading section.
@@ -1544,7 +1668,7 @@ def mergepaths(eoi, causalgraphs=None, threshold=0.0, edgelabels=False,
         event_paths = causalgraphs
         path_files = None
     # Doing the work.
-    pathway = CausalGraph(eoi=eoi)
+    pathway = CausalGraph(eoi=eoi, hypergraph=True)
     node_number = 1
     seen_labels = []
     for event_path in event_paths:
@@ -1587,7 +1711,7 @@ def mergepaths(eoi, causalgraphs=None, threshold=0.0, edgelabels=False,
     pathway.rank_sequential()
     pathway.occurrence = None
     pathway.filename = "eventpathway.dot"
-    pathway.build_dot_file(edgelabels, hideintro)
+    pathway.build_dot_file(edgelabels, showintro)
     # Writing section.
     if writedot == True:
         output_path1 = "{}/{}".format(eoi, pathway.filename)
@@ -1609,7 +1733,7 @@ def mergepaths(eoi, causalgraphs=None, threshold=0.0, edgelabels=False,
 # """"""""""""""" Species Pathway Conversion Section """"""""""""""""""""""""""
 
 def speciespathway3(eoi, kappamodel, causalgraph=None, edgelabels=False,
-                   hideintro=False):
+                   showintro=True):
     """
     Convert a CausalGraph where node are events to a pathway where nodes are
     species.
