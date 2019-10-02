@@ -322,7 +322,7 @@ class CausalGraph(object):
         tmp_edges = []
         for line in dotfile:
             if "->" in line and 'style="invis"' not in line:
-                if 'cover="True"' not in line:
+                if 'cover="True"' not in line and "tee" not in line:
                     if line[0:2] == "//":
                         read_line = line[2:]
                     else:
@@ -477,10 +477,10 @@ class CausalGraph(object):
             if node.first == True:
                 node.rank = 1
                 current_nodes.append(node)
-            else:
-                node.rank = None
-        for mednode in self.mednodes:
-            mednode.rank = None
+        #    else:
+        #        node.rank = None
+        #for mednode in self.mednodes:
+        #    mednode.rank = None
         while len(current_nodes) > 0:
             # 1) Gather all hyperedges that come out from a current_node.
             current_hyperedges = []
@@ -523,7 +523,6 @@ class CausalGraph(object):
                         break
                 if keep_node == True:
                     next_nodes.append(current_node)
-                #print("--", next_nodes)
             current_nodes = next_nodes
         # Rank intro nodes.
         for node in self.nodes:
@@ -702,51 +701,52 @@ class CausalGraph(object):
 #            del(self.init_nodes[i])
 
 
-#    def follow_edges(self, direction, from_node, to_nodes=[]):
-#        """
-#        Return a list of all acyclic paths from a given node to the top of the
-#        graph (using direction="up") or to the bottom (using direction="down").
-#        If to_nodes are provided, return only the paths the go from from_node
-#        to any of the to_nodes.
-#        """
-#    
-#        all_paths = [[from_node]]
-#        ends_reached = False
-#        while ends_reached == False:
-#            ends_reached = True
-#            for i in range(len(all_paths)):
-#                path = all_paths[i]
-#                next_nodes = []
-#                for edge in self.edges:
-#                    if direction == "up":
-#                        if edge.target == path[-1]:
-#                            next_nodes.append(edge.source)
-#                    elif direction == "down":
-#                        if edge.source == path[-1]:
-#                            next_nodes.append(edge.target)
-#                if len(next_nodes) > 0 and path[-1] not in to_nodes:
-#                    ends_reached = False
-#                    path_copy = path.copy()
-#                    path.append(next_nodes[0])
-#                    for i in range(1, len(next_nodes)):
-#                        new_path = path_copy.copy()
-#                        new_path.append(next_nodes[i])
-#                        all_paths.append(new_path)
-#            # Remove looping paths.
-#            for i in range(len(all_paths)-1, -1, -1):
-#                if len(all_paths[i]) != len(set(all_paths[i])):
-#                    del(all_paths[i])
-#        # Remove paths that do not end with one of the to_nodes if to_nodes
-#        # was defined.
-#        if len(to_nodes) > 0:
-#            for i in range(len(all_paths)-1, -1, -1):
-#                if all_paths[i][-1] not in to_nodes:
-#                    del(all_paths[i])
-#        # Remove the from_node in each path (the first node).
-#        for i in range(len(all_paths)):
-#            del(all_paths[i][0])
-#    
-#        return all_paths
+    def follow_edges(self, direction, from_node, to_nodes=[]):
+        """
+        Return a list of all acyclic paths from a given node to the top of the
+        graph (using direction="up") or to the bottom (using direction="down").
+        If to_nodes are provided, return only the paths that go from from_node
+        to any of the to_nodes.
+        """
+    
+        all_paths = [[from_node]]
+        ends_reached = False
+        while ends_reached == False:
+            ends_reached = True
+            for i in range(len(all_paths)):
+                path = all_paths[i]
+                next_nodes = []
+                for edge in self.hyperedges:
+                    if direction == "up":
+                        if edge.target == path[-1]:
+                            for src_node in edge.source.nodelist:
+                                next_nodes.append(src_node)
+                    elif direction == "down":
+                        if path[-1] in edge.source.nodelist:
+                            next_nodes.append(edge.target)
+                if len(next_nodes) > 0 and path[-1] not in to_nodes:
+                    ends_reached = False
+                    path_copy = path.copy()
+                    path.append(next_nodes[0])
+                    for i in range(1, len(next_nodes)):
+                        new_path = path_copy.copy()
+                        new_path.append(next_nodes[i])
+                        all_paths.append(new_path)
+            # Remove looping paths.
+            for i in range(len(all_paths)-1, -1, -1):
+                if len(all_paths[i]) != len(set(all_paths[i])):
+                    del(all_paths[i])
+        # Remove paths that do not end with one of the to_nodes if to_nodes
+        # was defined.
+        if len(to_nodes) > 0:
+            for i in range(len(all_paths)-1, -1, -1):
+                if all_paths[i][-1] not in to_nodes:
+                    del(all_paths[i])
+        # Remove the from_node in each path (the first node).
+        for i in range(len(all_paths)):
+            del(all_paths[i][0])
+    
+        return all_paths
 
 
 #    def climb_up(self, bottom_node, top_nodes, ignore_heq=False):
@@ -854,53 +854,55 @@ class CausalGraph(object):
         self.hyperedges = sorted_edges
 
 
-#    def cleanup(self):
-#        """
-#        Remove nodes that do not have a path to an intro node and an eoi node
-#        and any edge that points to or from these nodes. Then remove intro
-#        nodes that do not have any targets anymore.
-#        """
-#
-#        self.intro_nodes = []
-#        self.eoi_nodes = []
-#        for node in self.nodes:
-#            if node.intro == True:
-#                self.intro_nodes.append(node)
-#            if node.label == self.eoi:
-#                self.eoi_nodes.append(node)
-#        nodes_to_clean = []
-#        for i in range(len(self.nodes)):
-#            node = self.nodes[i]
-#            if node.intro == False and node.label != self.eoi:
-#                paths_up = self.climb_up(node, self.intro_nodes)
-#                paths_down = self.slide_down(node, self.eoi_nodes)
-#                if len(paths_up) == 0 or len(paths_down) == 0:
-#                    nodes_to_clean.insert(0, i)
-#        edges_to_clean = []
-#        for j in range(len(self.edges)):
-#            source = self.edges[j].source
-#            target = self.edges[j].target
-#            for i in nodes_to_clean:
-#                node = self.nodes[i]
-#                if source == node or target == node:
-#                    edges_to_clean.insert(0, j)
-#        for j in edges_to_clean:
-#            del(self.edges[j])
-#        for i in nodes_to_clean:
-#            del(self.nodes[i])
-#        intros_to_clean = []
-#        for i in range(len(self.nodes)):
-#            node = self.nodes[i]
-#            if node.intro == True:
-#                remove_intro = True
-#                for edge in self.edges:
-#                    if edge.source == node:
-#                        remove_intro = False
-#                        break
-#                if remove_intro == True:
-#                    intros_to_clean.insert(0, i)
-#        for i in intros_to_clean:
-#            del(self.nodes[i])
+    def cleanup(self):
+        """
+        Remove nodes that do not have a path to an intro node and an eoi node
+        and any edge that points to or from these nodes. Then remove intro
+        nodes that do not have any targets anymore.
+        """
+
+        self.intro_nodes = []
+        self.eoi_nodes = []
+        for node in self.nodes:
+            if node.intro == True:
+                self.intro_nodes.append(node)
+            if node.label == self.eoi:
+                self.eoi_nodes.append(node)
+        nodes_to_clean = []
+        for i in range(len(self.nodes)):
+            node = self.nodes[i]
+            if node.intro == False and node.label != self.eoi:
+                #paths_up = self.climb_up(node, self.intro_nodes)
+                paths_up = self.follow_edges("up", node, self.intro_nodes)
+                #paths_down = self.slide_down(node, self.eoi_nodes)
+                paths_down = self.follow_edges("down", node, self.eoi_nodes)
+                if len(paths_up) == 0 or len(paths_down) == 0:
+                    nodes_to_clean.insert(0, i)
+        edges_to_clean = []
+        for j in range(len(self.hyperedges)):
+            sources = self.hyperedges[j].source.nodelist
+            target = self.hyperedges[j].target
+            for i in nodes_to_clean:
+                node = self.nodes[i]
+                if node in sources or target == node:
+                    edges_to_clean.insert(0, j)
+        for j in edges_to_clean:
+            del(self.hyperedges[j])
+        for i in nodes_to_clean:
+            del(self.nodes[i])
+        intros_to_clean = []
+        for i in range(len(self.nodes)):
+            node = self.nodes[i]
+            if node.intro == True:
+                remove_intro = True
+                for edge in self.hyperedges:
+                    if node in edge.source.nodelist:
+                        remove_intro = False
+                        break
+                if remove_intro == True:
+                    intros_to_clean.insert(0, i)
+        for i in intros_to_clean:
+            del(self.nodes[i])
             
 
     def build_nointro(self):
@@ -972,6 +974,7 @@ class CausalGraph(object):
         max_med_id = max(intermediary_ids)
 
         return max_med_id
+
 
     def build_dot_file(self, edgelabels=False, showintro=True):
         """ build a dot file of the CausalGraph. """
@@ -1653,7 +1656,7 @@ def fuse_edges(graph):
 
 # .................. Event Paths Merging Section ..............................
 
-def mergepaths(eoi, causalgraphs=None, threshold=0.0, edgelabels=False,
+def mergepaths(eoi, causalgraphs=None, edgelabels=False,
                showintro=False, writedot=True, rmprev=False):
     """ Merge event paths into a single pathway. """
 
@@ -1669,14 +1672,17 @@ def mergepaths(eoi, causalgraphs=None, threshold=0.0, edgelabels=False,
         path_files = None
     # Doing the work.
     pathway = CausalGraph(eoi=eoi, hypergraph=True)
+    pathway.occurrence = 0
     node_number = 1
     seen_labels = []
     for event_path in event_paths:
+        pathway.occurrence += event_path.occurrence
         for node in event_path.nodes:
             if node.label not in seen_labels:
                 seen_labels.append(node.label)
                 n_id = "node{}".format(node_number)
-                pathway.nodes.append(CausalNode(n_id, node.label, node.rank,
+                pathway.nodes.append(CausalNode(n_id, node.label,
+                                                node.rank,
                                                 intro=node.intro,
                                                 first=node.first))
                 node_number += 1
@@ -1700,16 +1706,7 @@ def mergepaths(eoi, causalgraphs=None, threshold=0.0, edgelabels=False,
             pathway.hyperedges.append(CausalEdge(sources, target, mednode,
                                             edge.weight))
     fuse_edges(pathway)
-    all_weights = []
-    for edge in pathway.hyperedges:
-        all_weights.append(edge.weight)
-    average_weight = statistics.mean(all_weights)
-    for i in range(len(pathway.hyperedges)-1, -1, -1):
-        if pathway.hyperedges[i].weight < average_weight*threshold:
-            del(pathway.hyperedges[i])
-    #pathway.cleanup()
     pathway.rank_sequential()
-    pathway.occurrence = None
     pathway.filename = "eventpathway.dot"
     pathway.build_dot_file(edgelabels, showintro)
     # Writing section.
@@ -1729,6 +1726,150 @@ def mergepaths(eoi, causalgraphs=None, threshold=0.0, edgelabels=False,
     return pathway        
 
 # ............... End of Event Paths Merging Section ..........................
+
+# ///////////////// Event Paths Simplifying Section ///////////////////////////
+
+def simplifypath(eoi, causalgraphs=None, threshold=0.2, edgelabels=False,
+                 showintro=False, writedot=True, rmprev=False):
+    """
+    Simplify event pathway by ignoring eventpaths that contain edges with
+    low occurrence.
+    """
+
+    # Reading section.
+    if causalgraphs == None:
+        path_files = get_dot_files(eoi, "eventpath")
+        event_paths = []
+        for path_file in path_files:
+            path_path = "{}/{}".format(eoi, path_file)
+            event_paths.append(CausalGraph(path_path, eoi))
+    else:
+        event_paths = causalgraphs
+        path_files = None
+    pathway = CausalGraph("{}/eventpathway.dot".format(eoi), eoi)
+    # Doing the work.
+    # Remove eventpaths that contain edges with an occurence that
+    # is under average_weight*threshold.
+    pathway.build_nointro()
+    all_weights = []
+    for edge in pathway.hyperedges:
+        if edge.underlying == False:
+            all_weights.append(edge.weight)
+    for cedge in pathway.coveredges:
+        all_weights.append(cedge.weight)
+    average_weight = statistics.mean(all_weights)
+    theshold_str = "Average edge weight: {:.2f} , ".format(average_weight)
+    theshold_str += "Treshold: {:.2f} , ".format(threshold)
+    theshold_str += "Cutoff: {:.2f}\n".format(average_weight*threshold)
+    theshold_str += "Simplifying graph; ignoring story types containing "
+    theshold_str += ("edges with weight lower than {:.2f}"
+                      .format(average_weight*threshold))
+    print(theshold_str)
+    normals_to_ignore = []
+    for edge in pathway.hyperedges:
+        if edge.underlying == False:
+            if edge.weight < average_weight*threshold:
+                normals_to_ignore.append(edge)
+    covers_to_ignore = []
+    for cedge in pathway.coveredges:
+        if cedge.weight < average_weight*threshold:
+            covers_to_ignore.append(cedge)
+    # Select only eventpaths that do not contain any of the edges to ignore.
+    selected_paths = []
+    for event_path in event_paths:
+        is_ignored = False
+        for edge in event_path.hyperedges:
+            is_ignored = ignored_edge(edge, normals_to_ignore)
+            if is_ignored == True:
+                break
+        # If no edge to ignore was found in normal edges, check
+        # also cover edges.
+        if is_ignored == False:
+            event_path.build_nointro()
+            for cedge in event_path.coveredges:
+                is_ignored = ignored_edge(cedge, covers_to_ignore)
+                if is_ignored == True:
+                    break
+        if is_ignored == False:
+            selected_paths.append(event_path)
+    if len(selected_paths) == 0:
+       raise ValueError("Simplification threshold too high, no story left.") 
+    # Build simplified graph.
+    simplepathway = CausalGraph(eoi=eoi, hypergraph=True)
+    simplepathway.occurrence = 0
+    node_number = 1
+    seen_labels = []
+    for event_path in selected_paths:
+        simplepathway.occurrence += event_path.occurrence
+        for node in event_path.nodes:
+            if node.label not in seen_labels:
+                seen_labels.append(node.label)
+                n_id = "node{}".format(node_number)
+                simplepathway.nodes.append(CausalNode(n_id, node.label,
+                                                      node.rank,
+                                                      intro=node.intro,
+                                                      first=node.first))
+                node_number += 1
+    intermediary_id = 1
+    for event_path in selected_paths:
+        for edge in event_path.hyperedges:
+            # For each source and target node of the edge in event_path,
+            # find the equivalent node in the pathway.
+            source_labels = []
+            for source_node in edge.source.nodelist:
+                source_labels.append(source_node.label)
+            source_list = []
+            for node in simplepathway.nodes:
+                if node.label in source_labels:
+                    source_list.append(node)
+                if node.label == edge.target.label:
+                    target = node
+            sources = NodeGroup(source_list, "and")
+            mednode = IntermediaryNode("and{}".format(intermediary_id))
+            intermediary_id += 1
+            simplepathway.hyperedges.append(CausalEdge(sources, target,
+                                                       mednode,
+                                                       edge.weight))
+    fuse_edges(simplepathway)
+    simplepathway.rank_sequential()
+    simplepathway.filename = "eventpathway-simple.dot"
+    simplepathway.build_dot_file(edgelabels, showintro)
+    # Writing section.
+    if writedot == True:
+        output_path1 = "{}/{}".format(eoi, simplepathway.filename)
+        outfile1 = open(output_path1, "w")
+        outfile1.write(simplepathway.dot_file)
+        outfile1.close()
+    if rmprev == True:
+        if path_files == None:
+            path_files = get_dot_files(eoi, "evpath")
+        for path_file in path_files:
+            file_path = "{}/{}".format(eoi, path_file)
+            os.remove(file_path)
+
+    return pathway        
+
+
+def ignored_edge(edge, ignore_list):
+    """ Check if edge is contained in edges to ignore based on labels. """
+
+    is_ignored = False
+    trg_lbl = edge.target.label
+    src_lbls = []
+    for node in edge.source.nodelist:
+        src_lbls.append(node.label)
+    for to_ignore in ignore_list:
+        ign_trg = to_ignore.target.label
+        ign_srcs = []
+        for node in to_ignore.source.nodelist:
+            ign_srcs.append(node.label)
+        if sorted(src_lbls) == sorted(ign_srcs) and trg_lbl == ign_trg:
+            is_ignored = True
+            break
+
+    return is_ignored
+
+# ///////////// End of  Event Paths Simplifying Section ///////////////////////
 
 # """"""""""""""" Species Pathway Conversion Section """"""""""""""""""""""""""
 
