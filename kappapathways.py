@@ -477,10 +477,10 @@ class CausalGraph(object):
             if node.first == True:
                 node.rank = 1
                 current_nodes.append(node)
-        #    else:
-        #        node.rank = None
-        #for mednode in self.mednodes:
-        #    mednode.rank = None
+            else:
+                node.rank = None
+        for mednode in self.mednodes:
+            mednode.rank = None
         while len(current_nodes) > 0:
             # 1) Gather all hyperedges that come out from a current_node.
             current_hyperedges = []
@@ -1528,9 +1528,10 @@ def flush_ignored(graph_list, graph_files, ignorelist):
         if remove_graph == True:
             graphs_to_remove.insert(0, i)
     for i in graphs_to_remove:
-        slash = graph_list[i].filename.index("/")
-        fname = graph_list[i].filename[slash+1:]
-        graph_files.remove(fname)
+        if graph_files != None:
+           slash = graph_list[i].filename.index("/")
+           fname = graph_list[i].filename[slash+1:]
+           graph_files.remove(fname)
         del(graph_list[i])
     print("Ignoring {} cores out of {} because they contain reverse rules."
           .format(len(graphs_to_remove), init_len))
@@ -1656,13 +1657,14 @@ def fuse_edges(graph):
 
 # .................. Event Paths Merging Section ..............................
 
-def mergepaths(eoi, causalgraphs=None, edgelabels=False,
+def mergepaths(eoi, causalgraphs=None, ignorelist=None, edgelabels=False,
                showintro=False, writedot=True, rmprev=False):
     """ Merge event paths into a single pathway. """
 
     # Reading section.
     if causalgraphs == None:
-        path_files = get_dot_files(eoi, "eventpath")
+        #path_files = get_dot_files(eoi, "eventpath")
+        path_files = get_dot_files(eoi, "core")
         event_paths = []
         for path_file in path_files:
             path_path = "{}/{}".format(eoi, path_file)
@@ -1671,6 +1673,7 @@ def mergepaths(eoi, causalgraphs=None, edgelabels=False,
         event_paths = causalgraphs
         path_files = None
     # Doing the work.
+    flush_ignored(event_paths, path_files, ignorelist)
     pathway = CausalGraph(eoi=eoi, hypergraph=True)
     pathway.occurrence = 0
     node_number = 1
