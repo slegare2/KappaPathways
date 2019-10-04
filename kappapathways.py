@@ -502,6 +502,7 @@ class CausalGraph(object):
                     secured_hyperedges.append(edge)
             # 3) Set rank of the target of secured hyperedges.
             for edge in secured_hyperedges:
+                #if edge.target.rank == None:
                 source_ranks = []
                 for source in edge.source.nodelist:
                     if source.intro == False:
@@ -540,7 +541,14 @@ class CausalGraph(object):
                 for edge in intro_hyperedges:
                     target_ranks.append(edge.target.rank)
                 node.rank = min(target_ranks)-1
-        # Rank intermediary nodes.
+        self.rank_intermediary()
+        self.get_maxrank()
+        self.sequentialize_ids()
+
+
+    def rank_intermediary(self):
+        """  Rank intermediary nodes. """
+    
         for edge in self.hyperedges:
             source_ranks = []
             for node in edge.source.nodelist:
@@ -552,8 +560,6 @@ class CausalGraph(object):
                 edge.mednode.rank = max(source_ranks)+0.5
             else:
                 edge.mednode.rank = edge.target.rank
-        self.get_maxrank()
-        self.sequentialize_ids()
 
 
 #    def rank_nodes(self):
@@ -1663,6 +1669,9 @@ def mergepaths(eoi, causalgraphs=None, ignorelist=None, edgelabels=False,
 
     # Reading section.
     if causalgraphs == None:
+        # Using cores or eventpaths both work. But it can suffle the nodes
+        # horizontally, yielding a different graph, but with same ranks for
+        # all nodes.
         #path_files = get_dot_files(eoi, "eventpath")
         path_files = get_dot_files(eoi, "core")
         event_paths = []
@@ -1678,17 +1687,24 @@ def mergepaths(eoi, causalgraphs=None, ignorelist=None, edgelabels=False,
     pathway.occurrence = 0
     node_number = 1
     seen_labels = []
+    #lowest_ranks = {}
     for event_path in event_paths:
         pathway.occurrence += event_path.occurrence
         for node in event_path.nodes:
             if node.label not in seen_labels:
                 seen_labels.append(node.label)
+    #            lowest_ranks[node.label] = node.rank
                 n_id = "node{}".format(node_number)
                 pathway.nodes.append(CausalNode(n_id, node.label,
                                                 node.rank,
                                                 intro=node.intro,
                                                 first=node.first))
                 node_number += 1
+    #        else:
+    #            if node.rank < lowest_ranks[node.label]:
+    #                lowest_ranks[node.label] = node.rank
+    #for node in pathway.nodes:
+    #    node.rank = lowest_ranks[node.label]
     intermediary_id = 1
     for event_path in event_paths:
         for edge in event_path.hyperedges:
@@ -1709,6 +1725,11 @@ def mergepaths(eoi, causalgraphs=None, ignorelist=None, edgelabels=False,
             pathway.hyperedges.append(CausalEdge(sources, target, mednode,
                                             edge.weight))
     fuse_edges(pathway)
+    # Uncomment the next 3 lines and comment pathway.rank_sequential()
+    # to build unranked version of graph
+    #pathway.rank_intermediary()
+    #pathway.get_maxrank()
+    #pathway.sequentialize_ids()
     pathway.rank_sequential()
     pathway.filename = "eventpathway.dot"
     pathway.build_dot_file(edgelabels, showintro)
