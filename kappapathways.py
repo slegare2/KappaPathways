@@ -288,37 +288,38 @@ class CausalGraph(object):
                 rank = int(medrank)
             if "label=" in line and "Occurrence" not in line:
                 if "->" not in line and "rank = same" not in line:
-                    if line[0:2] == "//":
-                       read_line = line[2:]
-                    else:
-                       read_line = line
-                    tokens = read_line.split()
-                    ori_id = tokens[0]
-                    if '"' in ori_id:
-                        ori_id = ori_id[1:-1]
-                    if "node" not in ori_id:
-                        node_id = "node{}".format(ori_id)
-                    else:
-                        node_id = ori_id
-                    label_start = read_line.index("label=")+7
-                    label_end = read_line[label_start:].index('"')+label_start
-                    label = "{}".format(read_line[label_start:label_end])
-                    if "intro=True" in read_line:
-                        is_intro = True
-                    else:
-                        is_intro = False
-                    if "first=True" in read_line:
-                        is_first = True
-                    else:
-                        is_first = False
-                    if "hyperand=True" not in line:
-                        self.nodes.append(CausalNode(node_id, label, rank,
-                                                     intro=is_intro,
-                                                     first=is_first))
-                        self.label_mapping[node_id] = label
-                    else:
-                        interm_node = IntermediaryNode(ori_id, rank=medrank)
-                        self.mednodes.append(interm_node)
+                    if 'cover="True"' not in line:
+                        if line[0:2] == "//":
+                           read_line = line[2:]
+                        else:
+                           read_line = line
+                        tokens = read_line.split()
+                        ori_id = tokens[0]
+                        if '"' in ori_id:
+                            ori_id = ori_id[1:-1]
+                        if "node" not in ori_id:
+                            node_id = "node{}".format(ori_id)
+                        else:
+                            node_id = ori_id
+                        label_start = read_line.index("label=")+7
+                        label_end = read_line[label_start:].index('"')+label_start
+                        label = "{}".format(read_line[label_start:label_end])
+                        if "intro=True" in read_line:
+                            is_intro = True
+                        else:
+                            is_intro = False
+                        if "first=True" in read_line:
+                            is_first = True
+                        else:
+                            is_first = False
+                        if "hyperand=True" not in line:
+                            self.nodes.append(CausalNode(node_id, label, rank,
+                                                         intro=is_intro,
+                                                         first=is_first))
+                            self.label_mapping[node_id] = label
+                        else:
+                            interm_node = IntermediaryNode(ori_id, rank=medrank)
+                            self.mednodes.append(interm_node)
         tmp_edges = []
         for line in dotfile:
             if "->" in line and 'style="invis"' not in line:
@@ -431,6 +432,7 @@ class CausalGraph(object):
             sources = NodeGroup(source_list, "and")
             self.hyperedges.append(CausalEdge(sources, target, node, w))
         intermediary_id = len(self.mednodes) + 1
+        # Hyperedges with only one source.
         for edge in self.mededges:
             if "and" not in edge.source.nodeid:
                 if "and" not in edge.target.nodeid:
@@ -502,13 +504,13 @@ class CausalGraph(object):
                     secured_hyperedges.append(edge)
             # 3) Set rank of the target of secured hyperedges.
             for edge in secured_hyperedges:
-                #if edge.target.rank == None:
-                source_ranks = []
-                for source in edge.source.nodelist:
-                    if source.intro == False:
-                        source_ranks.append(source.rank)
-                edge.target.rank = max(source_ranks)+1
-                current_nodes.append(edge.target)
+                if edge.target.rank == None:
+                    source_ranks = []
+                    for source in edge.source.nodelist:
+                        if source.intro == False:
+                            source_ranks.append(source.rank)
+                    edge.target.rank = max(source_ranks)+1
+                    current_nodes.append(edge.target)
             # 4) Remove current_nodes that point to nodes that are all ranked.
             next_nodes = []
             for current_node in current_nodes:
@@ -541,15 +543,15 @@ class CausalGraph(object):
                 for edge in intro_hyperedges:
                     target_ranks.append(edge.target.rank)
                 node.rank = min(target_ranks)-1
-        self.rank_intermediary()
+        self.rank_intermediary(self.hyperedges)
         self.get_maxrank()
         self.sequentialize_ids()
 
 
-    def rank_intermediary(self):
+    def rank_intermediary(self, edgegroup):
         """  Rank intermediary nodes. """
     
-        for edge in self.hyperedges:
+        for edge in edgegroup:
             source_ranks = []
             for node in edge.source.nodelist:
                 source_ranks.append(node.rank)
@@ -952,6 +954,7 @@ class CausalGraph(object):
                     mednode = IntermediaryNode("and{}".format(intermediary_id))
                     intermediary_id += 1
                     self.coveredges.append(CausalEdge(src, t1, mednode, w))
+        self.rank_intermediary(self.coveredges)
                     
 
     def check_intro_src(self, chk_edge):
@@ -1071,18 +1074,19 @@ class CausalGraph(object):
             if showintro == False:
                 for cedge in self.coveredges:
                     if cedge.mednode.rank == current_rank:
-                        ratio = cedge.weight/average_weight
-                        pensize = math.log(ratio,2) + medpenwidth
-                        if pensize < minpenwidth:
-                            pensize = minpenwidth
-                        if pensize > maxpenwidth:
-                            pensize = maxpenwidth
-                        pensize = math.sqrt(pensize)/12
-                        dot_str += '"{}" [label="", '.format(cedge.mednode.nodeid)
-                        dot_str += 'shape=point, style=filled, fillcolor=black, '
-                        dot_str += 'hyperand=True, '
-                        dot_str += 'width={}, height={}, '.format(pensize, pensize)
-                        dot_str += 'cover="True"] ;\n'
+                        if len(cedge.source.nodelist) > 1:
+                            ratio = cedge.weight/average_weight
+                            pensize = math.log(ratio,2) + medpenwidth
+                            if pensize < minpenwidth:
+                                pensize = minpenwidth
+                            if pensize > maxpenwidth:
+                                pensize = maxpenwidth
+                            pensize = math.sqrt(pensize)/12
+                            dot_str += '"{}" [label="", '.format(cedge.mednode.nodeid)
+                            dot_str += 'shape=point, style=filled, fillcolor=black, '
+                            dot_str += 'hyperand=True, '
+                            dot_str += 'width={}, height={}, '.format(pensize, pensize)
+                            dot_str += 'cover="True"] ;\n'
             # Close rank braces.
             if showintro == False and current_rank < 1:
                 dot_str += "//"
@@ -1173,7 +1177,7 @@ class CausalGraph(object):
                         dot_str += 'cover="True"] ;\n'
                     # Intermediary edge to target.
                     dot_str += ('"{}" -> "{}" '
-                                .format(edge.mednode.nodeid, cedge.target.nodeid))
+                                .format(cedge.mednode.nodeid, cedge.target.nodeid))
                     dot_str += '[penwidth={}'.format(pensize)
                     dot_str += ', color={}'.format(edge_color)
                     if edgelabels == True:
@@ -1269,6 +1273,7 @@ def run_kaflow(eoi, trace_path, kaflowpath):
    """ Run KaFlow on the trace containing the EOI. """
 
    subprocess.run(("{}".format(kaflowpath),
+                   "--precedence-only",
                    "-o", "{}/causalcore-".format(eoi),
                    "{}".format(trace_path)))
 
