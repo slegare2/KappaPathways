@@ -555,13 +555,13 @@ class CausalGraph(object):
             source_ranks = []
             for node in edge.source.nodelist:
                 source_ranks.append(node.rank)
-            max_src_rank = max(source_ranks)
-            if edge.target.rank > max_src_rank+1:
-                edge.mednode.rank = ( edge.target.rank + max_src_rank ) / 2
-            elif edge.target.rank == max_src_rank+1:
-                edge.mednode.rank = max(source_ranks)+0.5
+            if edge.target.rank > max(source_ranks):
+                edge.mednode.rank = ( edge.target.rank + max(source_ranks) ) / 2.0
+            elif edge.target.rank < min(source_ranks):
+                edge.mednode.rank = ( edge.target.rank + min(source_ranks) ) / 2.0
             else:
-                edge.mednode.rank = edge.target.rank
+                ranks_set = list(set(source_ranks))
+                edge.mednode.rank = statistics.mean(ranks_set)
 
 
 #    def rank_nodes(self):
@@ -2239,7 +2239,7 @@ def complete_req(graph, mod_nodes):
         for top_node in mod_nodes:
             if top_node != mod_node:
                 top_nodes.append(top_node)
-        paths = graph.climb_up(mod_node, top_nodes)
+        paths = graph.follow_edges("up", mod_node, top_nodes)
         all_reqs = []
         for path in paths:
             path_reqs = []
@@ -3369,22 +3369,22 @@ def rebranch(graph, mod_nodes):
         node = graph.nodes[j]
         if node not in mod_nodes:
             up_edges = []
-            for i in range(len(graph.edges)-1, -1, -1):
-                edge = graph.edges[i]
+            for i in range(len(graph.hyperedges)-1, -1, -1):
+                edge = graph.hyperedges[i]
                 if edge.target == node:
                     up_edges.append(edge)
-                    del(graph.edges[i])
+                    del(graph.hyperedges[i])
             down_edges = []
-            for i in range(len(graph.edges)-1, -1, -1):
-                edge = graph.edges[i]
+            for i in range(len(graph.hyperedges)-1, -1, -1):
+                edge = graph.hyperedges[i]
                 if edge.source == node:
                     down_edges.append(edge)
-                    del(graph.edges[i])
+                    del(graph.hyperedges[i])
             for up_edge in up_edges:
                 for down_edge in down_edges:
                     new_edge = CausalEdge(up_edge.source, down_edge.target,
                                           up_edge.weight)
-                    graph.edges.append(new_edge)
+                    graph.hyperedges.append(new_edge)
             del(graph.nodes[j])
     #graph.update()
 
