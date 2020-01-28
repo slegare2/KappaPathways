@@ -188,7 +188,7 @@ class CausalEdge(object):
     """
 
     def __init__(self, source, target, mednode, weight=1, loop=False,
-                 underlying=False):
+                 color="black", underlying=False):
         """ Initialize class CausalEdge. """
 
         self.source = source
@@ -196,6 +196,7 @@ class CausalEdge(object):
         self.mednode = mednode
         self.weight = weight
         self.loop = loop
+        self.color = color
         self.underlying = underlying
         self.check_types()
 
@@ -935,11 +936,12 @@ class CausalGraph(object):
                     # and target as edge1, ignoring intro nodes.
                     # They will all be grouped inside a single nointro edge.
                     for edge2 in self.hyperedges:
-                        if edge2 != edge1 and edge2.underlying == False:
-                            has_intro2, src2 = self.check_intro_src(edge2)
-                            t2 = edge2.target
-                            if same_nodes(src1, src2) and t1 == t2:
-                                edge_group.append(edge2)
+                        if edge2.color == edge1.color:
+                            if edge2 != edge1 and edge2.underlying == False:
+                                has_intro2, src2 = self.check_intro_src(edge2)
+                                t2 = edge2.target
+                                if same_nodes(src1, src2) and t1 == t2:
+                                    edge_group.append(edge2)
             if len(edge_group) > 0:
                 # Compute weight of nointro edge as the sum of all its
                 # underlying edges. Also mark edges that were used as
@@ -953,7 +955,8 @@ class CausalGraph(object):
                     src = NodeGroup(src1, "and")
                     mednode = IntermediaryNode("and{}".format(intermediary_id))
                     intermediary_id += 1
-                    self.coveredges.append(CausalEdge(src, t1, mednode, w))
+                    self.coveredges.append(CausalEdge(src, t1, mednode, w,
+                                                      color=edge1.color))
         self.rank_intermediary(self.coveredges)
                     
 
@@ -1066,7 +1069,9 @@ class CausalGraph(object):
                             pensize = maxpenwidth
                         pensize = math.sqrt(pensize)/12
                         dot_str += '"{}" [label="", '.format(edge.mednode.nodeid)
-                        dot_str += 'shape=point, style=filled, fillcolor=black, '
+                        dot_str += 'shape=point, style=filled, '
+                        dot_str += 'color={}, '.format(edge.color)
+                        dot_str += 'fillcolor={}, '.format(edge.color)
                         dot_str += 'hyperand=True, '
                         dot_str += 'width={}, height={}] ;\n'.format(pensize, pensize)
             # Intermediary nodes from cover edges, same as above but only
@@ -1083,7 +1088,9 @@ class CausalGraph(object):
                                 pensize = maxpenwidth
                             pensize = math.sqrt(pensize)/12
                             dot_str += '"{}" [label="", '.format(cedge.mednode.nodeid)
-                            dot_str += 'shape=point, style=filled, fillcolor=black, '
+                            dot_str += 'shape=point, style=filled, '
+                            dot_str += 'color={}, '.format(cedge.color)
+                            dot_str += 'fillcolor={}, '.format(cedge.color)
                             dot_str += 'hyperand=True, '
                             dot_str += 'width={}, height={}, '.format(pensize, pensize)
                             dot_str += 'cover="True"] ;\n'
@@ -1111,7 +1118,7 @@ class CausalGraph(object):
         # The weight of each intermediary edge should be the same.
         for edge in self.hyperedges:
             sources = edge.source.nodelist
-            edge_color = 'black'
+            edge_color = edge.color
             ratio = edge.weight/average_weight
             pensize = math.log(ratio,2) + medpenwidth
             if pensize < minpenwidth:
@@ -1151,7 +1158,7 @@ class CausalGraph(object):
         if showintro == False:
             for cedge in self.coveredges:
                 sources = cedge.source.nodelist
-                edge_color = 'black'
+                edge_color = cedge.color
                 ratio = cedge.weight/average_weight
                 pensize = math.log(ratio,2) + medpenwidth
                 if pensize < minpenwidth:
@@ -1898,7 +1905,114 @@ def ignored_edge(edge, ignore_list):
 
     return is_ignored
 
-# ///////////// End of  Event Paths Simplifying Section ///////////////////////
+# ///////////// End of Event Paths Simplifying Section //////////////////////
+
+# ++++++++++++++ Core Mapping on Event Pathway Section ++++++++++++++++++++++
+
+def mapcores(eoi, causalgraphs=None, ignorelist=None, template=None,
+             edgelabels=False, showintro=False, writedot=True, rmprev=False):
+    """
+    Create a new CausalGraph for each core, where the core is mapped on
+    the layout of the event pathway.
+    """
+
+    # Reading cores.
+    if causalgraphs == None:
+        path_files = get_dot_files(eoi, "core")
+        event_paths = []
+        for path_file in path_files:
+            path_path = "{}/{}".format(eoi, path_file)
+            event_paths.append(CausalGraph(path_path, eoi))
+    else:
+        event_paths = causalgraphs
+        path_files = None
+    # Reading event pathway template.
+    if template == None:
+        template_path = "{}/eventpathway.dot".format(eoi)
+    else:
+        template_path = template
+    mappedcores = []
+    # Doing the work.
+    flush_ignored(event_paths, path_files, ignorelist) 
+    for event_path in event_paths:
+        mappedcore = CausalGraph(template_path, eoi)
+        mappedcore.occurrence = event_path.occurrence
+        for edge in mappedcore.hyperedges:
+            edge.color = "grey90"
+            edge.weight = mappedcore.occurrence
+        edges_to_add = []
+        intermediary_id = mappedcore.find_max_med_id()+1
+        for i in range(1, event_path.maxrank+1):
+            rank_edges = []
+            for edge in event_path.hyperedges:
+               if edge.target.rank == i:
+                   rank_edges.append(edge)
+            # Find the nodes with same labels in the event pathway template.
+            for rank_edge in rank_edges:
+                source_labels = []
+                for node in rank_edge.source.nodelist:
+                    source_labels.append(node.label)
+                mapped_sources = []
+                mapped_target = None
+                for node in mappedcore.nodes:
+                    if node.label in source_labels:
+                        mapped_sources.append(node)
+                    if node.label == rank_edge.target.label:
+                        mapped_target = node
+                # Remove original edge in event pathway.
+                edges_to_remove = [] 
+                for j in range(len(mappedcore.hyperedges)):
+                    edge_found = False
+                    path_target = mappedcore.hyperedges[j].target
+                    if mapped_target == path_target:
+                        edge_found = True
+                        path_srcs = mappedcore.hyperedges[j].source.nodelist
+                        for mapped_source in mapped_sources:
+                            if mapped_source not in path_srcs:
+                                edge_found = False
+                                break
+                        for path_src in path_srcs:
+                            if path_src not in mapped_sources:
+                                edge_found = False
+                                break
+                    if edge_found == True:
+                        edges_to_remove.insert(0, j)
+                for j in edges_to_remove:
+                    del(mappedcore.hyperedges[j])
+                # Add a new edge from mapped_sources to mapped_target.
+                mednode = IntermediaryNode("and{}".format(intermediary_id))
+                intermediary_id += 1
+                w = event_path.occurrence
+                sources = NodeGroup(mapped_sources, "and")
+                maxr = float(event_path.maxrank)
+                col_val = 0.25+(i/maxr)*0.75
+                edge_color = '"{:.3} 1 1"'.format(col_val)
+                edges_to_add.append(CausalEdge(sources, mapped_target,
+                                               mednode, w, color=edge_color))
+        for edge_to_add in edges_to_add:
+            mappedcore.hyperedges.append(edge_to_add)
+        mappedcore.rank_sequential()
+        mappedcores.append(mappedcore)
+    for i in range(len(mappedcores)):
+        mappedcores[i].filename = "mapped-{}.dot".format(i+1)
+    for graph in mappedcores:
+        graph.build_dot_file(edgelabels, showintro)
+    # Writing section.
+    if writedot == True:
+        for graph in mappedcores:
+            output_path = "{}/{}".format(eoi, graph.filename)
+            outfile = open(output_path, "w")
+            outfile.write(graph.dot_file)
+            outfile.close()
+    if rmprev == True:
+        if path_files == None:
+            path_files = get_dot_files(eoi, "core")
+        for path_file in path_files:
+            file_path = "{}/{}".format(eoi, path_file)
+            os.remove(file_path)
+
+
+# ++++++++++++ End of Core Mapping on Event Pathway Section ++++++++++++++++++
 
 # """"""""""""""" Species Pathway Conversion Section """"""""""""""""""""""""""
 
