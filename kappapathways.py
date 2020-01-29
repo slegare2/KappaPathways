@@ -14,12 +14,15 @@ import math
 import statistics
 
 
-class CausalNode(object):
-    """ An individual event node to use in causal graphs. """
+class EventNode(object):
+    """
+    An event node to use in causal graphs. It represents a specific event in
+    causal cores and an event type (a rule) in pathways.
+    """
 
     def __init__(self, nodeid, label, rank=None, weight=None, intro=False,
                  first=False):
-        """ Initialize class CausalNode. """
+        """ Initialize class EventNode. """
 
         self.nodeid = nodeid
         self.label = label
@@ -31,7 +34,7 @@ class CausalNode(object):
 
 
     def check_types(self):
-        """ Check that CausalNode attributes have proper types. """
+        """ Check that EventNode attributes have proper types. """
 
         if not isinstance(self.nodeid, str):
             raise TypeError("nodeid should be a string.")
@@ -61,141 +64,20 @@ class CausalNode(object):
         return res
 
 
-class NodeGroup(object):
-    """
-    A list of nodes related by a 'and' or a 'or' relationship.
-    The elements of nodelist can be other NodeGroup objects.
-    Argument relationship can take values 'and' or 'or'.
-    !!! May eventually need to let it allow nested groups.
-    !!! nodelist will then be like [CausalNode, CausalNone, NodeGroup, ...]
-    """
-
-    def __init__(self, nodelist, relationship="and"):
-        """ Initialize class NodeGroup. """
-
-        self.nodelist = nodelist
-        self.relationship = relationship
-
-
-    def __repr__(self):
-        """ Representation of the NodeGroup object. """
-
-        res = "("
-        for i in range(len(self.nodelist)):
-            if i > 0:
-                res += "{}\n".format(self.relationship)
-            res += "{}".format(self.nodelist[i])
-            if i == len(self.nodelist)-1:
-                res += ")"
-            else:
-                res += "\n"
-
-        return res
-
-
-class IntermediaryNode(object):
-    """ Intermediary node to emulate hyperedges. """
-
-    def __init__(self, nodeid, rank=None, weight=None, relationship="and"):
-        """ Initialize class IntermediaryNode. """
-
-        self.nodeid = nodeid
-        self.label = ""
-        self.rank = rank
-        self.weight = weight
-        self.relationship = relationship
-        self.check_types()
-
-
-    def check_types(self):
-        """ Check that IntermediaryNode attributes have proper types. """
-
-        if not isinstance(self.nodeid, str):
-            raise TypeError("nodeid should be a string.")
-        if self.rank != None:
-            if not isinstance(self.rank, float):
-                raise TypeError("IntermediaryNode rank should be an float.")
-        if self.weight != None:
-            if not isinstance(self.weight, int):
-                if not isinstance(self.weight, float):
-                    raise TypeError("weight should be an integer or float.")
-
-
-    def __repr__(self):
-        """ Representation of the IntermediaryNode object. """
-
-        res =  "Node "
-        res += 'id: "{}", '.format(self.nodeid)
-        if self.rank != None:
-            res += ",  rank: {}".format(self.rank)
-        if self.weight != None:
-            res += ",  weight: {}".format(self.weight) 
-
-        return res
-
-
-class IntermediaryEdge(object):
-    """
-    Intermediary edge to construct hyperedges. The source and target can be
-    either a CausalNode or an IntermediaryNode (as opposed to CausalEdge,
-    whose source can only be a NodeGroup and target can only be a CausalNode).
-    """
-
-    def __init__(self, source, target, weight=1):
-        """ Initialize class IntermediaryEdge. """
-
-        self.source = source
-        self.target = target
-        self.weight = weight
-        self.check_types()
-
-
-    def check_types(self):
-        """ Check that IntermediaryEdge attributes have proper types. """
-
-        if not isinstance(self.source, CausalNode):
-            if not isinstance(self.source, IntermediaryNode):
-                raise TypeError("source should be a CausalNode or "
-                                "IntermediaryNode.")
-        if not isinstance(self.target, CausalNode):
-            if not isinstance(self.target, IntermediaryNode):
-                raise TypeError("target should be a CausalNode or "
-                                 "IntermediaryNode.")
-        if self.weight != None:
-            if not isinstance(self.weight, int):
-                if not isinstance(self.weight, float):
-                    raise TypeError("weight should be an integer or float.")
-
-
-    def __repr__(self):
-        """ Representation of the CausalEdge object. """
-
-        res =  "Edge"
-        if self.weight != None:
-            res += "  weight = {}".format(self.weight)
-        res += "\n"
-        res += "source: {}\n".format(self.source)
-        res += "target: {}\n".format(self.target)
-
-        return res
-
-
 class CausalEdge(object):
     """
-    A causal relationship in causal graphs. CausalEdges are hyperedges.
-    They can have as many source nodes but only one target. Source
-    nodes must be given as a NodeGroup object.
+    A relationship between two event nodes in causal graphs. The relationship
+    can be precedence (default), causal or conflict.
     """
 
-    def __init__(self, source, target, mednode, weight=1, loop=False,
+    def __init__(self, source, target, weight=1, relationtype="precedence",
                  color="black", underlying=False):
         """ Initialize class CausalEdge. """
 
         self.source = source
         self.target = target
-        self.mednode = mednode
         self.weight = weight
-        self.loop = loop
+        self.relationtype = relationtype
         self.color = color
         self.underlying = underlying
         self.check_types()
@@ -204,12 +86,10 @@ class CausalEdge(object):
     def check_types(self):
         """ Check that CausalEdge attributes have proper types. """
 
-        if not isinstance(self.source, NodeGroup):
-            raise TypeError("source should be a NodeGroup.")
-        if not isinstance(self.target, CausalNode):
-            raise TypeError("target should be a CausalNode.")
-        if not isinstance(self.mednode, IntermediaryNode):
-            raise TypeError("mednode should be a IntermediaryNode.")
+        if not isinstance(self.source, EventNode):
+            raise TypeError("source should be an EventNode.")
+        if not isinstance(self.target, EventNode):
+            raise TypeError("target should be an EventNode.")
         if self.weight != None:
             if not isinstance(self.weight, int):
                 if not isinstance(self.weight, float):
@@ -229,22 +109,138 @@ class CausalEdge(object):
         return res
 
 
-class CausalGraph(object):
-    """ General data structure for causal hypergraphs. """
+class MidNode(object):
+    """
+    Intermediary node to represent edge groups as CombinedEdge objects.
+    MidNodes can be enablings (black by default) or requirements
+    (white by default).
+    """
 
-    def __init__(self, filename=None, eoi=None, hypergraph=False,
+    def __init__(self, nodeid, rank=None, midtype="enabling", logic="and"):
+        """ Initialize class MidNode. """
+
+        self.nodeid = nodeid
+        self.label = ""
+        self.rank = rank
+        self.midtype = midtype # enabling or requirement
+        self.logic = logic
+        self.check_types()
+
+
+    def check_types(self):
+        """ Check that MidNode attributes have proper types. """
+
+        if not isinstance(self.nodeid, str):
+            raise TypeError("nodeid should be a string.")
+        if self.rank != None:
+            if not isinstance(self.rank, float):
+                raise TypeError("rank should be an float.")
+
+
+    def __repr__(self):
+        """ Representation of the MidNode object. """
+
+        res =  "Node "
+        res += 'id: "{}", '.format(self.nodeid)
+        if self.rank != None:
+            res += ",  rank: {}".format(self.rank)
+
+        return res
+
+
+class MidEdge(object):
+    """
+    Intermediary edge to construct combined edges. Source and target can
+    be either an EventNode or a MidNode.
+    """
+
+    def __init__(self, source, target, weight=1):
+        """ Initialize class MidEdge. """
+
+        self.source = source
+        self.target = target
+        self.weight = weight
+        self.check_types()
+
+
+    def check_types(self):
+        """ Check that MidEdge attributes have proper types. """
+
+        if not isinstance(self.source, EventNode):
+            if not isinstance(self.source, MidNode):
+                raise TypeError("source should be a EventNode or MidNode.")
+        if not isinstance(self.target, EventNode):
+            if not isinstance(self.target, MidNode):
+                raise TypeError("target should be a EventNode or MidNode.")
+        if self.weight != None:
+            if not isinstance(self.weight, int):
+                if not isinstance(self.weight, float):
+                    raise TypeError("weight should be an integer or float.")
+
+
+    def __repr__(self):
+        """ Representation of the MidEdge object. """
+
+        res =  "Edge"
+        if self.weight != None:
+            res += "  weight = {}".format(self.weight)
+        res += "\n"
+        res += "source: {}\n".format(self.source)
+        res += "target: {}\n".format(self.target)
+
+        return res
+
+
+class CombinedEdge(object):
+    """
+    Single edge made of a group of edges glued together by intermediary nodes.
+    """
+
+    def __init__(self, midnodes, midedges, weight=1):
+        """ Initialize class CombinedEdge. """
+
+        self.midnodes = midnodes
+        self.midedges = midedges
+        self.weight = weight
+
+
+    def __repr__(self):
+        """ Representation of the CombinedEdge object. """
+
+        res =  "MidNodes:\n"
+        for midnode in self.midnodes:
+            res+="{}\n".format(midnode.__repr__())
+        res += "MidEdges:\n"
+        for midedge in self.midedges:
+            res+="{}\n".format(midedge.__repr__())
+
+        if self.weight != None:
+            res += "  weight = {}".format(self.weight)
+
+        return res
+
+
+class CausalGraph(object):
+    """ Data structure for causal graphs. """
+
+    def __init__(self, filename=None, eoi=None, combinedgraph=False,
                  nodestype="event", showintro=True):
         """ Initialize class CausalGraph. """
 
+        # Header variables.
         self.filename = filename
         self.eoi = eoi
-        self.hypergraph = hypergraph
+        self.combinedgraph = combinedgraph
         self.nodestype = nodestype # event or species
         self.showintro = showintro
-        self.nodes = []
-        self.hyperedges = []
-        self.mednodes = []
-        self.mededges = []
+        # Main variables.
+        self.eventnodes = []
+        self.causaledges = []
+        self.edgegroups = []
+        self.midnodes = []
+        self.midedges = []
+        self.combinededges = []
+        # Post computed variables.
         self.coveredges = []
         self.occurrence = 1
         self.maxrank = None
@@ -255,15 +251,15 @@ class CausalGraph(object):
 
     def read_dot(self, dotpath):
         """
-        Read rules (nodes) and causal links (edges) from input causal core.
+        Read event nodes and causal edges from input causal graph.
         """
 
         rank = None
         self.label_mapping = {}
         dotfile = open(dotpath, "r").readlines()
         for line in dotfile:
-            if 'hypergraph="True"' in line:
-                self.hypergraph = True
+            if 'combinedgraph="True"' in line:
+                self.combinedgraph = True
             if "nodestype=" in line:
                 type_index = line.index("nodestype")
                 quote = line.rfind('"')
@@ -313,14 +309,15 @@ class CausalGraph(object):
                             is_first = True
                         else:
                             is_first = False
-                        if "hyperand=True" not in line:
-                            self.nodes.append(CausalNode(node_id, label, rank,
-                                                         intro=is_intro,
-                                                         first=is_first))
+                        if "midnode=True" not in line:
+                            self.eventnodes.append(EventNode(node_id, label,
+                                                             rank,
+                                                             intro=is_intro,
+                                                             first=is_first))
                             self.label_mapping[node_id] = label
                         else:
-                            interm_node = IntermediaryNode(ori_id, rank=medrank)
-                            self.mednodes.append(interm_node)
+                            interm_node = MidNode(ori_id, rank=medrank)
+                            self.midnodes.append(interm_node)
         tmp_edges = []
         for line in dotfile:
             if "->" in line and 'style="invis"' not in line:
@@ -340,12 +337,12 @@ class CausalGraph(object):
                         target_id = target_id[1:-1]
                     if "node" not in target_id and "and" not in target_id:
                         target_id = "node{}".format(target_id)
-                    for node in self.nodes:
+                    for node in self.eventnodes:
                         if node.nodeid == source_id:
                             source = node
                         if node.nodeid == target_id:
                             target = node
-                    for node in self.mednodes:
+                    for node in self.midnodes:
                         if node.nodeid == source_id:
                             source = node
                         if node.nodeid == target_id:
@@ -360,9 +357,9 @@ class CausalGraph(object):
                         weight = int(read_line[weight_start:weight_end])
                     else:
                         weight = 1
-                    tmp_edges.append(IntermediaryEdge(source, target, weight))
+                    tmp_edges.append(CausalEdge(source, target, weight))
         for edge in tmp_edges:
-            self.mededges.insert(0, edge)
+            self.causaledges.insert(0, edge)
         self.postprocess()
 
 
@@ -372,14 +369,22 @@ class CausalGraph(object):
         of hyperedges from the intermediary nodes and edges.
         """
 
-        if self.hypergraph == False:
-            self.create_hyperedges()
-            for node in self.nodes:
+        if self.combinedgraph == False:
+            self.create_edgegroups()
+            self.create_combinededges()
+            for node in self.eventnodes:
                 if "Intro" in node.label:
                     node.intro = True
+            for c in self.combinededges:
+                print("--------")
+                for n in c.midnodes:
+                    print(n)
+                print("========")
+                for m in c.midedges:
+                    print(m)
             self.find_first_rules()
             self.rank_sequential()
-            self.hypergraph = True
+            self.combinedgraph = True
         elif self.hypergraph == True:
            self.read_hyperedges()
         if self.eoi == None:
@@ -388,6 +393,123 @@ class CausalGraph(object):
                 if node.rank == self.maxrank:
                     self.eoi = node.label
         self.build_nointro()
+
+
+    def create_edgegroups(self):
+        """
+        Group edges together when there is a path between them using only
+        head-to-head and tail-to-tail connections.
+
+        Example: The 3 edges in the following graph form a single group.
+
+                 A  B
+                 | /|
+                 |/ |
+                 C  D
+        """
+
+        edgescopy = self.causaledges.copy()
+        while len(edgescopy) > 0:
+            current_group = [edgescopy[0]]
+            del(edgescopy[0])
+            new_edge_found = True
+            while new_edge_found == True:
+                # Find sources and targets:
+                sources = []
+                targets = []
+                for current_edge in current_group:
+                    if current_edge.source not in sources:
+                        sources.append(current_edge.source)
+                    if current_edge.target not in targets:
+                        targets.append(current_edge.target)
+                # Find other edges with same source or target.
+                new_edge_found = False
+                copy_to_remove = []
+                for i in range(len(edgescopy)):
+                    other_source = edgescopy[i].source
+                    other_target = edgescopy[i].target
+                    if other_source in sources or other_target in targets:
+                        new_edge_found = True
+                        current_group.append(edgescopy[i])
+                        copy_to_remove.insert(0, i)
+                for i in copy_to_remove:
+                    del(edgescopy[i])
+                if new_edge_found == False:
+                    self.edgegroups.append(current_group)
+
+
+    def create_combinededges(self):
+        """ Create combined edges from edge groups. """
+
+        midid = 1
+        for group in self.edgegroups:
+            # Collect all sources and targets.
+            sources = []
+            targets = []
+            for edge in group:
+                if edge.source not in sources:
+                    sources.append(edge.source)
+                if edge.target not in targets:
+                    targets.append(edge.target)
+            # Create intermediary nodes for event nodes with more than one
+            # input or output. Also create an edge between those intermediary
+            # nodes and the corresponding event nodes.
+            #node_map = {}
+            midnodes = []
+            midedges = []
+            req_sources = []
+            for source in sources:
+                outgoing = []
+                for edge in group:
+                    if edge.source == source:
+                        outgoing.append(edge)
+                if len(outgoing) > 1:
+                    req_sources.append(source)
+                    midnodes.append(MidNode("mid{}".format(midid),
+                                            midtype="requirement"))
+                    #node_map[source.nodeid] = midnodes[-1]
+                    midedges.append(MidEdge(source, midnodes[-1]))
+                    midid += 1
+            ena_targets = []
+            for target in targets:
+                ingoing = []
+                for edge in group:
+                    if edge.target == target:
+                        ingoing.append(edge)
+                if len(ingoing) > 1:
+                    ena_targets.append(target)
+                    midnodes.append(MidNode("mid{}".format(midid),
+                                            midtype="enabling"))
+                    #node_map[source.nodeid] = midnodes[-1]
+                    midedges.append(MidEdge(midnodes[-1], target))
+                    midid += 1
+            # Add the intermediary edges corresponding to the original edges.
+            for ori_edge in group:
+                if ori_edge.source in req_sources:
+                    for midedge in midedges:
+                        if midedge.source == ori_edge.source:
+                            s = midedge.target
+                else:
+                    s = ori_edge.source
+                if ori_edge.target in ena_targets:
+                    for midedge in midedges:
+                        if midedge.target == ori_edge.target:
+                            t = midedge.source
+                else:
+                    t = ori_edge.target
+                midedges.append(MidEdge(s, t))
+
+            #print("--------")
+            #for e in group:
+            #    print(e)
+            #print("////////")
+            #for n in midnodes:
+            #    print(n)
+            #print("========")
+            #for m in midedges:
+            #    print(m)
+            w = group[0].weight
+            self.combinededges.append(CombinedEdge(midnodes, midedges, w))
 
 
     def create_hyperedges(self):
@@ -451,13 +573,12 @@ class CausalGraph(object):
         incoming nodes. This should only be applied to acyclic graphs.
         """
 
-        for node in self.nodes:
+        for node in self.eventnodes:
             if node.intro == False:
                 incoming_nodes = []
-                for edge in self.hyperedges:
+                for edge in self.causaledges:
                     if edge.target == node:
-                        for src_node in edge.source.nodelist:
-                            incoming_nodes.append(src_node)
+                        incoming_nodes.append(edge.source)
                 all_intro = True
                 for incoming_node in incoming_nodes:
                     if incoming_node.intro == False:
@@ -476,18 +597,18 @@ class CausalGraph(object):
 
         # Initialize ranks.
         current_nodes = []
-        for node in self.nodes:
+        for node in self.eventnodes:
             if node.first == True:
                 node.rank = 1
                 current_nodes.append(node)
             else:
                 node.rank = None
-        for mednode in self.mednodes:
+        for mednode in self.midnodes:
             mednode.rank = None
         while len(current_nodes) > 0:
             # 1) Gather all hyperedges that come out from a current_node.
             current_hyperedges = []
-            for edge in self.hyperedges:
+            for edge in self.combinededges:
                 for current_node in current_nodes:
                     if current_node in edge.source.nodelist:
                         if edge not in current_hyperedges:
@@ -517,7 +638,7 @@ class CausalGraph(object):
             for current_node in current_nodes:
                 keep_node = False
                 node_targets = []
-                for edge in self.hyperedges:
+                for edge in self.combinededges:
                     if current_node in edge.source.nodelist:
                         if edge.target not in node_targets:
                             node_targets.append(edge.target)
@@ -529,12 +650,12 @@ class CausalGraph(object):
                     next_nodes.append(current_node)
             current_nodes = next_nodes
         # Rank intro nodes.
-        for node in self.nodes:
+        for node in self.eventnodes:
             if node.intro == True:
                 # 1) Find all hyperedges that have current
                 #    intro node as source.
                 intro_hyperedges = []
-                for edge in self.hyperedges:
+                for edge in self.combinededges:
                     if node in edge.source.nodelist:
                         if edge not in intro_hyperedges:
                             intro_hyperedges.append(edge)
