@@ -12,6 +12,7 @@ import warnings
 import json
 import math
 import statistics
+import random
 
 
 class EventNode(object):
@@ -111,7 +112,7 @@ class CausalEdge(object):
 
 class MidNode(object):
     """
-    Intermediary node to represent edge groups as CombinedEdge objects.
+    Intermediary node to represent edge groups as Mesh objects.
     MidNodes can be enablings (black by default) or requirements
     (white by default).
     """
@@ -122,8 +123,12 @@ class MidNode(object):
         self.nodeid = nodeid
         self.label = ""
         self.rank = rank
-        self.midtype = midtype # enabling or requirement
+        self.midtype = midtype # enabling or involvement
         self.logic = logic
+        if self.midtype == "enabling":
+            self.color = "black"
+        elif self.midtype == "involvement":
+            self.color = "white"
         self.check_types()
 
 
@@ -142,26 +147,18 @@ class MidNode(object):
 
         res =  "Node "
         res += 'id: "{}", '.format(self.nodeid)
+        res += 'type: "{}", '.format(self.midtype)
         if self.rank != None:
             res += ",  rank: {}".format(self.rank)
 
         return res
 
 
-class MidEdge(object):
+class MidEdge(CausalEdge):
     """
-    Intermediary edge to construct combined edges. Source and target can
+    Intermediary edge to construct meshes. Source and target can
     be either an EventNode or a MidNode.
     """
-
-    def __init__(self, source, target, weight=1):
-        """ Initialize class MidEdge. """
-
-        self.source = source
-        self.target = target
-        self.weight = weight
-        self.check_types()
-
 
     def check_types(self):
         """ Check that MidEdge attributes have proper types. """
@@ -178,44 +175,195 @@ class MidEdge(object):
                     raise TypeError("weight should be an integer or float.")
 
 
-    def __repr__(self):
-        """ Representation of the MidEdge object. """
+class Mesh(object):
+    """
+    A mesh is made of a group of edges glued together by intermediary nodes.
+    """
 
-        res =  "Edge"
+    #def __init__(self, edgegroup, midid=1, weight=1, underlying=False,
+    #             color="black"):
+    def __init__(self, weight=1, underlying=False, color="black"):
+        """ Initialize class Mesh. """
+
+        #self.edgegroup = edgegroup
+        #self.midid = midid
+        self.weight = weight
+        self.underlying = underlying
+        self.color = color
+        self.midnodes = []
+        self.midedges = []
+
+
+    def get_events(self):
+        """
+        Return de sources and target nodes that are events from mesh object.
+        """
+
+        sources = []
+        targets = []
+        for midedge in self.midedges:
+            if isinstance(midedge.source, EventNode):
+                if midedge.source not in sources:
+                    sources.append(midedge.source)
+            if isinstance(midedge.target, EventNode):
+                if midedge.target not in targets:
+                    targets.append(midedge.target)
+
+        return sources, targets
+
+
+    def get_neighbors(self):
+        """ Get the event nodes connected to each midnodes. """
+
+        inv_neighbors = []
+        ena_neighbors = []
+        for midnode in self.midnodes:
+            event_srcs = []
+            event_trgs = []
+            if midnode.midtype == "involvement":
+                for midedge in self.midedges:
+                    if midedge.target == midnode:
+                        event_srcs.append(midedge.source)
+                    if midedge.source == midnode:
+                        if isinstance(midedge.target, EventNode):
+                            event_trgs.append(midedge.target)
+                        elif isinstance(midedge.target, MidNode):
+                            for midedge2 in self.midedges:
+                                if midedge2.source == midedge.target:
+                                    event_trgs.append(midedge2.target)
+                inv_neighbors.append({"srcs": event_srcs, "trgs": event_trgs})
+            if midnode.midtype == "enabling":
+                for midedge in self.midedges:
+                    if midedge.source == midnode:
+                        event_trgs.append(midedge.target)
+                    if midedge.target == midnode:
+                        if isinstance(midedge.source, EventNode):
+                            event_srcs.append(midedge.source)
+                        elif isinstance(midedge.source, MidNode):
+                            for midedge2 in self.midedges:
+                                if midedge2.target == midedge.source:
+                                    event_srcs.append(midedge2.source)
+                ena_neighbors.append({"srcs": event_srcs, "trgs": event_trgs})
+
+        return inv_neighbors, ena_neighbors
+
+
+#    def build_from_group(self):
+#        """
+#        Create the midnodes and midedges forming a mesh from an
+#        edge group.
+#        """
+#
+#        self.midnodes = []
+#        self.midedges = []
+#        # Collect all sources and targets.
+#        sources = []
+#        targets = []
+#        for edge in self.edgegroup:
+#            if edge.source not in sources:
+#                sources.append(edge.source)
+#            if edge.target not in targets:
+#                targets.append(edge.target)
+#        # Create intermediary nodes for event nodes with more than one
+#        # input or output. Also create an edge between those intermediary
+#        # nodes and the corresponding event nodes.
+#        inv_sources = []
+#        for source in sources:
+#            outgoing = []
+#            for edge in self.edgegroup:
+#                if edge.source == source:
+#                    outgoing.append(edge)
+#            if len(outgoing) > 1:
+#                inv_sources.append(source)
+#                self.midnodes.append(MidNode("mid{}".format(self.midid),
+#                                             midtype="involvement"))
+#                self.midedges.append(MidEdge(source, self.midnodes[-1]))
+#                self.midid += 1
+#        ena_targets = []
+#        for target in targets:
+#            ingoing = []
+#            for edge in self.edgegroup:
+#                if edge.target == target:
+#                    ingoing.append(edge)
+#            if len(ingoing) > 1:
+#                ena_targets.append(target)
+#                self.midnodes.append(MidNode("mid{}".format(self.midid),
+#                                        midtype="enabling"))
+#                self.midedges.append(MidEdge(self.midnodes[-1], target))
+#                self.midid += 1
+#        # Add the intermediary edges corresponding to the original edges.
+#        for ori_edge in self.edgegroup:
+#            if ori_edge.source in inv_sources:
+#                for midedge in self.midedges:
+#                    if midedge.source == ori_edge.source:
+#                        s = midedge.target
+#            else:
+#                s = ori_edge.source
+#            if ori_edge.target in ena_targets:
+#                for midedge in self.midedges:
+#                    if midedge.target == ori_edge.target:
+#                        t = midedge.source
+#            else:
+#                t = ori_edge.target
+#            self.midedges.append(MidEdge(s, t))
+#        w = self.edgegroup[0].weight
+#
+#
+#    def build_from_midnodes(self):
+#        """
+#        Create the midnodes and midedges forming a mesh from group
+#        of edges between midnodes.
+#        """
+#
+#        self.midnodes = []
+#        self.midedges = []
+#        keep = True
+#        for edge in self.edgegroup:
+#            if isinstance(edge.source, MidNode):
+#                if edge.source not in midnodes:
+#                    self.midnodes.append(edge.source)
+#            if isinstance(edge.target, MidNode):
+#                if edge.target not in midnodes:
+#                    self.midnodes.append(edge.target)
+#        if len(midnodes) == 1:
+#            keep = False
+#            midnode = midnodes[0]
+#            if midnode.midtype == "involvement":
+#                for edge in group:
+#                    if edge.target != midnode:
+#                        keep = True
+#                        break
+#            if midnode.midtype == "enabling":
+#                for edge in group:
+#                    if edge.source != midnode:
+#                        keep = True
+#                        break
+#
+#        return keep, midnodes
+#
+#
+#        return keep
+
+
+    def __repr__(self):
+        """ Representation of the Mesh object. """
+
+        res = "Mesh"
         if self.weight != None:
             res += "  weight = {}".format(self.weight)
-        res += "\n"
-        res += "source: {}\n".format(self.source)
-        res += "target: {}\n".format(self.target)
-
-        return res
-
-
-class CombinedEdge(object):
-    """
-    Single edge made of a group of edges glued together by intermediary nodes.
-    """
-
-    def __init__(self, midnodes, midedges, weight=1):
-        """ Initialize class CombinedEdge. """
-
-        self.midnodes = midnodes
-        self.midedges = midedges
-        self.weight = weight
-
-
-    def __repr__(self):
-        """ Representation of the CombinedEdge object. """
-
-        res =  "MidNodes:\n"
+        res += "\n\n"
+        #res += "Edge group:\n\n"
+        #for edge in self.edgegroup:
+        #    res+="{}\n".format(edge.__repr__())
+        res +=  "MidNodes:\n\n"
         for midnode in self.midnodes:
             res+="{}\n".format(midnode.__repr__())
-        res += "MidEdges:\n"
+        if len(self.midnodes) == 0:
+            res += "None\n"
+        res += "\n"
+        res += "MidEdges:\n\n"
         for midedge in self.midedges:
             res+="{}\n".format(midedge.__repr__())
-
-        if self.weight != None:
-            res += "  weight = {}".format(self.weight)
 
         return res
 
@@ -223,14 +371,14 @@ class CombinedEdge(object):
 class CausalGraph(object):
     """ Data structure for causal graphs. """
 
-    def __init__(self, filename=None, eoi=None, combinedgraph=False,
+    def __init__(self, filename=None, eoi=None, meshedgraph=False,
                  nodestype="event", showintro=True):
         """ Initialize class CausalGraph. """
 
         # Header variables.
         self.filename = filename
         self.eoi = eoi
-        self.combinedgraph = combinedgraph
+        self.meshedgraph = meshedgraph
         self.nodestype = nodestype # event or species
         self.showintro = showintro
         # Main variables.
@@ -239,9 +387,9 @@ class CausalGraph(object):
         self.edgegroups = []
         self.midnodes = []
         self.midedges = []
-        self.combinededges = []
-        # Post computed variables.
-        self.coveredges = []
+        self.meshes = []
+        # Post-computed variables.
+        self.covermeshes = []
         self.occurrence = 1
         self.maxrank = None
         self.prevcores = None
@@ -251,15 +399,15 @@ class CausalGraph(object):
 
     def read_dot(self, dotpath):
         """
-        Read event nodes and causal edges from input causal graph.
+        Read nodes and edges from input causal graph.
         """
 
         rank = None
         self.label_mapping = {}
         dotfile = open(dotpath, "r").readlines()
         for line in dotfile:
-            if 'combinedgraph="True"' in line:
-                self.combinedgraph = True
+            if 'meshedgraph="True"' in line:
+                self.meshedgraph = True
             if "nodestype=" in line:
                 type_index = line.index("nodestype")
                 quote = line.rfind('"')
@@ -283,6 +431,8 @@ class CausalGraph(object):
                 close_quote = line[open_quote+1:].index('"')+open_quote+1
                 medrank = float(line[open_quote+1:close_quote])
                 rank = int(medrank)
+            if line[0] == "}":
+                rank = None
             if "label=" in line and "Occurrence" not in line:
                 if "->" not in line and "rank = same" not in line:
                     if 'cover="True"' not in line:
@@ -309,16 +459,19 @@ class CausalGraph(object):
                             is_first = True
                         else:
                             is_first = False
-                        if "midnode=True" not in line:
+                        if "midtype" in read_line:
+                            mid_start = read_line.index('midtype')+8
+                            mid_end = read_line[mid_start:].index(',')+mid_start
+                            midtype = read_line[mid_start:mid_end]
+                            self.midnodes.append(MidNode(ori_id, rank, midtype))
+                        else:
                             self.eventnodes.append(EventNode(node_id, label,
                                                              rank,
                                                              intro=is_intro,
                                                              first=is_first))
                             self.label_mapping[node_id] = label
-                        else:
-                            interm_node = MidNode(ori_id, rank=medrank)
-                            self.midnodes.append(interm_node)
         tmp_edges = []
+        tmp_midedges = []
         for line in dotfile:
             if "->" in line and 'style="invis"' not in line:
                 if 'cover="True"' not in line and "tee" not in line:
@@ -330,12 +483,12 @@ class CausalGraph(object):
                     source_id = tokens[0]
                     if '"' in source_id:
                         source_id = source_id[1:-1]
-                    if "node" not in source_id and "and" not in source_id:
+                    if "node" not in source_id and "mid" not in source_id:
                         source_id = "node{}".format(source_id)
                     target_id = tokens[2]
                     if '"' in target_id:
                         target_id = target_id[1:-1]
-                    if "node" not in target_id and "and" not in target_id:
+                    if "node" not in target_id and "mid" not in target_id:
                         target_id = "node{}".format(target_id)
                     for node in self.eventnodes:
                         if node.nodeid == source_id:
@@ -357,45 +510,46 @@ class CausalGraph(object):
                         weight = int(read_line[weight_start:weight_end])
                     else:
                         weight = 1
-                    tmp_edges.append(CausalEdge(source, target, weight))
+                    source_is_mid = isinstance(source, MidNode)
+                    target_is_mid = isinstance(target, MidNode)
+                    if source_is_mid or target_is_mid:
+                        tmp_midedges.append(MidEdge(source, target, weight))
+                    else:
+                        tmp_edges.append(CausalEdge(source, target, weight))
         for edge in tmp_edges:
             self.causaledges.insert(0, edge)
+        for midedge in tmp_midedges:
+            self.midedges.insert(0, midedge)
         self.postprocess()
 
 
     def postprocess(self):
         """
         Various stuff to do after reading a dot file. Includes the creation
-        of hyperedges from the intermediary nodes and edges.
+        of meshes from the intermediary nodes and edges.
         """
 
-        if self.combinedgraph == False:
-            self.create_edgegroups()
-            self.create_combinededges()
+        if self.meshedgraph == False:
+            self.find_edgegroups()
+            self.create_meshes(self.edgegroups, 1)
             for node in self.eventnodes:
                 if "Intro" in node.label:
                     node.intro = True
-            for c in self.combinededges:
-                print("--------")
-                for n in c.midnodes:
-                    print(n)
-                print("========")
-                for m in c.midedges:
-                    print(m)
             self.find_first_rules()
             self.rank_sequential()
-            self.combinedgraph = True
-        elif self.hypergraph == True:
-           self.read_hyperedges()
+        elif self.meshedgraph == True:
+           self.find_edgegroups()
+           # At this point, self.edgegroups are not the "real" edgegroups.
+           # They are edgegroups between midnodes.
+           self.read_meshes()
         if self.eoi == None:
             self.get_maxrank()
             for node in self.nodes:
                 if node.rank == self.maxrank:
                     self.eoi = node.label
-        self.build_nointro()
 
 
-    def create_edgegroups(self):
+    def find_edgegroups(self):
         """
         Group edges together when there is a path between them using only
         head-to-head and tail-to-tail connections.
@@ -409,9 +563,11 @@ class CausalGraph(object):
         """
 
         edgescopy = self.causaledges.copy()
-        while len(edgescopy) > 0:
-            current_group = [edgescopy[0]]
-            del(edgescopy[0])
+        midedgescopy = self.midedges.copy()
+        alledges = edgescopy + midedgescopy
+        while len(alledges) > 0:
+            current_group = [alledges[0]]
+            del(alledges[0])
             new_edge_found = True
             while new_edge_found == True:
                 # Find sources and targets:
@@ -425,146 +581,144 @@ class CausalGraph(object):
                 # Find other edges with same source or target.
                 new_edge_found = False
                 copy_to_remove = []
-                for i in range(len(edgescopy)):
-                    other_source = edgescopy[i].source
-                    other_target = edgescopy[i].target
+                for i in range(len(alledges)):
+                    other_source = alledges[i].source
+                    other_target = alledges[i].target
                     if other_source in sources or other_target in targets:
                         new_edge_found = True
-                        current_group.append(edgescopy[i])
+                        current_group.append(alledges[i])
                         copy_to_remove.insert(0, i)
                 for i in copy_to_remove:
-                    del(edgescopy[i])
+                    del(alledges[i])
                 if new_edge_found == False:
                     self.edgegroups.append(current_group)
 
 
-    def create_combinededges(self):
-        """ Create combined edges from edge groups. """
+#    def create_meshes(self):
+#        """ Create meshes from edge groups. """
+#
+#        midid = 1
+#        for group in self.edgegroups:
+#            new_mesh = Mesh(group, midid)
+#            new_mesh.build_from_group()
+#            self.meshes.append(new_mesh)
+#            midid = new_mesh.midid
+#
+#        self.meshedgraph = True
 
-        midid = 1
-        for group in self.edgegroups:
+
+    def create_meshes(self, edgegroups, startid):
+        """ Create meshes from edge groups. """
+
+        midid = startid
+        for edgegroup in edgegroups:
+            new_mesh = Mesh()
             # Collect all sources and targets.
             sources = []
             targets = []
-            for edge in group:
+            for edge in edgegroup:
                 if edge.source not in sources:
                     sources.append(edge.source)
                 if edge.target not in targets:
                     targets.append(edge.target)
             # Create intermediary nodes for event nodes with more than one
             # input or output. Also create an edge between those intermediary
-            # nodes and the corresponding event nodes.
-            #node_map = {}
-            midnodes = []
-            midedges = []
-            req_sources = []
+            # nodes and the corresponding event nodes. 
+            inv_sources = []
             for source in sources:
                 outgoing = []
-                for edge in group:
+                for edge in edgegroup:
                     if edge.source == source:
                         outgoing.append(edge)
                 if len(outgoing) > 1:
-                    req_sources.append(source)
-                    midnodes.append(MidNode("mid{}".format(midid),
-                                            midtype="requirement"))
-                    #node_map[source.nodeid] = midnodes[-1]
-                    midedges.append(MidEdge(source, midnodes[-1]))
+                    inv_sources.append(source)
+                    new_midnode = MidNode("mid{}".format(midid),
+                                          midtype="involvement")
+                    new_midedge = MidEdge(source, new_midnode)
+                    new_mesh.midnodes.append(new_midnode)
+                    new_mesh.midedges.append(new_midedge)
                     midid += 1
             ena_targets = []
             for target in targets:
                 ingoing = []
-                for edge in group:
+                for edge in edgegroup:
                     if edge.target == target:
                         ingoing.append(edge)
                 if len(ingoing) > 1:
                     ena_targets.append(target)
-                    midnodes.append(MidNode("mid{}".format(midid),
-                                            midtype="enabling"))
-                    #node_map[source.nodeid] = midnodes[-1]
-                    midedges.append(MidEdge(midnodes[-1], target))
+                    new_midnode = MidNode("mid{}".format(midid),
+                                          midtype="enabling")
+                    new_midedge = MidEdge(new_midnode, target)
+                    new_mesh.midnodes.append(new_midnode)
+                    new_mesh.midedges.append(new_midedge)
                     midid += 1
             # Add the intermediary edges corresponding to the original edges.
-            for ori_edge in group:
-                if ori_edge.source in req_sources:
-                    for midedge in midedges:
+            for ori_edge in edgegroup:
+                if ori_edge.source in inv_sources:
+                    for midedge in new_mesh.midedges:
                         if midedge.source == ori_edge.source:
                             s = midedge.target
                 else:
                     s = ori_edge.source
                 if ori_edge.target in ena_targets:
-                    for midedge in midedges:
+                    for midedge in new_mesh.midedges:
                         if midedge.target == ori_edge.target:
                             t = midedge.source
                 else:
                     t = ori_edge.target
-                midedges.append(MidEdge(s, t))
-
-            #print("--------")
-            #for e in group:
-            #    print(e)
-            #print("////////")
-            #for n in midnodes:
-            #    print(n)
-            #print("========")
-            #for m in midedges:
-            #    print(m)
-            w = group[0].weight
-            self.combinededges.append(CombinedEdge(midnodes, midedges, w))
+                new_mesh.midedges.append(MidEdge(s, t))
+            new_mesh.weight = edgegroup[0].weight
+            self.meshes.append(new_mesh)
+        self.meshedgraph = True
 
 
-    def create_hyperedges(self):
+    def read_meshes(self):
+        """ Rebuild meshes based on midnodes and their edges. """
+
+        for group in self.edgegroups:
+            keep, midnodes_set = self.keep_group(group)
+            if keep == True:
+                new_mesh = Mesh()
+                for midnode in midnodes_set:
+                    new_mesh.midnodes.append(midnode)
+                    for midedge in self.midedges:
+                        if midedge.source == midnode:
+                            new_mesh.midedges.append(midedge)
+                        if midedge.target == midnode:
+                            new_mesh.midedges.append(midedge)
+                self.meshes.append(new_mesh)
+
+
+    def keep_group(self, group):
         """
-        Create hyperedges from the intermediary edges found in dot file.
-        If the dot was not already an hypergraph, create an hyperedge for
-        every group of edges that point to the same target.
-        If the dot was already an hypergraph, use intermediary nodes to
-        build hyperedges.
-        """
-
-        intermediary_id = 1
-        for node in self.nodes:
-            incoming_edges = []
-            for edge in self.mededges:
-                if edge.target == node:
-                    incoming_edges.append(edge)
-            if len(incoming_edges) > 0:
-                source_list = []
-                for in_edge in incoming_edges:
-                    source_list.append(in_edge.source)
-                sources = NodeGroup(source_list, "and")
-                w = incoming_edges[0].weight
-                mednode = IntermediaryNode("and{}".format(intermediary_id))
-                intermediary_id += 1
-                self.hyperedges.append(CausalEdge(sources, node, mednode, w))
-
-
-    def read_hyperedges(self):
-        """
-        Rebuild hyperedges from intermediary nodes and edges.
-        One hyperedge is created per intermediary node.
+        Method to reject edge groups that are all edges to involvements or
+        from enablings.
         """
 
-        for node in self.mednodes:
-            source_list = []
-            for edge in self.mededges:
-                if edge.target == node:
-                    source_list.append(edge.source)
-                if edge.source == node:
-                    target = edge.target
-                    w = edge.weight
-            sources = NodeGroup(source_list, "and")
-            self.hyperedges.append(CausalEdge(sources, target, node, w))
-        intermediary_id = len(self.mednodes) + 1
-        # Hyperedges with only one source.
-        for edge in self.mededges:
-            if "and" not in edge.source.nodeid:
-                if "and" not in edge.target.nodeid:
-                    w = edge.weight
-                    src = NodeGroup([edge.source], "and")
-                    mednode = IntermediaryNode("and{}".format(intermediary_id))
-                    intermediary_id += 1
-                    self.hyperedges.append(CausalEdge(src, edge.target,
-                                                      mednode, w))
+        keep = True
+        midnodes = []
+        for edge in group:
+            if isinstance(edge.source, MidNode):
+                if edge.source not in midnodes:
+                    midnodes.append(edge.source)
+            if isinstance(edge.target, MidNode):
+                if edge.target not in midnodes:
+                    midnodes.append(edge.target)
+        if len(midnodes) == 1:
+            keep = False
+            midnode = midnodes[0]
+            if midnode.midtype == "involvement":
+                for edge in group:
+                    if edge.target != midnode:
+                        keep = True
+                        break
+            if midnode.midtype == "enabling":
+                for edge in group:
+                    if edge.source != midnode:
+                        keep = True
+                        break
+
+        return keep, midnodes
 
 
     def find_first_rules(self):
@@ -591,8 +745,7 @@ class CausalGraph(object):
     def rank_sequential(self):
         """
         Find the rank of each node, starting with first nodes and then adding
-        the other nodes sequentially as soon as the have one secured incoming
-        hyperedge.
+        the other nodes sequentially as soon as they have a secured enabling.
         """
 
         # Initialize ranks.
@@ -603,45 +756,59 @@ class CausalGraph(object):
                 current_nodes.append(node)
             else:
                 node.rank = None
-        for mednode in self.midnodes:
-            mednode.rank = None
+        #for mednode in self.midnodes:
+        #    mednode.rank = None
         while len(current_nodes) > 0:
-            # 1) Gather all hyperedges that come out from a current_node.
-            current_hyperedges = []
-            for edge in self.combinededges:
-                for current_node in current_nodes:
-                    if current_node in edge.source.nodelist:
-                        if edge not in current_hyperedges:
-                            current_hyperedges.append(edge)
-            # 2) Check which hyperedges are secured (hyperedges with sources
-            #    having defined rank, ignoring intro nodes).
-            secured_hyperedges = []
-            for edge in current_hyperedges:
-                secured = True
-                for source in edge.source.nodelist:
-                    if source.intro == False and source.rank == None:
-                        secured = False
-                        break
-                if secured == True:
-                    secured_hyperedges.append(edge)
-            # 3) Set rank of the target of secured hyperedges.
-            for edge in secured_hyperedges:
-                if edge.target.rank == None:
-                    source_ranks = []
-                    for source in edge.source.nodelist:
-                        if source.intro == False:
-                            source_ranks.append(source.rank)
-                    edge.target.rank = max(source_ranks)+1
-                    current_nodes.append(edge.target)
-            # 4) Remove current_nodes that point to nodes that are all ranked.
+            # 1) Gather edge groups that have a current_node in their sources.
+            current_groups = []
+            for edgegroup in self.edgegroups:
+                for edge in edgegroup:
+                    for current_node in current_nodes:
+                        if current_node == edge.source:
+                            if edgegroup not in current_groups:
+                                current_groups.append(edgegroup)
+            # 2) Gather candidate nodes as any target of current edge groups.
+            candidates = []
+            for group in current_groups:
+                for edge in group:
+                    if edge.target not in candidates:
+                        candidates.append(edge.target)
+            # 3) Set rank of all candidate nodes that are secured: all the
+            #    nodes pointing to them (ignoring intro nodes) are already
+            #    ranked in at least one edge group.
+            for candidate in candidates:
+                possible_ranks = []
+                for group in current_groups:
+                    incoming_edges = []
+                    for edge in group:
+                        if edge.source.intro == False:
+                            if edge.target == candidate:
+                                incoming_edges.append(edge)
+                    if len(incoming_edges) > 0:
+                        secured = True
+                        for inedge in incoming_edges:
+                            if inedge.source.rank == None:
+                                secured = False
+                                break
+                        if secured == True:
+                            source_ranks = []
+                            for inedge in incoming_edges:
+                                source_ranks.append(inedge.source.rank)
+                            possible_ranks.append(max(source_ranks)+1)
+                if len(possible_ranks) > 0:
+                    candidate.rank = min(possible_ranks)
+                    current_nodes.append(candidate)
+            # 4) Remove all current_nodes for which all outgoing edge groups
+            #    have all their targets already ranked.
             next_nodes = []
             for current_node in current_nodes:
                 keep_node = False
                 node_targets = []
-                for edge in self.combinededges:
-                    if current_node in edge.source.nodelist:
-                        if edge.target not in node_targets:
-                            node_targets.append(edge.target)
+                for edgegroup in self.edgegroups:
+                    for edge in edgegroup:
+                        if edge.source == current_node:
+                            if edge.target not in node_targets:
+                                node_targets.append(edge.target)
                 for node in node_targets:
                     if node.rank == None:
                         keep_node = True
@@ -649,312 +816,85 @@ class CausalGraph(object):
                 if keep_node == True:
                     next_nodes.append(current_node)
             current_nodes = next_nodes
-        # Rank intro nodes.
+        # Rank intro nodes as the lower rank of a node it points to minus one.
         for node in self.eventnodes:
             if node.intro == True:
-                # 1) Find all hyperedges that have current
-                #    intro node as source.
-                intro_hyperedges = []
-                for edge in self.combinededges:
-                    if node in edge.source.nodelist:
-                        if edge not in intro_hyperedges:
-                            intro_hyperedges.append(edge)
-                # 2) Set rank of the intro node according to the lower
-                #    rank among targets.
                 target_ranks = []
-                for edge in intro_hyperedges:
-                    target_ranks.append(edge.target.rank)
+                for edge in self.causaledges:
+                    if edge.source == node:
+                        target_ranks.append(edge.target.rank)
                 node.rank = min(target_ranks)-1
-        self.rank_intermediary(self.hyperedges)
+        #self.rank_intermediary(self.hyperedges)
         self.get_maxrank()
-        self.sequentialize_ids()
+        self.sequentialize_nodeids()
 
 
     def rank_intermediary(self, edgegroup):
-        """  Rank intermediary nodes. """
+        """
+        Rank intermediary nodes. Not used (ner well defined) for the moment.
+        Intermediary node ranking is left to graphviz for now.
+        """
     
         for edge in edgegroup:
             source_ranks = []
             for node in edge.source.nodelist:
                 source_ranks.append(node.rank)
             if edge.target.rank > max(source_ranks):
-                edge.mednode.rank = ( edge.target.rank + max(source_ranks) ) / 2.0
+                edge.mednode.rank = (( edge.target.rank +
+                                       max(source_ranks) ) / 2.0)
             elif edge.target.rank < min(source_ranks):
-                edge.mednode.rank = ( edge.target.rank + min(source_ranks) ) / 2.0
+                edge.mednode.rank = (( edge.target.rank +
+                                       min(source_ranks) ) / 2.0)
             else:
                 ranks_set = list(set(source_ranks))
                 edge.mednode.rank = statistics.mean(ranks_set)
 
 
-#    def rank_nodes(self):
+# Not used in current implementation. May be needed to build species nodes.
+#    def follow_edges(self, direction, from_node, to_nodes=[]):
 #        """
-#        Find the rank of each node as its longest upstream acyclic path
-#        to an initial node, but ignoring upstream paths that contain any node
-#        from a downstream acyclic path.
-#        Remaining nodes are iteratively placed one rank lower than the lowest
-#        rank of the nodes to which they point to and are already ranked.
-#        """
-#
-#        print(self.filename)
-#        #self.find_init_nodes()
-#        # Rank rule nodes.
-#        for node in self.nodes:
-#            if node.intro == False:
-#                #print(">>>", node.nodeid, node.label)
-#                #upstream_paths = self.follow_edges("up", node, self.init_nodes)
-#                upstream_paths = self.follow_edges("up", node)
-#                if node.label == "SRCkin binds SRC-Y419 fast":
-#                    print("UP")
-#                    for path in upstream_paths:
-#                        print("---")
-#                        for n in path:
-#                            print(n)
-#                downstream_paths = self.follow_edges("down", node)
-#                if node.label == "SRCkin binds SRC-Y419 fast":
-#                    print("DOWN")
-#                    for path in downstream_paths:
-#                        print("---")
-#                        for n in path:
-#                            print(n)
-#                paths_to_remove = []
-#                for i in range(len(upstream_paths)):
-#                    for down_path in downstream_paths:
-#                        for down_node in down_path:
-#                            if down_node in upstream_paths[i]:
-#                                if i not in paths_to_remove:
-#                                    paths_to_remove.insert(0, i)
-#                if node.label == "SRCkin binds SRC-Y419 fast":
-#                    print(paths_to_remove, "|||",len(upstream_paths))
-#                #for i in paths_to_remove:
-#                #    del(upstream_paths[i])
-#                if node.label == "SRCkin binds SRC-Y419 fast":
-#                    print("FINAL")
-#                    for path in upstream_paths:
-#                        print("---")
-#                        for n in path:
-#                            print(n)
-#                lengths = []
-#                for path in upstream_paths:
-#                    lengths.append(len(path))
-#                node.rank = max(lengths)
-#        # Rank intro nodes.
-#        for node in self.nodes:
-#            if node.intro == True:
-#                target_ranks = []
-#                for edge in self.edges:
-#                    if edge.source == node:
-#                        target_ranks.append(edge.target.rank)
-#                node.rank = min(target_ranks)-1
-#        self.get_maxrank()
-#        self.sequentialize_ids()
-#
-#
-#    def old_rank_nodes(self):
-#        """
-#        Find the rank of each rule node in two steps. First, assign a temporary
-#        rank as the longest acyclic path to an initial node (intro node of
-#        rank 0). Second, repeat the first step but ignoring any edge for which
-#        the temporary rank of the source is higher or equal to the temporary
-#        rank of the target. Finally, assign the rank of intro nodes as the
-#        lowest rank of any rule node it points to, minus 1.
-#        """
-#
-#        #self.find_init_nodes()
-#        self.init_nodes = []
-#        for node in self.nodes:
-#            if node.intro == True:
-#                self.init_nodes.append(node)
-#        # First pass.
-#        for node in self.nodes:
-#            if node.intro == False:
-#                paths = self.climb_up(node, self.init_nodes)
-#                lengths = []
-#                for path in paths:
-#                    lengths.append(len(path)-1)
-#                node.rank = max(lengths)
-#            else:
-#                node.rank = 0
-#        # Second pass ignoring higher or equal temporary ranks.
-#        for node in self.nodes:
-#            if node.intro == False:
-#                paths = self.climb_up(node, self.init_nodes, ignore_heq=True)
-#                lengths = []
-#                for path in paths:
-#                    lengths.append(len(path)-1)
-#                node.rank = max(lengths)
-#        # Ranking intro nodes.
-#        for node in self.nodes:
-#            if node.intro == True:
-#                target_ranks = []
-#                for edge in self.edges:
-#                    if edge.source == node:
-#                        target_ranks.append(edge.target.rank)
-#                node.rank = min(target_ranks)-1
-#        self.get_maxrank()
-#        self.sequentialize_ids()
-
-
-#    def find_init_nodes(self):
-#        """
-#        Find the nodes of rank 0 as the intro nodes which only point to rule
-#        nodes that requires only intro nodes.
-#        """
-#
-#        self.init_nodes = []
-#        first_rules = []
-#        for node in self.nodes:
-#            if node.intro == False:
-#                input_nodes = []
-#                for edge in self.edges:
-#                    if edge.target == node:
-#                        input_nodes.append(edge.source)
-#                all_intro = True
-#                for input_node in input_nodes:
-#                    if input_node.intro == False:
-#                        all_intro = False
-#                        break
-#                if all_intro == True:
-#                    first_rules.append(node)
-#        for node in first_rules:
-#            for edge in self.edges:
-#                if edge.target == node:
-#                    if edge.source not in self.init_nodes:
-#                        self.init_nodes.append(edge.source)
-#        nodes_to_remove = []
-#        for i in range(len(self.init_nodes)):
-#            for edge in self.edges:
-#                if edge.source == self.init_nodes[i]:
-#                    if edge.target not in first_rules:
-#                        nodes_to_remove.insert(0, i)
-#                        break
-#        for i in nodes_to_remove:
-#            del(self.init_nodes[i])
-
-
-    def follow_edges(self, direction, from_node, to_nodes=[]):
-        """
-        Return a list of all acyclic paths from a given node to the top of the
-        graph (using direction="up") or to the bottom (using direction="down").
-        If to_nodes are provided, return only the paths that go from from_node
-        to any of the to_nodes.
-        """
-    
-        all_paths = [[from_node]]
-        ends_reached = False
-        while ends_reached == False:
-            ends_reached = True
-            for i in range(len(all_paths)):
-                path = all_paths[i]
-                next_nodes = []
-                for edge in self.hyperedges:
-                    if direction == "up":
-                        if edge.target == path[-1]:
-                            for src_node in edge.source.nodelist:
-                                next_nodes.append(src_node)
-                    elif direction == "down":
-                        if path[-1] in edge.source.nodelist:
-                            next_nodes.append(edge.target)
-                if len(next_nodes) > 0 and path[-1] not in to_nodes:
-                    ends_reached = False
-                    path_copy = path.copy()
-                    path.append(next_nodes[0])
-                    for i in range(1, len(next_nodes)):
-                        new_path = path_copy.copy()
-                        new_path.append(next_nodes[i])
-                        all_paths.append(new_path)
-            # Remove looping paths.
-            for i in range(len(all_paths)-1, -1, -1):
-                if len(all_paths[i]) != len(set(all_paths[i])):
-                    del(all_paths[i])
-        # Remove paths that do not end with one of the to_nodes if to_nodes
-        # was defined.
-        if len(to_nodes) > 0:
-            for i in range(len(all_paths)-1, -1, -1):
-                if all_paths[i][-1] not in to_nodes:
-                    del(all_paths[i])
-        # Remove the from_node in each path (the first node).
-        for i in range(len(all_paths)):
-            del(all_paths[i][0])
-    
-        return all_paths
-
-
-#    def climb_up(self, bottom_node, top_nodes, ignore_heq=False):
-#        """
-#        Return the list of possible acyclic paths from bottom to top nodes.
-#        Edges are followed in reverse, from target to source.
+#        Return a list of all acyclic paths from a given node to the top of the
+#        graph (using direction="up") or to the bottom (using direction="down").
+#        If to_nodes are provided, return only the paths that go from from_node
+#        to any of the to_nodes.
 #        """
 #    
-#        all_paths = [[bottom_node]]
-#        top_reached = False
-#        while top_reached == False:
-#            top_reached = True
+#        all_paths = [[from_node]]
+#        ends_reached = False
+#        while ends_reached == False:
+#            ends_reached = True
 #            for i in range(len(all_paths)):
 #                path = all_paths[i]
-#                if path[-1] not in top_nodes:
-#                    top_reached = False
-#                    next_nodes = []
-#                    for edge in self.edges:
+#                next_nodes = []
+#                for edge in self.hyperedges:
+#                    if direction == "up":
 #                        if edge.target == path[-1]:
-#                            if ignore_heq == False:
-#                                next_nodes.append(edge.source)
-#                            elif ignore_heq == True:
-#                                if edge.source.rank < edge.target.rank:
-#                                    next_nodes.append(edge.source)
-#                    if len(next_nodes) == 0:
-#                        path.append("root")
-#                    else:
-#                        path_copy = path.copy()
-#                        path.append(next_nodes[0])
-#                        for i in range(1, len(next_nodes)):
-#                            new_path = path_copy.copy()
-#                            new_path.append(next_nodes[i])
-#                            all_paths.append(new_path)
-#            # Remove looping paths.
-#            for i in range(len(all_paths)-1, -1, -1):
-#                if len(all_paths[i]) != len(set(all_paths[i])):
-#                    del(all_paths[i])
-#        for i in range(len(all_paths)-1, -1, -1):
-#            if all_paths[i][-1] not in top_nodes:
-#                del(all_paths[i])
-#    
-#        return all_paths
-#
-#
-#    def slide_down(self, top_node, bottom_nodes):
-#        """
-#        Return the list of possible acyclic paths from top to bottom nodes.
-#        Edges are followed from source to target.
-#        """
-#
-#        all_paths = [[top_node]]
-#        bottom_reached = False
-#        while bottom_reached == False:
-#            bottom_reached = True
-#            for i in range(len(all_paths)):
-#                path = all_paths[i]
-#                if path[-1] not in bottom_nodes and path[-1] != "end":
-#                    bottom_reached = False
-#                    next_nodes = []
-#                    for edge in self.edges:
-#                        if edge.source == path[-1]:
+#                            for src_node in edge.source.nodelist:
+#                                next_nodes.append(src_node)
+#                    elif direction == "down":
+#                        if path[-1] in edge.source.nodelist:
 #                            next_nodes.append(edge.target)
-#                    if len(next_nodes) == 0:
-#                        path.append("end")
-#                    else:
-#                        path_copy = path.copy()
-#                        path.append(next_nodes[0])
-#                        for i in range(1, len(next_nodes)):
-#                            new_path = path_copy.copy()
-#                            new_path.append(next_nodes[i])
-#                            all_paths.append(new_path)
+#                if len(next_nodes) > 0 and path[-1] not in to_nodes:
+#                    ends_reached = False
+#                    path_copy = path.copy()
+#                    path.append(next_nodes[0])
+#                    for i in range(1, len(next_nodes)):
+#                        new_path = path_copy.copy()
+#                        new_path.append(next_nodes[i])
+#                        all_paths.append(new_path)
 #            # Remove looping paths.
 #            for i in range(len(all_paths)-1, -1, -1):
 #                if len(all_paths[i]) != len(set(all_paths[i])):
 #                    del(all_paths[i])
-#        for i in range(len(all_paths)-1, -1, -1):
-#            if all_paths[i][-1] not in bottom_nodes:
-#                del(all_paths[i])
+#        # Remove paths that do not end with one of the to_nodes if to_nodes
+#        # was defined.
+#        if len(to_nodes) > 0:
+#            for i in range(len(all_paths)-1, -1, -1):
+#                if all_paths[i][-1] not in to_nodes:
+#                    del(all_paths[i])
+#        # Remove the from_node in each path (the first node).
+#        for i in range(len(all_paths)):
+#            del(all_paths[i][0])
 #
 #        return all_paths
 
@@ -963,159 +903,369 @@ class CausalGraph(object):
         """ Find the highest rank of a node in CausalGraph. """
 
         all_ranks = []
-        for node in self.nodes:
+        for node in self.eventnodes:
             if node.rank != None:
                 all_ranks.append(node.rank)
         if len(all_ranks) > 0:
             self.maxrank = max(all_ranks)
 
 
-    def sequentialize_ids(self):
+    def sequentialize_nodeids(self):
         """ Assign sequential node ids, getting rid of event numbers. """
 
         node_number = 1
         for current_rank in range(self.maxrank+1):
-            for node in self.nodes:
+            for node in self.eventnodes:
                 if node.rank == current_rank:
                     node.nodeid = "node{}".format(node_number)
                     node_number += 1
-        # Also sort hyperedges.
-        sorted_edges = sorted(self.hyperedges, key=lambda x: x.mednode.rank)
-        self.hyperedges = sorted_edges
+        # Also sort causal edges.
+        # (Not needed, only sort grouped edges before building the dot file).
+        #sorted_edges = sorted(self.causaledges, key=lambda x: x.source.rank)
+        #self.causaledges = sorted_edges
 
 
-    def cleanup(self):
-        """
-        Remove nodes that do not have a path to an intro node and an eoi node
-        and any edge that points to or from these nodes. Then remove intro
-        nodes that do not have any targets anymore.
-        """
+#    def cleanup(self):
+#        """
+#        Remove nodes that do not have a path to an intro node and an eoi node
+#        and any edge that points to or from these nodes. Then remove intro
+#        nodes that do not have any targets anymore.
+#        """
+#
+#        self.intro_nodes = []
+#        self.eoi_nodes = []
+#        for node in self.nodes:
+#            if node.intro == True:
+#                self.intro_nodes.append(node)
+#            if node.label == self.eoi:
+#                self.eoi_nodes.append(node)
+#        nodes_to_clean = []
+#        for i in range(len(self.nodes)):
+#            node = self.nodes[i]
+#            if node.intro == False and node.label != self.eoi:
+#                #paths_up = self.climb_up(node, self.intro_nodes)
+#                paths_up = self.follow_edges("up", node, self.intro_nodes)
+#                #paths_down = self.slide_down(node, self.eoi_nodes)
+#                paths_down = self.follow_edges("down", node, self.eoi_nodes)
+#                if len(paths_up) == 0 or len(paths_down) == 0:
+#                    nodes_to_clean.insert(0, i)
+#        edges_to_clean = []
+#        for j in range(len(self.hyperedges)):
+#            sources = self.hyperedges[j].source.nodelist
+#            target = self.hyperedges[j].target
+#            for i in nodes_to_clean:
+#                node = self.nodes[i]
+#                if node in sources or target == node:
+#                    edges_to_clean.insert(0, j)
+#        for j in edges_to_clean:
+#            del(self.hyperedges[j])
+#        for i in nodes_to_clean:
+#            del(self.nodes[i])
+#        intros_to_clean = []
+#        for i in range(len(self.nodes)):
+#            node = self.nodes[i]
+#            if node.intro == True:
+#                remove_intro = True
+#                for edge in self.hyperedges:
+#                    if node in edge.source.nodelist:
+#                        remove_intro = False
+#                        break
+#                if remove_intro == True:
+#                    intros_to_clean.insert(0, i)
+#        for i in intros_to_clean:
+#            del(self.nodes[i])
 
-        self.intro_nodes = []
-        self.eoi_nodes = []
-        for node in self.nodes:
-            if node.intro == True:
-                self.intro_nodes.append(node)
-            if node.label == self.eoi:
-                self.eoi_nodes.append(node)
-        nodes_to_clean = []
-        for i in range(len(self.nodes)):
-            node = self.nodes[i]
-            if node.intro == False and node.label != self.eoi:
-                #paths_up = self.climb_up(node, self.intro_nodes)
-                paths_up = self.follow_edges("up", node, self.intro_nodes)
-                #paths_down = self.slide_down(node, self.eoi_nodes)
-                paths_down = self.follow_edges("down", node, self.eoi_nodes)
-                if len(paths_up) == 0 or len(paths_down) == 0:
-                    nodes_to_clean.insert(0, i)
-        edges_to_clean = []
-        for j in range(len(self.hyperedges)):
-            sources = self.hyperedges[j].source.nodelist
-            target = self.hyperedges[j].target
-            for i in nodes_to_clean:
-                node = self.nodes[i]
-                if node in sources or target == node:
-                    edges_to_clean.insert(0, j)
-        for j in edges_to_clean:
-            del(self.hyperedges[j])
-        for i in nodes_to_clean:
-            del(self.nodes[i])
-        intros_to_clean = []
-        for i in range(len(self.nodes)):
-            node = self.nodes[i]
-            if node.intro == True:
-                remove_intro = True
-                for edge in self.hyperedges:
-                    if node in edge.source.nodelist:
-                        remove_intro = False
-                        break
-                if remove_intro == True:
-                    intros_to_clean.insert(0, i)
-        for i in intros_to_clean:
-            del(self.nodes[i])
-            
 
     def build_nointro(self):
         """
-        Create new hyperedges for the version of the graph that hides
+        Create new meshes for the version of the graph that hides
         intro nodes.
         """
 
         # Reset information about cover edges. 
-        for edge in self.hyperedges:
-            edge.underlying = False
-        self.coveredges = []
-        intermediary_id = self.find_max_med_id()+1
-        for edge1 in self.hyperedges:
-            edge_group = []
-            if edge1.underlying == False:
-                has_intro1, src1 = self.check_intro_src(edge1)
+        for mesh in self.meshes:
+            mesh.underlying = False
+        #self.covermeshes = []
+        nointro_groups = []
+        midid = self.find_max_midid()+1
+        for mesh1 in self.meshes:
+            mesh_list = []
+            if mesh1.underlying == False:
+                has_intro1 = self.check_intro(mesh1)
                 if has_intro1 == True:
-                    t1 = edge1.target
-                    edge_group.append(edge1)
-                    # Check all other hyperedges that have the same sources
-                    # and target as edge1, ignoring intro nodes.
-                    # They will all be grouped inside a single nointro edge.
-                    for edge2 in self.hyperedges:
-                        if edge2.color == edge1.color:
-                            if edge2 != edge1 and edge2.underlying == False:
-                                has_intro2, src2 = self.check_intro_src(edge2)
-                                t2 = edge2.target
-                                if same_nodes(src1, src2) and t1 == t2:
-                                    edge_group.append(edge2)
-            if len(edge_group) > 0:
+                    mesh_list.append(mesh1)
+                    noin1 = self.nointro_mesh(mesh1, midid)
+                    midid += len(noin1.midnodes)
+                    if len(noin1.midedges) > 0:
+                        # Check all other meshes that have the same edge
+                        # group when ignoring edges with intro nodes as source.
+                        # They will all be grouped inside a single mesh
+                        # without intro nodes as sources.
+                        for mesh2 in self.meshes:
+                            if mesh2.color == mesh1.color:
+                                if mesh2 != mesh1:
+                                    if mesh2.underlying == False:
+                                        noin2 = self.nointro_mesh(mesh2, midid)
+                                        if self.same_meshes(noin1, noin2):
+                                            mesh_list.append(mesh2)
+            if len(mesh_list) > 0:
                 # Compute weight of nointro edge as the sum of all its
                 # underlying edges. Also mark edges that were used as
                 # underlying.
                 w = 0
-                for edge in edge_group:
-                    w += edge.weight
-                    edge.underlying = True
-                # Create a new nointro edge.
-                if len(src1) > 0:
-                    src = NodeGroup(src1, "and")
-                    mednode = IntermediaryNode("and{}".format(intermediary_id))
-                    intermediary_id += 1
-                    self.coveredges.append(CausalEdge(src, t1, mednode, w,
-                                                      color=edge1.color))
-        self.rank_intermediary(self.coveredges)
-                    
-
-    def check_intro_src(self, chk_edge):
-        """
-        Check if an edge has intro nodes in its sources and return the
-        list of non-intro nodes in its sources.
-        """
-
-        has_intro = False
-        nodes_without_intro = []
-        for node in chk_edge.source.nodelist:
-            if node.intro == True:
-                has_intro = True
-            elif node.intro == False:
-                nodes_without_intro.append(node)
-
-        return has_intro, nodes_without_intro
+                for mesh in mesh_list:
+                    w += mesh.weight
+                    mesh.underlying = True
+                # Create a new mesh without intro nodes.
+                if len(noin1.midedges) > 0:
+                    self.covermeshes.append(noin1)
+                    #nointro_groups.append(nointro1)
+                    #new_mesh = Mesh(nointro1, midid, w)
+                    #new_mesh.build_from_group()
+                    #self.covermeshes.append(new_mesh)
+                    #midid = self.covermeshes[-1].midid
 
 
-    def find_max_med_id(self):
+    def find_max_midid(self):
         """ Find the highest intermediary node id in the graph. """
 
-        intermediary_ids = []
-        for edge in self.hyperedges:
-            intermediary_ids.append(int(edge.mednode.nodeid[3:]))
-        max_med_id = max(intermediary_ids)
+        midids = []
+        for mesh in self.meshes:
+            for midnode in mesh.midnodes:
+                midids.append(int(midnode.nodeid[3:]))
+        max_midid = max(midids)
 
-        return max_med_id
+        return max_midid
+
+
+    def check_intro(self, mesh):
+        """ Check if a mesh has intro nodes in its sources. """
+
+        has_intro = False
+        for midedge in mesh.midedges:
+            if isinstance(midedge.source, EventNode):
+                if midedge.source.intro == True:
+                    has_intro = True
+                    break
+
+        return has_intro
+
+
+    def nointro_mesh(self, mesh, midid):
+        """
+        Build a new mesh without midedges from intro nodes.
+        Adjust midnodes to the removal of those midedges.
+        """
+
+        new_mesh = Mesh()
+        # Add midnodes with temporary ids.
+        tmpid = 1
+        tmpid_map = {}
+        for midnode in mesh.midnodes:
+            new_mesh.midnodes.append(MidNode("mid{}".format(tmpid),
+                                             midtype=midnode.midtype))
+            tmpid_map["mid{}".format(tmpid)] = midnode.nodeid
+            tmpid += 1
+        # Add the midedges that do not have an intro node as source.
+        for midedge in mesh.midedges:
+            add_edge = True
+            if isinstance(midedge.source, EventNode):
+                if midedge.source.intro == True:
+                    add_edge = False
+            if add_edge == True:
+                # Get source.
+                if isinstance(midedge.source, EventNode):
+                    s = midedge.source
+                elif isinstance(midedge.source, MidNode):
+                    for new_node in new_mesh.midnodes:
+                        if tmpid_map[new_node.nodeid] == midedge.source.nodeid:
+                            s = new_node
+                # Get target.
+                if isinstance(midedge.target, EventNode):
+                    t = midedge.target
+                elif isinstance(midedge.target, MidNode):
+                    for new_node in new_mesh.midnodes:
+                        if tmpid_map[new_node.nodeid] == midedge.target.nodeid:
+                            t = new_node
+                w = midedge.weight
+                new_mesh.midedges.append(MidEdge(s, t, w))
+        # Remove intermediary nodes that are not needed anymore.
+        invs_to_remove = []
+        midedges_to_remove = []
+        for i in range(len(new_mesh.midnodes)):
+            midnode = new_mesh.midnodes[i]
+            if midnode.midtype == "involvement":
+                incoming_count = 0
+                for midedge in new_mesh.midedges:
+                    if midedge.target == midnode:
+                        incoming_count += 1
+                if incoming_count == 0:
+                    invs_to_remove.insert(0, i)
+                    for j in range(len(new_mesh.midedges)):
+                        if new_mesh.midedges[j].source == midnode:
+                            midedges_to_remove.append(j)
+        for j in sorted(midedges_to_remove, reverse=True):
+            del(new_mesh.midedges[j])
+        for i in invs_to_remove:
+            del(new_mesh.midnodes[i])
+        enas_to_remove = []
+        midedges_to_remove = []
+        midedges_to_add = []
+        for i in range(len(new_mesh.midnodes)):
+            midnode = new_mesh.midnodes[i]
+            if midnode.midtype == "enabling":
+                incoming_count = 0
+                outgoing_count = 0
+                for midedge in new_mesh.midedges:
+                    if midedge.target == midnode:
+                        incoming_count += 1
+                        in_edge = midedge
+                    if midedge.source == midnode:
+                        outgoing_count += 1
+                        out_edge = midedge
+                if incoming_count <= 1 and outgoing_count <= 1: 
+                    enas_to_remove.insert(0, i)
+                    for j in range(len(new_mesh.midedges)):
+                        if new_mesh.midedges[j].source == midnode:
+                            if j not in midedges_to_remove:
+                                midedges_to_remove.append(j)
+                        if new_mesh.midedges[j].target == midnode:
+                            if j not in midedges_to_remove:
+                                midedges_to_remove.append(j)
+                    if incoming_count == 1 and outgoing_count == 1:
+                        # Make a new intermediary edge from the source of the
+                        # incoming edge to the target of the outgoing edge.
+                        midedges_to_add.append(MidEdge(in_edge.source,
+                                                       out_edge.target,
+                                                       in_edge.weight))
+        for j in sorted(midedges_to_remove, reverse=True):
+            del(new_mesh.midedges[j])
+        for i in enas_to_remove:
+            del(new_mesh.midnodes[i])
+        for midedge in midedges_to_add:
+            new_mesh.midedges.append(midedge)
+        # Reassign intermediary node ids in case some were removed.
+        for midnode in new_mesh.midnodes:
+            midnode.nodeid = "mid{}".format(midid)
+            midid += 1
+
+        return new_mesh
+
+
+    def same_meshes(self, mesh1, mesh2):
+        """
+        Find if two meshes connect the same event nodes in the same way
+        (with equivalent midedges and midnodes).
+        """
+
+        nn1 = len(mesh1.midnodes)
+        nn2 = len(mesh2.midnodes)
+        ne1 = len(mesh1.midedges)
+        ne2 = len(mesh2.midedges)
+        if nn1 == nn2 and ne1 == ne2:
+            are_same = True
+        else:
+            are_same = False
+        if are_same == True:
+            #sources1, targets1 = self.get_mesh_events(mesh1)
+            #sources2, targets2 = self.get_mesh_events(mesh2)
+            sources1, targets1 = mesh1.get_events()
+            sources2, targets2 = mesh2.get_events()
+            same_sources = same_objects(sources1, sources2)
+            same_targets = same_objects(targets1, targets2)
+            if same_sources == True and same_targets == True:
+                are_same = True
+            else:
+                are_same = False
+        if are_same == True:
+            #inv_neighbors1, ena_neighbors1 = self.get_neighbors(mesh1.midnodes)
+            #inv_neighbors2, ena_neighbors2 = self.get_neighbors(mesh2.midnodes)
+            inv_neighbors1, ena_neighbors1 = mesh1.get_neighbors()
+            inv_neighbors2, ena_neighbors2 = mesh2.get_neighbors()
+            same_inv = self.same_midnodes(inv_neighbors1, inv_neighbors2)
+            same_ena = self.same_midnodes(ena_neighbors1, ena_neighbors2)
+            if same_inv == True and same_ena == True:
+                are_same = True
+            else:
+                are_same = False
+
+        return are_same
+
+
+    def same_midnodes(self, neighbors1, neighbors2):
+        """
+        Find if two lists of midnodes described as their respective
+        neighbors contain all the same midnodes.
+        """
+
+        list1 = neighbors1.copy()
+        list2 = neighbors2.copy()
+        found1 = []
+        found2 = []
+        for i in range(len(list1)):
+            for midnode2 in list2:
+                if self.same_objects(list1[i]["srcs"], midnode2["srcs"]):
+                    if self.same_objects(list1[i]["trgs"], midnode2["trgs"]):
+                        found1.insert(0, i)
+                        break
+        for j in range(len(list2)):
+            for midnode1 in list1:
+                if self.same_objects(list2[j]["srcs"], midnode1["srcs"]):
+                    if self.same_objects(list2[j]["trgs"], midnode1["trgs"]):
+                        found2.insert(0, j)
+                        break
+        for i in found1:
+            del(list1[i])
+        for j in found2:
+            del(list2[j])
+        if len(list1) == 0 and len(list2) == 0:
+            are_same = True
+        else:
+            are_same = False
+
+        return are_same
+
+
+#    def same_edges(self, edgelist1, edgelist2):
+#        """
+#        Find if two lists of edges contain all the same edges.
+#        (The edges may be found in a different order in the two lists).
+#        """
+#
+#        group1 = edgelist1.copy()
+#        group2 = edgelist2.copy()
+#        found1 = []
+#        found2 = []
+#        for i in range(len(group1)):
+#            for edge2 in group2:
+#                if group1[i] == edge2:
+#                    found1.insert(0, i)
+#                    break
+#        for j in range(len(group2)):
+#            for edge1 in group1:
+#                if group2[j] == edge1:
+#                    found2.insert(0, j)
+#                    break
+#        for i in found1:
+#            del(group1[i])
+#        for j in found2:
+#            del(group2[j])
+#        if len(group1) == 0 and len(group2) == 0:
+#            are_same = True
+#        else:
+#            are_same = False
+#
+#        return are_same
 
 
     def build_dot_file(self, edgelabels=False, showintro=True):
         """ build a dot file of the CausalGraph. """
 
-        self.build_nointro()
+        self.build_nointro() 
+        #self.rank_intermediary(self.coveredges)
         # Write info about graph.
         dot_str = 'digraph G{\n'
-        dot_str += '  hypergraph="{}" ;\n'.format(self.hypergraph)
+        dot_str += '  meshedgraph="{}" ;\n'.format(self.meshedgraph)
         dot_str += '  nodestype="{}" ;\n'.format(self.nodestype)
         if self.eoi != None:
             dot_str += '  eoi="{}" ;\n'.format(self.eoi)
@@ -1135,8 +1285,8 @@ class CausalGraph(object):
         medpenwidth = 3
         maxpenwidth = 6.5
         all_weights = []
-        for edge in self.hyperedges:
-            all_weights.append(edge.weight)
+        for mesh in self.meshes:
+            all_weights.append(mesh.weight)
         average_weight = statistics.mean(all_weights)
         # Draw nodes.
         for int_rank in range((self.maxrank+1)*2):
@@ -1150,7 +1300,7 @@ class CausalGraph(object):
             else:
                 dot_str += ('{{ rank = same ; "{}" [label="", '
                             'shape=plaintext];\n'.format(current_rank))
-            for node in self.nodes:
+            for node in self.eventnodes:
                 if node.rank == current_rank:
                     node_shape = 'invhouse'
                     node_color = 'lightblue'
@@ -1175,50 +1325,61 @@ class CausalGraph(object):
                     dot_str += "] ;\n"
             # Draw intermediary nodes that emulate hyperedges if two
             # sources or more are drawn.
-            for edge in self.hyperedges:
-                if edge.mednode.rank == current_rank:
-                    # Include the mednode no matter what, but comment it
-                    # if showintro is False and edge is underlying.
-                    if len(edge.source.nodelist) > 1:
-                        if showintro == False and edge.underlying == True:
-                            dot_str += '//'
-                        ratio = edge.weight/average_weight
-                        pensize = math.log(ratio,2) + medpenwidth
-                        if pensize < minpenwidth:
-                            pensize = minpenwidth
-                        if pensize > maxpenwidth:
-                            pensize = maxpenwidth
-                        pensize = math.sqrt(pensize)/12
-                        dot_str += '"{}" [label="", '.format(edge.mednode.nodeid)
-                        dot_str += 'shape=point, style=filled, '
-                        dot_str += 'color={}, '.format(edge.color)
-                        dot_str += 'fillcolor={}, '.format(edge.color)
-                        dot_str += 'hyperand=True, '
-                        dot_str += 'width={}, height={}] ;\n'.format(pensize, pensize)
+            for mesh in self.meshes:
+                for midnode in mesh.midnodes:
+                    if midnode.rank == current_rank:
+                        # Include the midnode no matter what, but comment it
+                        # if showintro is False and edge is underlying. 
+                        if showintro == False:
+                            if mesh.underlying == True:
+                                dot_str += '//'
+                        dot_str += self.write_midnode(mesh, midnode,
+                                                      average_weight,
+                                                      minpenwidth, medpenwidth,
+                                                      maxpenwidth)
+                        dot_str += '] ;\n'
             # Intermediary nodes from cover edges, same as above but only
             # if showintro is False.
             if showintro == False:
-                for cedge in self.coveredges:
-                    if cedge.mednode.rank == current_rank:
-                        if len(cedge.source.nodelist) > 1:
-                            ratio = cedge.weight/average_weight
-                            pensize = math.log(ratio,2) + medpenwidth
-                            if pensize < minpenwidth:
-                                pensize = minpenwidth
-                            if pensize > maxpenwidth:
-                                pensize = maxpenwidth
-                            pensize = math.sqrt(pensize)/12
-                            dot_str += '"{}" [label="", '.format(cedge.mednode.nodeid)
-                            dot_str += 'shape=point, style=filled, '
-                            dot_str += 'color={}, '.format(cedge.color)
-                            dot_str += 'fillcolor={}, '.format(cedge.color)
-                            dot_str += 'hyperand=True, '
-                            dot_str += 'width={}, height={}, '.format(pensize, pensize)
-                            dot_str += 'cover="True"] ;\n'
+                for covermesh in self.covermeshes:
+                    for midnode in covermesh.midnodes:
+                        if midnode.rank == current_rank:
+                            dot_str += self.write_midnode(covermesh,
+                                                          midnode,
+                                                          average_weight,
+                                                          minpenwidth,
+                                                          medpenwidth,
+                                                          maxpenwidth)
+                            dot_str += ', cover="True"] ;\n'
             # Close rank braces.
             if showintro == False and current_rank < 1:
                 dot_str += "//"
             dot_str += "}\n"
+        # Draw unranked midnodes.
+        for mesh in self.meshes:
+            for midnode in mesh.midnodes:
+                if midnode.rank == None:
+                    # Include the midnode no matter what, but comment it
+                    # if showintro is False and edge is underlying. 
+                    if showintro == False:
+                        if mesh.underlying == True:
+                            dot_str += '//'
+                    dot_str += self.write_midnode(mesh, midnode,
+                                                  average_weight,
+                                                  minpenwidth, medpenwidth,
+                                                  maxpenwidth)
+                    dot_str += '] ;\n'
+        if showintro == False:
+            for covermesh in self.covermeshes:
+                for midnode in covermesh.midnodes:
+                    if midnode.rank == None:
+                        dot_str += self.write_midnode(covermesh,
+                                                      midnode,
+                                                      average_weight,
+                                                      minpenwidth,
+                                                      medpenwidth,
+                                                      maxpenwidth)
+                        dot_str += ', cover="True"] ;\n'
         # Draw invisible ranking edges.
         for int_rank in range(self.maxrank*2):
             rank = int_rank/2
@@ -1233,89 +1394,75 @@ class CausalGraph(object):
                 next_str = '{}'.format(int(next_rank))
             dot_str += ('"{}" -> "{}" [style="invis"] ;\n'
                         .format(rank_str, next_str))
-        # Draw edges. If there is only one source, draw a direct edge from the
-        # source to the target. If there are several sources, draw edges from
-        # each source to the mednode and from the mednode to the target.
-        # The weight of each intermediary edge should be the same.
-        for edge in self.hyperedges:
-            sources = edge.source.nodelist
-            edge_color = edge.color
-            ratio = edge.weight/average_weight
-            pensize = math.log(ratio,2) + medpenwidth
-            if pensize < minpenwidth:
-                pensize = minpenwidth
-            if pensize > maxpenwidth:
-                pensize = maxpenwidth
-            if len(sources) == 1:
-                if showintro == False and edge.underlying == True:
-                    dot_str += "//" 
-                dot_str += ('"{}" -> "{}" '
-                            .format(sources[0].nodeid, edge.target.nodeid))
-                dot_str += '[penwidth={}'.format(pensize)
-                dot_str += ', color={}'.format(edge_color)
-                if edgelabels == True:
-                    dot_str += ', label="  {}"'.format(edge.weight)
-                dot_str += ', weight={}] ;\n'.format(edge.weight)
-            elif len(sources) > 1:
-                for node in sources:
-                    if showintro == False and edge.underlying == True:
-                        dot_str += "//"
-                    dot_str += ('"{}" -> "{}" '
-                            .format(node.nodeid, edge.mednode.nodeid))
-                    dot_str += '[dir=none, penwidth={}'.format(pensize)
-                    dot_str += ', color={}'.format(edge_color)
-                    dot_str += ', weight={}] ;\n'.format(edge.weight)
-                # Intermediary edge to target.
-                if showintro == False and edge.underlying == True:
-                    dot_str += "//"
-                dot_str += ('"{}" -> "{}" '
-                            .format(edge.mednode.nodeid, edge.target.nodeid))
-                dot_str += '[penwidth={}'.format(pensize)
-                dot_str += ', color={}'.format(edge_color)
-                if edgelabels == True:
-                    dot_str += ', label="  {}"'.format(edge.weight)
-                dot_str += ', weight={}] ;\n'.format(edge.weight)
-        # Draw cover edges if intro nodes are not shown.
-        if showintro == False:
-            for cedge in self.coveredges:
-                sources = cedge.source.nodelist
-                edge_color = cedge.color
-                ratio = cedge.weight/average_weight
+        # Draw each intermediary edge found in each mesh. Comment if
+        # Underlying. The weight of each intermediary edge within a mesh
+        # should be the same.
+        for mesh in self.meshes:
+            for edge in mesh.midedges:
+                edge_color = edge.color
+                ratio = mesh.weight/average_weight
                 pensize = math.log(ratio,2) + medpenwidth
                 if pensize < minpenwidth:
                     pensize = minpenwidth
                 if pensize > maxpenwidth:
                     pensize = maxpenwidth
-                if len(sources) == 1:
-                    dot_str += ('"{}" -> "{}" '
-                                .format(sources[0].nodeid, cedge.target.nodeid))
+                if showintro == False and mesh.underlying == True:
+                    dot_str += "//"
+                dot_str += ('"{}" -> "{}" '.format(edge.source.nodeid,
+                                                   edge.target.nodeid))
+                dot_str += '[penwidth={}'.format(pensize)
+                dot_str += ', color={}'.format(edge_color)
+                if edgelabels == True:
+                    dot_str += ', label="  {}"'.format(mesh.weight)
+                if isinstance(edge.target, MidNode):
+                    dot_str += ", dir=none"
+                dot_str += ', weight={}] ;\n'.format(mesh.weight)
+        # Draw cover edges if intro nodes are not shown.
+        if showintro == False:
+            for covermesh in self.covermeshes:
+                for edge in covermesh.midedges:
+                    edge_color = edge.color
+                    ratio = mesh.weight/average_weight
+                    pensize = math.log(ratio,2) + medpenwidth
+                    if pensize < minpenwidth:
+                        pensize = minpenwidth
+                    if pensize > maxpenwidth:
+                        pensize = maxpenwidth
+                    dot_str += ('"{}" -> "{}" '.format(edge.source.nodeid,
+                                                       edge.target.nodeid))
                     dot_str += '[penwidth={}'.format(pensize)
                     dot_str += ', color={}'.format(edge_color)
                     if edgelabels == True:
-                        dot_str += ', label="  {}"'.format(cedge.weight)
-                    dot_str += ', weight={}, '.format(cedge.weight)
-                    dot_str += 'cover="True"] ;\n'
-                elif len(sources) > 1:
-                    for node in sources:
-                        dot_str += ('"{}" -> "{}" '
-                                .format(node.nodeid, cedge.mednode.nodeid))
-                        dot_str += '[dir=none, penwidth={}'.format(pensize)
-                        dot_str += ', color={}'.format(edge_color)
-                        dot_str += ', weight={}, '.format(cedge.weight)
-                        dot_str += 'cover="True"] ;\n'
-                    # Intermediary edge to target.
-                    dot_str += ('"{}" -> "{}" '
-                                .format(cedge.mednode.nodeid, cedge.target.nodeid))
-                    dot_str += '[penwidth={}'.format(pensize)
-                    dot_str += ', color={}'.format(edge_color)
-                    if edgelabels == True:
-                        dot_str += ', label="  {}"'.format(cedge.weight)
-                    dot_str += ', weight={}, '.format(cedge.weight)
-                    dot_str += 'cover="True"] ;\n'
+                        dot_str += ', label="  {}"'.format(mesh.weight)
+                    if isinstance(edge.target, MidNode):
+                        dot_str += ", dir=none"
+                    dot_str += ', weight={}'.format(mesh.weight)
+                    dot_str += ', cover="True"] ;\n'
         # Close graph.
         dot_str += "}"
         self.dot_file = dot_str
-           
+
+
+    def write_midnode(self, mesh, midnode, average_weight, minpenwidth,
+                      medpenwidth, maxpenwidth):
+        """ Write the line of a dot file for a single midnode."""
+
+        ratio = mesh.weight/average_weight
+        pensize = math.log(ratio,2) + medpenwidth
+        if pensize < minpenwidth:
+            pensize = minpenwidth
+        if pensize > maxpenwidth:
+            pensize = maxpenwidth
+        pensize = math.sqrt(pensize)/12
+        mid_str = '"{}" [label="", '.format(midnode.nodeid)
+        mid_str += 'shape=point, style=filled, '
+        mid_str += 'color={}, '.format(mesh.color)
+        mid_str += 'fillcolor={}, '.format(midnode.color)
+        mid_str += 'midtype={}, '.format(midnode.midtype)
+        mid_str += 'width={}, height={}'.format(pensize, pensize)
+
+        return mid_str
+
 
     def __repr__(self):
         """ Representation of the CausalGraph object. """
@@ -1331,6 +1478,40 @@ class CausalGraph(object):
             res+="{}\n".format(edge.__repr__())
 
         return res
+
+
+def same_objects(list1, list2):
+    """
+    Find if two lists of objects contain all the same objects.
+    (The objects may be found in a different order in the two lists).
+    """
+
+    group1 = list1.copy()
+    group2 = list2.copy()
+    found1 = []
+    found2 = []
+    for i in range(len(group1)):
+        for object2 in group2:
+            if group1[i] == object2:
+                found1.insert(0, i)
+                break
+    for j in range(len(group2)):
+        for object1 in group1:
+            if group2[j] == object1:
+                found2.insert(0, j)
+                break
+    for i in found1:
+        del(group1[i])
+    for j in found2:
+        del(group2[j])
+    if len(group1) == 0 and len(group2) == 0:
+        are_same = True
+    else:
+        are_same = False
+
+    return are_same
+
+
 
 # -------------------- Causal Cores Generation Section ------------------------
 
@@ -1411,7 +1592,10 @@ def run_kaflow(eoi, trace_path, kaflowpath):
 
 def mergecores(eoi, causalgraphs=None, edgelabels=False, showintro=True,
                writedots=True, rmprev=False, printmsg=True):
-    """ Merge equivalent causal cores and count occurrence. """
+    """
+    Merge equivalent causal cores and count occurrence.
+    Write the final cores as meshed graphs.
+    """
 
     # Reading section.
     if causalgraphs == None:
@@ -1429,15 +1613,15 @@ def mergecores(eoi, causalgraphs=None, edgelabels=False, showintro=True,
         current_core = causal_cores[0]
         equivalent_list = [0]
         for i in range(1, len(causal_cores)):
-            same_core, equi_edges = equivalent_graphs(current_core,
+            same_core, equi_meshes = equivalent_graphs(current_core,
                                                       causal_cores[i])
             if same_core == True:
                 equivalent_list.append(i)
                 current_core.occurrence += causal_cores[i].occurrence
-                for j in range(len(current_core.hyperedges)):
-                    equi_index = equi_edges[j]
-                    w = causal_cores[i].hyperedges[equi_index].weight
-                    current_core.hyperedges[j].weight += w
+                for j in range(len(current_core.meshes)):
+                    equi_index = equi_meshes[j]
+                    w = causal_cores[i].meshes[equi_index].weight
+                    current_core.meshes[j].weight += w
         prevcores = []
         for index in equivalent_list:
             file_name = causal_cores[index].filename
@@ -1453,7 +1637,7 @@ def mergecores(eoi, causalgraphs=None, edgelabels=False, showintro=True,
     sorted_cores = sorted(merged_cores, key=lambda x: x.occurrence,
                           reverse=True)
     for i in range(len(sorted_cores)):
-        sorted_cores[i].filename = "core-{}.dot".format(i+1)
+        sorted_cores[i].filename = "meshedcore-{}.dot".format(i+1)
     for graph in sorted_cores:
         graph.build_dot_file(edgelabels, showintro)
     # Writing section.
@@ -1505,23 +1689,23 @@ def get_dot_files(eoi, prefix=None):
 
 def equivalent_graphs(graph1, graph2):
     """
-    Equivalent causal graphs have the same edges between the same rules, but
-    the exact time of their events can differ.
+    Equivalent causal graphs have the equivalent meshes between the same
+    rules, but the exact time of their events can differ.
     """
 
-    equi_edges = []
+    equi_meshes = []
     if graph1.maxrank == graph2.maxrank:
-        graph2_indexes = list(range(len(graph2.hyperedges)))
+        graph2_indexes = list(range(len(graph2.meshes)))
         all_edges_found = True
-        for edge1 in graph1.hyperedges:
+        for mesh1 in graph1.meshes:
             for i in graph2_indexes:
-                edge2 = graph2.hyperedges[i]
-                same_edge = equivalent_edges(edge1, edge2)
-                if same_edge == True:
-                    equi_edges.append(i)
+                mesh2 = graph2.meshes[i]
+                are_equi = equivalent_meshes(mesh1, mesh2)
+                if are_equi == True:
+                    equi_meshes.append(i)
                     graph2_indexes.remove(i)
                     break
-            if same_edge == False:
+            if are_equi == False:
                 all_edges_found = False
                 break
         # All the edges from graph2 should have been used
@@ -1536,51 +1720,72 @@ def equivalent_graphs(graph1, graph2):
     else:
         equi_graphs = False
 
-    return equi_graphs, equi_edges
+    return equi_graphs, equi_meshes
 
 
-def equivalent_edges(edge1, edge2):
-    """ Find whether two edges are between the same rules at same rank. """
+def equivalent_meshes(mesh1, mesh2):
+    """
+    Find if two meshes connect to event nodes with same labels at same ranks
+    and in the same way (with equivalent midedges and midnodes).
+    """
 
-    # Check sources.
-    same_sources = same_nodes(edge1.source.nodelist, edge2.source.nodelist)
-    # Check target.
-    same_target = False
-    if edge1.target.label == edge2.target.label:
-        if edge1.target.rank == edge2.target.rank:
-            same_target = True
-    if same_sources == True and same_target == True:
-        equi_edges = True
+    nn1 = len(mesh1.midnodes)
+    nn2 = len(mesh2.midnodes)
+    ne1 = len(mesh1.midedges)
+    ne2 = len(mesh2.midedges)
+    if nn1 == nn2 and ne1 == ne2:
+        are_equi = True
     else:
-        equi_edges = False
+        are_equi = False
+    if are_equi == True:
+        sources1, targets1 = mesh1.get_events()
+        sources2, targets2 = mesh2.get_events()
+        equi_sources = equivalent_nodes(sources1, sources2)
+        equi_targets = equivalent_nodes(targets1, targets2)
+        if equi_sources == True and equi_targets == True:
+            are_equi = True
+        else:
+            are_equi = False
+    if are_equi == True:
+        inv_neighbors1, ena_neighbors1 = mesh1.get_neighbors()
+        inv_neighbors2, ena_neighbors2 = mesh2.get_neighbors()
+        equi_inv = equivalent_midnodes(inv_neighbors1, inv_neighbors2)
+        equi_ena = equivalent_midnodes(ena_neighbors1, ena_neighbors2)
+        if equi_inv == True and equi_ena == True:
+            are_equi = True
+        else:
+            are_equi = False
 
-    return equi_edges
+    return are_equi
 
 
-def same_nodes(node_list1, node_list2):
-    """ Find if two lists of nodes contain all the same nodes. """
+def equivalent_nodes(nodelist1, nodelist2):
+    """
+    Find whether two lists of nodes contain nodes with
+    same labels at the same ranks.
+    """
 
-    group1 = node_list1.copy()
-    group2 = node_list2.copy()
+    list1 = nodelist1.copy()
+    list2 = nodelist2.copy()
     found1 = []
     found2 = []
-    for i in range(len(group1)):
-        for node2 in group2:
-            if group1[i].label == node2.label:
-                if group1[i].rank == node2.rank:
+    for i in range(len(list1)):
+        for node2 in list2:
+            if list1[i].label == node2.label:
+                if list1[i].rank == node2.rank:
                     found1.insert(0, i)
                     break
-    for j in range(len(group2)):
-        for node1 in group1:
-            if group2[j].label == node1.label:
-                if group2[j].rank == node1.rank:
+    for j in range(len(list2)):
+        for node1 in list1:
+            if list2[j].label == node1.label:
+                if list2[j].rank == node1.rank:
                     found2.insert(0, j)
                     break
     for i in found1:
-        del(group1[i])
+        del(list1[i])
     for j in found2:
-        del(group2[j])
-    if len(group1) == 0 and len(group2) == 0:
+        del(list2[j])
+    if len(list1) == 0 and len(list2) == 0:
         are_same = True
     else:
         are_same = False
@@ -1588,209 +1793,267 @@ def same_nodes(node_list1, node_list2):
     return are_same
 
 
+def equivalent_midnodes(neighbors1, neighbors2):
+    """
+    Find if two lists of midnodes described as their respective
+    neighbors contain all the same midnodes.
+    """
+
+    list1 = neighbors1.copy()
+    list2 = neighbors2.copy()
+    found1 = []
+    found2 = []
+    for i in range(len(list1)):
+        for midnode2 in list2:
+            if equivalent_nodes(list1[i]["srcs"], midnode2["srcs"]):
+                if equivalent_nodes(list1[i]["trgs"], midnode2["trgs"]):
+                    found1.insert(0, i)
+                    break
+    for j in range(len(list2)):
+        for midnode1 in list1:
+            if equivalent_nodes(list2[j]["srcs"], midnode1["srcs"]):
+                if equivalent_nodes(list2[j]["trgs"], midnode1["trgs"]):
+                    found2.insert(0, j)
+                    break
+    for i in found1:
+        del(list1[i])
+    for j in found2:
+        del(list2[j])
+    if len(list1) == 0 and len(list2) == 0:
+        are_same = True
+    else:
+        are_same = False
+
+    return are_same
+
+
+#def equivalent_edgegroups(edgelist1, edgelist2):
+#    """ Find whether two edge groups contain equivalent edges. """
+#
+#    group1 = edgelist1.copy()
+#    group2 = edgelist2.copy()
+#    found1 = []
+#    found2 = []
+#    for i in range(len(group1)):
+#        for edge2 in group2:
+#            if equivalent_edges(group1[i], edge2):
+#                found1.insert(0, i)
+#                break
+#    for j in range(len(group2)):
+#        for edge1 in group1:
+#            if equivalent_edges(group2[j], edge1):
+#                found2.insert(0, j)
+#                break
+#    for i in found1:
+#        del(group1[i])
+#    for j in found2:
+#        del(group2[j])
+#    if len(group1) == 0 and len(group2) == 0:
+#        are_equi = True
+#    else:
+#        are_equi = False
+#
+#    return are_equi
+
+
+#def equivalent_edges(edge1, edge2):
+#    """ Find whether two edges are between the same rules at same rank. """
+#
+#    same_source = False
+#    if edge1.source.label == edge2.source.label:
+#        if edge1.source.rank == edge2.source.rank:
+#            same_source = True
+#    same_target = False
+#    if edge1.target.label == edge2.target.label:
+#        if edge1.target.rank == edge2.target.rank:
+#            same_target = True
+#    if same_source == True and same_target == True:
+#        equi_edges = True
+#    else:
+#        equi_edges = False
+#
+#    return equi_edges
+
+
 # ================ End of Causal Cores Merging Section ========================
 
 # +++++++++++++++++++++++ Cores Looping Section +++++++++++++++++++++++++++++++
 
-def loopcores(eoi, causalgraphs=None, ignorelist=None, edgelabels=False,
-              showintro=False, writedots=True, rmprev=False,
-              writepremerge=False):
-    """ Build looped event paths by merging identical nodes within cores. """
-
-    # Reading section.
-    if causalgraphs == None:
-        core_files = get_dot_files(eoi, "core")
-        cores = []
-        for core_file in core_files:
-            core_path = "{}/{}".format(eoi, core_file)
-            cores.append(CausalGraph(core_path, eoi))
-    else:
-       cores = causalgraphs
-       core_files = None
-    # Doing the work.
-    flush_ignored(cores, core_files, ignorelist)
-    for core in cores:
-        #remove_ignored(core, ignorelist)
-        merge_same_labels(core)
-        fuse_edges(core)
-        core.rank_sequential()
-        #core.old_rank_nodes()
-        core.build_dot_file(edgelabels, showintro)
-    # Writing section.
-    if writepremerge == True:
-        for i in range(len(cores)):
-            cores[i].filename = "loopedcore-{}.dot".format(i+1)
-        for graph in cores:
-                output_path = "{}/{}".format(eoi, graph.filename)
-                outfile = open(output_path, "w")
-                outfile.write(graph.dot_file)
-                outfile.close()
-    looped_paths = mergecores(eoi, cores, writedots=False,
-                              edgelabels=edgelabels, showintro=showintro,
-                              printmsg=False)
-    for i in range(len(looped_paths)):
-        looped_paths[i].filename = "eventpath-{}.dot".format(i+1)
-    if writedots == True:
-        for graph in looped_paths:
-            output_path = "{}/{}".format(eoi, graph.filename)
-            outfile = open(output_path, "w")
-            outfile.write(graph.dot_file)
-            outfile.close()
-    if rmprev == True:
-        if core_files == None:
-            core_files = get_dot_files(eoi, "core")
-        for core_file in core_files:
-            file_path = "{}/{}".format(eoi, core_file)
-            os.remove(file_path)
-    print("Finding loops in cores.")
-    print("Merging equivalent looped cores, {} event paths obtained."
-          .format(len(looped_paths)))
-
-    return looped_paths
-
-
-def flush_ignored(graph_list, graph_files, ignorelist):
-    """
-    Temporary fix to completely remove all cores that contain
-    an ignored term in any of its node.
-    """
-
-    init_len = len(graph_list)
-    graphs_to_remove = []
-    for i in range(len(graph_list)):
-        graph = graph_list[i]
-        remove_graph = False
-        for node in graph.nodes:
-            if any(ignorestr in node.label for ignorestr in ignorelist):
-                remove_graph = True
-                break
-        if remove_graph == True:
-            graphs_to_remove.insert(0, i)
-    for i in graphs_to_remove:
-        if graph_files != None:
-           slash = graph_list[i].filename.index("/")
-           fname = graph_list[i].filename[slash+1:]
-           graph_files.remove(fname)
-        del(graph_list[i])
-    print("Ignoring {} cores out of {} because they contain reverse rules."
-          .format(len(graphs_to_remove), init_len))
+#def loopcores(eoi, causalgraphs=None, ignorelist=None, edgelabels=False,
+#              showintro=False, writedots=True, rmprev=False,
+#              writepremerge=False):
+#    """ Build looped event paths by merging identical nodes within cores. """
+#
+#    # Reading section.
+#    if causalgraphs == None:
+#        core_files = get_dot_files(eoi, "core")
+#        cores = []
+#        for core_file in core_files:
+#            core_path = "{}/{}".format(eoi, core_file)
+#            cores.append(CausalGraph(core_path, eoi))
+#    else:
+#       cores = causalgraphs
+#       core_files = None
+#    # Doing the work.
+#    flush_ignored(cores, core_files, ignorelist)
+#    for core in cores:
+#        #remove_ignored(core, ignorelist)
+#        merge_same_labels(core)
+#        fuse_edges(core)
+#        core.rank_sequential()
+#        #core.old_rank_nodes()
+#        core.build_dot_file(edgelabels, showintro)
+#    # Writing section.
+#    if writepremerge == True:
+#        for i in range(len(cores)):
+#            cores[i].filename = "loopedcore-{}.dot".format(i+1)
+#        for graph in cores:
+#                output_path = "{}/{}".format(eoi, graph.filename)
+#                outfile = open(output_path, "w")
+#                outfile.write(graph.dot_file)
+#                outfile.close()
+#    looped_paths = mergecores(eoi, cores, writedots=False,
+#                              edgelabels=edgelabels, showintro=showintro,
+#                              printmsg=False)
+#    for i in range(len(looped_paths)):
+#        looped_paths[i].filename = "eventpath-{}.dot".format(i+1)
+#    if writedots == True:
+#        for graph in looped_paths:
+#            output_path = "{}/{}".format(eoi, graph.filename)
+#            outfile = open(output_path, "w")
+#            outfile.write(graph.dot_file)
+#            outfile.close()
+#    if rmprev == True:
+#        if core_files == None:
+#            core_files = get_dot_files(eoi, "core")
+#        for core_file in core_files:
+#            file_path = "{}/{}".format(eoi, core_file)
+#            os.remove(file_path)
+#    print("Finding loops in cores.")
+#    print("Merging equivalent looped cores, {} event paths obtained."
+#          .format(len(looped_paths)))
+#
+#    return looped_paths
 
 
-def remove_ignored(graph, ignorelist):
-    """ Remove nodes whose label contains a string defined in ignorelist. """
-
-    ignored_nodes = []
-    for i in range(len(graph.nodes)):
-        if any(ignorestr in graph.nodes[i].label for ignorestr in ignorelist):
-            ignored_nodes.insert(0, i)
-    for i in ignored_nodes:
-        del(graph.nodes[i])
-    ignored_edges = []
-    for i in range(len(graph.hyperedges)):
-        source = graph.edges[i].source.label
-        target = graph.edges[i].target.label
-        if any(ignorestr in source for ignorestr in ignorelist):
-            ignored_edges.insert(0, i)
-        if any(ignorestr in target for ignorestr in ignorelist):
-            if i not in ignored_edges:
-                ignored_edges.insert(0, i)
-    for i in ignored_edges:
-        del(graph.hyperedgesedges[i])
-    graph.cleanup()
-
-
-def merge_same_labels(graph):
-    """
-    Merge every node with same label within a graph. Merging between two
-    nodes is done by deleting the second node and changing any edge which was
-    coming from or going to the second node to now come from or go to the
-    second node.
-    If two nodes with same label appear as sources of a same hyperedge, 
-    the intermediary edge from the second node is simply removed.
-    """
-
-    same_label_remains = True
-    while same_label_remains == True:
-        same_label_remains = False
-        for node1 in graph.nodes:
-            same_label_nodes = [node1]
-            for node2 in graph.nodes:
-                if node2 != node1:
-                    if node1.label == node2.label:
-                        same_label_nodes.append(node2)
-            if len(same_label_nodes) > 1:
-                same_label_remains = True
-                merge_nodes(same_label_nodes, graph)
-                break
+#def flush_ignored(graph_list, graph_files, ignorelist):
+#    """
+#    Remove cores that contain any ignored term in any of its nodes.
+#    """
+#
+#    init_len = len(graph_list)
+#    graphs_to_remove = []
+#    for i in range(len(graph_list)):
+#        graph = graph_list[i]
+#        remove_graph = False
+#        for node in graph.nodes:
+#            if any(ignorestr in node.label for ignorestr in ignorelist):
+#                remove_graph = True
+#                break
+#        if remove_graph == True:
+#            graphs_to_remove.insert(0, i)
+#    for i in graphs_to_remove:
+#        if graph_files != None:
+#           slash = graph_list[i].filename.index("/")
+#           fname = graph_list[i].filename[slash+1:]
+#           graph_files.remove(fname)
+#        del(graph_list[i])
+#    print("Ignoring {} cores out of {} because they contain reverse rules."
+#          .format(len(graphs_to_remove), init_len))
 
 
-def merge_nodes(nodes_to_merge, graph):
-    """ Merge every node from the list onto the node of lowest rank. """
+#def merge_same_labels(graph):
+#    """
+#    Merge every node with same label within a graph. Merging between two
+#    nodes is done by deleting the second node and changing any edge which was
+#    coming from or going to the second node to now come from or go to the
+#    second node.
+#    If two nodes with same label appear as sources of a same hyperedge, 
+#    the intermediary edge from the second node is simply removed.
+#    """
+#
+#    same_label_remains = True
+#    while same_label_remains == True:
+#        same_label_remains = False
+#        for node1 in graph.nodes:
+#            same_label_nodes = [node1]
+#            for node2 in graph.nodes:
+#                if node2 != node1:
+#                    if node1.label == node2.label:
+#                        same_label_nodes.append(node2)
+#            if len(same_label_nodes) > 1:
+#                same_label_remains = True
+#                merge_nodes(same_label_nodes, graph)
+#                break
 
-    ranks = []
-    for node in nodes_to_merge:
-        ranks.append(node.rank)
-    lowest_rank = min(ranks)
-    for i in range(len(nodes_to_merge)):
-        if nodes_to_merge[i].rank == lowest_rank:
-            main_node = nodes_to_merge[i]
-            del(nodes_to_merge[i])
-            break
-    for edge in graph.hyperedges:
-        # Replace sources.
-        sources_found = False
-        nodes_to_remove = []
-        for i in range(len(edge.source.nodelist)):
-            src = edge.source.nodelist[i]
-            if src in nodes_to_merge:
-                nodes_to_remove.insert(0, i)
-                sources_found = True
-        if sources_found == True:
-            for i in nodes_to_remove:
-                del(edge.source.nodelist[i])
-            label_already_found = False
-            for node in edge.source.nodelist:
-                if node.label == main_node.label:
-                    label_already_found = True
-            if label_already_found == False:
-                edge.source.nodelist.append(main_node)
-        # Replace target.
-        if edge.target in nodes_to_merge:
-            edge.target = main_node
-    for i in range(len(graph.nodes)-1, -1, -1):
-        if graph.nodes[i] in nodes_to_merge:
-            del(graph.nodes[i])
-            
 
-def fuse_edges(graph):
-    """ Remove duplicate edges between two same nodes but sum weights. """
+#def merge_nodes(nodes_to_merge, graph):
+#    """ Merge every node from the list onto the node of lowest rank. """
+#
+#    ranks = []
+#    for node in nodes_to_merge:
+#        ranks.append(node.rank)
+#    lowest_rank = min(ranks)
+#    for i in range(len(nodes_to_merge)):
+#        if nodes_to_merge[i].rank == lowest_rank:
+#            main_node = nodes_to_merge[i]
+#            del(nodes_to_merge[i])
+#            break
+#    for edge in graph.hyperedges:
+#        # Replace sources.
+#        sources_found = False
+#        nodes_to_remove = []
+#        for i in range(len(edge.source.nodelist)):
+#            src = edge.source.nodelist[i]
+#            if src in nodes_to_merge:
+#                nodes_to_remove.insert(0, i)
+#                sources_found = True
+#        if sources_found == True:
+#            for i in nodes_to_remove:
+#                del(edge.source.nodelist[i])
+#            label_already_found = False
+#            for node in edge.source.nodelist:
+#                if node.label == main_node.label:
+#                    label_already_found = True
+#            if label_already_found == False:
+#                edge.source.nodelist.append(main_node)
+#        # Replace target.
+#        if edge.target in nodes_to_merge:
+#            edge.target = main_node
+#    for i in range(len(graph.nodes)-1, -1, -1):
+#        if graph.nodes[i] in nodes_to_merge:
+#            del(graph.nodes[i])
 
-    unique_edges = []
-    for edge1 in graph.hyperedges:
-        sources1 = edge1.source.nodelist
-        target1 = edge1.target.nodeid
-        new_edge = True
-        for edge2 in unique_edges:
-            sources2 = edge2.source.nodelist
-            target2 = edge2.target.nodeid
-            same_sources = same_nodes(sources1, sources2)
-            if same_sources == True and target1 == target2:
-                new_edge = False
-                break
-        if new_edge == True:
-            unique_edges.append(edge1)
-    for unique_edge in unique_edges:
-        unique_sources = unique_edge.source.nodelist
-        unique_target = unique_edge.target.nodeid
-        w = 0
-        for edge in graph.hyperedges:
-            sources = edge.source.nodelist
-            target = edge.target.nodeid
-            same_sources = same_nodes(unique_sources, sources)
-            if same_sources == True and unique_target == target:
-                w += edge.weight
-        unique_edge.weight = w
-    graph.hyperedges = unique_edges
+
+#def fuse_edges(graph):
+#    """ Remove duplicate edges between two same nodes but sum weights. """
+#
+#    unique_edges = []
+#    for edge1 in graph.hyperedges:
+#        sources1 = edge1.source.nodelist
+#        target1 = edge1.target.nodeid
+#        new_edge = True
+#        for edge2 in unique_edges:
+#            sources2 = edge2.source.nodelist
+#            target2 = edge2.target.nodeid
+#            same_sources = same_nodes(sources1, sources2)
+#            if same_sources == True and target1 == target2:
+#                new_edge = False
+#                break
+#        if new_edge == True:
+#            unique_edges.append(edge1)
+#    for unique_edge in unique_edges:
+#        unique_sources = unique_edge.source.nodelist
+#        unique_target = unique_edge.target.nodeid
+#        w = 0
+#        for edge in graph.hyperedges:
+#            sources = edge.source.nodelist
+#            target = edge.target.nodeid
+#            same_sources = same_nodes(unique_sources, sources)
+#            if same_sources == True and unique_target == target:
+#                w += edge.weight
+#        unique_edge.weight = w
+#    graph.hyperedges = unique_edges
 
 # ++++++++++++++++++ End of Cores Looping Section +++++++++++++++++++++++++++++
 
@@ -1806,7 +2069,7 @@ def mergepaths(eoi, causalgraphs=None, ignorelist=None, edgelabels=False,
         # horizontally, yielding a different graph, but with same ranks for
         # all nodes.
         #path_files = get_dot_files(eoi, "eventpath")
-        path_files = get_dot_files(eoi, "core")
+        path_files = get_dot_files(eoi, "meshedcore")
         event_paths = []
         for path_file in path_files:
             path_path = "{}/{}".format(eoi, path_file)
@@ -1816,7 +2079,7 @@ def mergepaths(eoi, causalgraphs=None, ignorelist=None, edgelabels=False,
         path_files = None
     # Doing the work.
     flush_ignored(event_paths, path_files, ignorelist)
-    pathway = CausalGraph(eoi=eoi, hypergraph=True)
+    pathway = CausalGraph(eoi=eoi, meshedgraph=True)
     pathway.occurrence = 0
     node_number = 1
     seen_labels = []
@@ -1881,6 +2144,65 @@ def mergepaths(eoi, causalgraphs=None, ignorelist=None, edgelabels=False,
     print("Merging all event paths into one event pathway.")
 
     return pathway        
+
+
+def flush_ignored(graph_list, graph_files, ignorelist):
+    """
+    Remove cores that contain any ignored term in any of its nodes.
+    """
+
+    init_len = len(graph_list)
+    graphs_to_remove = []
+    for i in range(len(graph_list)):
+        graph = graph_list[i]
+        remove_graph = False
+        for node in graph.nodes:
+            if any(ignorestr in node.label for ignorestr in ignorelist):
+                remove_graph = True
+                break
+        if remove_graph == True:
+            graphs_to_remove.insert(0, i)
+    for i in graphs_to_remove:
+        if graph_files != None:
+           slash = graph_list[i].filename.index("/")
+           fname = graph_list[i].filename[slash+1:]
+           graph_files.remove(fname)
+        del(graph_list[i])
+    print("Ignoring {} cores out of {} because they contain reverse rules."
+          .format(len(graphs_to_remove), init_len))
+
+
+def fuse_edges(graph):
+    """ Remove duplicate edges between two same nodes but sum weights. """
+
+    unique_edges = []
+    for edge1 in graph.hyperedges:
+        sources1 = edge1.source.nodelist
+        target1 = edge1.target.nodeid
+        new_edge = True
+        for edge2 in unique_edges:
+            sources2 = edge2.source.nodelist
+            target2 = edge2.target.nodeid
+            same_sources = same_nodes(sources1, sources2)
+            if same_sources == True and target1 == target2:
+                new_edge = False
+                break
+        if new_edge == True:
+            unique_edges.append(edge1)
+    for unique_edge in unique_edges:
+        unique_sources = unique_edge.source.nodelist
+        unique_target = unique_edge.target.nodeid
+        w = 0
+        for edge in graph.hyperedges:
+            sources = edge.source.nodelist
+            target = edge.target.nodeid
+            same_sources = same_nodes(unique_sources, sources)
+            if same_sources == True and unique_target == target:
+                w += edge.weight
+        unique_edge.weight = w
+    graph.hyperedges = unique_edges
+
+
 
 # ............... End of Event Paths Merging Section ..........................
 
