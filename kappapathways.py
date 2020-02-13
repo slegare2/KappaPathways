@@ -594,19 +594,6 @@ class CausalGraph(object):
                     self.edgegroups.append(current_group)
 
 
-#    def create_meshes(self):
-#        """ Create meshes from edge groups. """
-#
-#        midid = 1
-#        for group in self.edgegroups:
-#            new_mesh = Mesh(group, midid)
-#            new_mesh.build_from_group()
-#            self.meshes.append(new_mesh)
-#            midid = new_mesh.midid
-#
-#        self.meshedgraph = True
-
-
     def create_meshes(self, edgegroups, startid):
         """ Create meshes from edge groups. """
 
@@ -679,13 +666,19 @@ class CausalGraph(object):
             keep, midnodes_set = self.keep_group(group)
             if keep == True:
                 new_mesh = Mesh()
-                for midnode in midnodes_set:
-                    new_mesh.midnodes.append(midnode)
-                    for midedge in self.midedges:
-                        if midedge.source == midnode:
-                            new_mesh.midedges.append(midedge)
-                        if midedge.target == midnode:
-                            new_mesh.midedges.append(midedge)
+                if len(midnodes_set) > 0:
+                    for midnode in midnodes_set:
+                        new_mesh.midnodes.append(midnode)
+                        for midedge in self.midedges:
+                            if midedge.source == midnode:
+                                if midedge not in new_mesh.midedges:
+                                    new_mesh.midedges.append(midedge)
+                            if midedge.target == midnode:
+                                if midedge not in new_mesh.midedges:
+                                    new_mesh.midedges.append(midedge)
+                else:
+                    new_mesh.midedges.append(group[0])
+                new_mesh.weight = new_mesh.midedges[0].weight
                 self.meshes.append(new_mesh)
 
 
@@ -824,7 +817,7 @@ class CausalGraph(object):
                     if edge.source == node:
                         target_ranks.append(edge.target.rank)
                 node.rank = min(target_ranks)-1
-        #self.rank_intermediary(self.hyperedges)
+        #self.rank_intermediary(self.meshes)
         self.get_maxrank()
         self.sequentialize_nodeids()
 
@@ -985,7 +978,6 @@ class CausalGraph(object):
         # Reset information about cover edges. 
         for mesh in self.meshes:
             mesh.underlying = False
-        #self.covermeshes = []
         nointro_groups = []
         midid = self.find_max_midid()+1
         for mesh1 in self.meshes:
@@ -1016,6 +1008,7 @@ class CausalGraph(object):
                 for mesh in mesh_list:
                     w += mesh.weight
                     mesh.underlying = True
+                noin1.weight = w
                 # Create a new mesh without intro nodes.
                 if len(noin1.midedges) > 0:
                     self.covermeshes.append(noin1)
@@ -1286,7 +1279,10 @@ class CausalGraph(object):
         maxpenwidth = 6.5
         all_weights = []
         for mesh in self.meshes:
-            all_weights.append(mesh.weight)
+            if mesh.underlying == False:
+                all_weights.append(mesh.weight)
+        for covermesh in self.covermeshes:
+            all_weights.append(covermesh.weight)
         average_weight = statistics.mean(all_weights)
         # Draw nodes.
         for int_rank in range((self.maxrank+1)*2):
@@ -1422,7 +1418,7 @@ class CausalGraph(object):
             for covermesh in self.covermeshes:
                 for edge in covermesh.midedges:
                     edge_color = edge.color
-                    ratio = mesh.weight/average_weight
+                    ratio = covermesh.weight/average_weight
                     pensize = math.log(ratio,2) + medpenwidth
                     if pensize < minpenwidth:
                         pensize = minpenwidth
@@ -1433,10 +1429,10 @@ class CausalGraph(object):
                     dot_str += '[penwidth={}'.format(pensize)
                     dot_str += ', color={}'.format(edge_color)
                     if edgelabels == True:
-                        dot_str += ', label="  {}"'.format(mesh.weight)
+                        dot_str += ', label="  {}"'.format(covermesh.weight)
                     if isinstance(edge.target, MidNode):
                         dot_str += ", dir=none"
-                    dot_str += ', weight={}'.format(mesh.weight)
+                    dot_str += ', weight={}'.format(covermesh.weight)
                     dot_str += ', cover="True"] ;\n'
         # Close graph.
         dot_str += "}"
@@ -1448,7 +1444,7 @@ class CausalGraph(object):
         """ Write the line of a dot file for a single midnode."""
 
         ratio = mesh.weight/average_weight
-        pensize = math.log(ratio,2) + medpenwidth
+        pensize = math.log(ratio, 2) + medpenwidth
         if pensize < minpenwidth:
             pensize = minpenwidth
         if pensize > maxpenwidth:
@@ -2059,7 +2055,7 @@ def equivalent_midnodes(neighbors1, neighbors2):
 
 # .................. Event Paths Merging Section ..............................
 
-def mergepaths(eoi, causalgraphs=None, ignorelist=None, edgelabels=False,
+def foldcores(eoi, causalgraphs=None, ignorelist=None, edgelabels=False,
                showintro=False, writedot=True, rmprev=False):
     """ Merge event paths into a single pathway. """
 
@@ -2068,7 +2064,6 @@ def mergepaths(eoi, causalgraphs=None, ignorelist=None, edgelabels=False,
         # Using cores or eventpaths both work. But it can suffle the nodes
         # horizontally, yielding a different graph, but with same ranks for
         # all nodes.
-        #path_files = get_dot_files(eoi, "eventpath")
         path_files = get_dot_files(eoi, "meshedcore")
         event_paths = []
         for path_file in path_files:
@@ -2083,24 +2078,17 @@ def mergepaths(eoi, causalgraphs=None, ignorelist=None, edgelabels=False,
     pathway.occurrence = 0
     node_number = 1
     seen_labels = []
-    #lowest_ranks = {}
     for event_path in event_paths:
         pathway.occurrence += event_path.occurrence
-        for node in event_path.nodes:
+        for node in event_path.eventnodes:
             if node.label not in seen_labels:
                 seen_labels.append(node.label)
-    #            lowest_ranks[node.label] = node.rank
                 n_id = "node{}".format(node_number)
-                pathway.nodes.append(CausalNode(n_id, node.label,
+                pathway.nodes.append(EventNode(n_id, node.label,
                                                 node.rank,
                                                 intro=node.intro,
                                                 first=node.first))
                 node_number += 1
-    #        else:
-    #            if node.rank < lowest_ranks[node.label]:
-    #                lowest_ranks[node.label] = node.rank
-    #for node in pathway.nodes:
-    #    node.rank = lowest_ranks[node.label]
     intermediary_id = 1
     for event_path in event_paths:
         for edge in event_path.hyperedges:
@@ -2156,7 +2144,7 @@ def flush_ignored(graph_list, graph_files, ignorelist):
     for i in range(len(graph_list)):
         graph = graph_list[i]
         remove_graph = False
-        for node in graph.nodes:
+        for node in graph.eventnodes:
             if any(ignorestr in node.label for ignorestr in ignorelist):
                 remove_graph = True
                 break
@@ -3964,8 +3952,8 @@ def findpathway(eoi, kappamodel, kasimpath, kaflowpath, simtime=1000,
                             writedots=True, rmprev=False, writepremerge=False)
 
     # 4) Merge all event paths into one event pathway.
-    eventpath = mergepaths(eoi, causalgraphs=loopedcores,
-                           edgelabels=edgelabels, writedot=True, rmprev=False)
+    eventpath = foldcores(eoi, causalgraphs=loopedcores,
+                          edgelabels=edgelabels, writedot=True, rmprev=False)
 
     # 5) Convert an event pathway into a species pathway.
     speciespathway(eoi, kappamodel, causalgraph=eventpath,
