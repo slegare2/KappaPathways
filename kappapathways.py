@@ -822,6 +822,93 @@ class CausalGraph(object):
         self.sequentialize_nodeids()
 
 
+    def old_rank_sequential(self):
+        """
+        Find the rank of each node, starting with first nodes and then adding
+        the other nodes sequentially as soon as they have a secured enabling.
+        """
+
+        # Initialize ranks.
+        current_nodes = []
+        for node in self.eventnodes:
+            if node.first == True:
+                node.rank = 1
+                current_nodes.append(node)
+            else:
+                node.rank = None
+        #for mednode in self.midnodes:
+        #    mednode.rank = None
+        while len(current_nodes) > 0:
+            # 1) Gather edge groups that have a current_node in their sources.
+            current_groups = []
+            for edgegroup in self.edgegroups:
+                for edge in edgegroup:
+                    for current_node in current_nodes:
+                        if current_node == edge.source:
+                            if edgegroup not in current_groups:
+                                current_groups.append(edgegroup)
+            # 2) Gather candidate nodes as any target of current edge groups.
+            candidates = []
+            for group in current_groups:
+                for edge in group:
+                    if edge.target not in candidates:
+                        candidates.append(edge.target)
+            # 3) Set rank of all candidate nodes that are secured: all the
+            #    nodes pointing to them (ignoring intro nodes) are already
+            #    ranked in at least one edge group.
+            for candidate in candidates:
+                possible_ranks = []
+                for group in current_groups:
+                    incoming_edges = []
+                    for edge in group:
+                        if edge.source.intro == False:
+                            if edge.target == candidate:
+                                incoming_edges.append(edge)
+                    if len(incoming_edges) > 0:
+                        secured = True
+                        for inedge in incoming_edges:
+                            if inedge.source.rank == None:
+                                secured = False
+                                break
+                        if secured == True:
+                            source_ranks = []
+                            for inedge in incoming_edges:
+                                source_ranks.append(inedge.source.rank)
+                            possible_ranks.append(max(source_ranks)+1)
+                if len(possible_ranks) > 0:
+                    candidate.rank = min(possible_ranks)
+                    current_nodes.append(candidate)
+            # 4) Remove all current_nodes for which all outgoing edge groups
+            #    have all their targets already ranked.
+            next_nodes = []
+            for current_node in current_nodes:
+                keep_node = False
+                node_targets = []
+                for edgegroup in self.edgegroups:
+                    for edge in edgegroup:
+                        if edge.source == current_node:
+                            if edge.target not in node_targets:
+                                node_targets.append(edge.target)
+                for node in node_targets:
+                    if node.rank == None:
+                        keep_node = True
+                        break
+                if keep_node == True:
+                    next_nodes.append(current_node)
+            current_nodes = next_nodes
+        # Rank intro nodes as the lower rank of a node it points to minus one.
+        for node in self.eventnodes:
+            if node.intro == True:
+                target_ranks = []
+                for edge in self.causaledges:
+                    if edge.source == node:
+                        target_ranks.append(edge.target.rank)
+                node.rank = min(target_ranks)-1
+        #self.rank_intermediary(self.meshes)
+        self.get_maxrank()
+        self.sequentialize_nodeids()
+
+
     def rank_intermediary(self, edgegroup):
         """
         Rank intermediary nodes. Not used (ner well defined) for the moment.
@@ -1719,10 +1806,11 @@ def equivalent_graphs(graph1, graph2):
     return equi_graphs, equi_meshes
 
 
-def equivalent_meshes(mesh1, mesh2):
+def equivalent_meshes(mesh1, mesh2, enforcerank=True):
     """
-    Find if two meshes connect to event nodes with same labels at same ranks
-    and in the same way (with equivalent midedges and midnodes).
+    Find if two meshes connect to event nodes with same labels and
+    optionally with same ranks. They must also connect with with
+    equivalent midedges and midnodes.
     """
 
     nn1 = len(mesh1.midnodes)
@@ -1736,8 +1824,8 @@ def equivalent_meshes(mesh1, mesh2):
     if are_equi == True:
         sources1, targets1 = mesh1.get_events()
         sources2, targets2 = mesh2.get_events()
-        equi_sources = equivalent_nodes(sources1, sources2)
-        equi_targets = equivalent_nodes(targets1, targets2)
+        equi_sources = equivalent_nodes(sources1, sources2, enforcerank)
+        equi_targets = equivalent_nodes(targets1, targets2, enforcerank)
         if equi_sources == True and equi_targets == True:
             are_equi = True
         else:
@@ -1745,8 +1833,10 @@ def equivalent_meshes(mesh1, mesh2):
     if are_equi == True:
         inv_neighbors1, ena_neighbors1 = mesh1.get_neighbors()
         inv_neighbors2, ena_neighbors2 = mesh2.get_neighbors()
-        equi_inv = equivalent_midnodes(inv_neighbors1, inv_neighbors2)
-        equi_ena = equivalent_midnodes(ena_neighbors1, ena_neighbors2)
+        equi_inv = equivalent_midnodes(inv_neighbors1, inv_neighbors2,
+                                       enforcerank)
+        equi_ena = equivalent_midnodes(ena_neighbors1, ena_neighbors2,
+                                       enforcerank)
         if equi_inv == True and equi_ena == True:
             are_equi = True
         else:
@@ -1755,10 +1845,10 @@ def equivalent_meshes(mesh1, mesh2):
     return are_equi
 
 
-def equivalent_nodes(nodelist1, nodelist2):
+def equivalent_nodes(nodelist1, nodelist2, enforcerank=True):
     """
     Find whether two lists of nodes contain nodes with
-    same labels at the same ranks.
+    same labels and optionally with same ranks.
     """
 
     list1 = nodelist1.copy()
@@ -1768,15 +1858,23 @@ def equivalent_nodes(nodelist1, nodelist2):
     for i in range(len(list1)):
         for node2 in list2:
             if list1[i].label == node2.label:
-                if list1[i].rank == node2.rank:
+                if enforcerank == False:
                     found1.insert(0, i)
                     break
+                elif enforcerank == True:
+                    if list1[i].rank == node2.rank:
+                        found1.insert(0, i)
+                        break
     for j in range(len(list2)):
         for node1 in list1:
             if list2[j].label == node1.label:
-                if list2[j].rank == node1.rank:
+                if enforcerank == False:
                     found2.insert(0, j)
                     break
+                elif enforcerank == True:
+                    if list2[j].rank == node1.rank:
+                        found2.insert(0, j)
+                        break
     for i in found1:
         del(list1[i])
     for j in found2:
@@ -1789,7 +1887,7 @@ def equivalent_nodes(nodelist1, nodelist2):
     return are_same
 
 
-def equivalent_midnodes(neighbors1, neighbors2):
+def equivalent_midnodes(neighbors1, neighbors2, enforcerank=True):
     """
     Find if two lists of midnodes described as their respective
     neighbors contain all the same midnodes.
@@ -1801,14 +1899,22 @@ def equivalent_midnodes(neighbors1, neighbors2):
     found2 = []
     for i in range(len(list1)):
         for midnode2 in list2:
-            if equivalent_nodes(list1[i]["srcs"], midnode2["srcs"]):
-                if equivalent_nodes(list1[i]["trgs"], midnode2["trgs"]):
+            s1 = list1[i]["srcs"]
+            s2 = midnode2["srcs"]
+            if equivalent_nodes(s1, s2, enforcerank):
+                t1 = list1[i]["trgs"]
+                t2 = midnode2["trgs"]
+                if equivalent_nodes(t1, t2, enforcerank):
                     found1.insert(0, i)
                     break
     for j in range(len(list2)):
         for midnode1 in list1:
-            if equivalent_nodes(list2[j]["srcs"], midnode1["srcs"]):
-                if equivalent_nodes(list2[j]["trgs"], midnode1["trgs"]):
+            s2 = list2[j]["srcs"]
+            s1 = midnode1["srcs"]
+            if equivalent_nodes(s2, s1, enforcerank):
+                t2 = list2[j]["trgs"]
+                t1 = midnode1["trgs"]
+                if equivalent_nodes(t2, t1, enforcerank):
                     found2.insert(0, j)
                     break
     for i in found1:
@@ -2057,58 +2163,71 @@ def equivalent_midnodes(neighbors1, neighbors2):
 
 def foldcores(eoi, causalgraphs=None, ignorelist=None, edgelabels=False,
                showintro=False, writedot=True, rmprev=False):
-    """ Merge event paths into a single pathway. """
+    """ Merge meshed cores into a single event pathway. """
 
     # Reading section.
     if causalgraphs == None:
         # Using cores or eventpaths both work. But it can suffle the nodes
         # horizontally, yielding a different graph, but with same ranks for
         # all nodes.
-        path_files = get_dot_files(eoi, "meshedcore")
-        event_paths = []
-        for path_file in path_files:
-            path_path = "{}/{}".format(eoi, path_file)
-            event_paths.append(CausalGraph(path_path, eoi))
+        core_files = get_dot_files(eoi, "meshedcore")
+        meshedcores = []
+        for core_file in core_files:
+            core_path = "{}/{}".format(eoi, core_file)
+            meshedcores.append(CausalGraph(core_path, eoi))
     else:
-        event_paths = causalgraphs
-        path_files = None
+        meshedcores = causalgraphs
+        core_files = None
     # Doing the work.
-    flush_ignored(event_paths, path_files, ignorelist)
+    flush_ignored(meshedcores, core_files, ignorelist)
     pathway = CausalGraph(eoi=eoi, meshedgraph=True)
     pathway.occurrence = 0
     node_number = 1
     seen_labels = []
-    for event_path in event_paths:
-        pathway.occurrence += event_path.occurrence
-        for node in event_path.eventnodes:
+    midid = 1
+    for meshedcore in meshedcores:
+        # Add nodes.
+        pathway.occurrence += meshedcore.occurrence
+        for node in meshedcore.eventnodes:
             if node.label not in seen_labels:
                 seen_labels.append(node.label)
                 n_id = "node{}".format(node_number)
-                pathway.nodes.append(EventNode(n_id, node.label,
-                                                node.rank,
-                                                intro=node.intro,
-                                                first=node.first))
+                pathway.eventnodes.append(EventNode(n_id, node.label,
+                                                    node.rank,
+                                                    intro=node.intro,
+                                                    first=node.first))
                 node_number += 1
-    intermediary_id = 1
-    for event_path in event_paths:
-        for edge in event_path.hyperedges:
-            # For each source and target node of the edge in event_path,
-            # find the equivalent node in the pathway.
-            source_labels = []
-            for source_node in edge.source.nodelist:
-                source_labels.append(source_node.label)
-            source_list = []
-            for node in pathway.nodes:
-                if node.label in source_labels:
-                    source_list.append(node)
-                if node.label == edge.target.label:
-                    target = node
-            sources = NodeGroup(source_list, "and")
-            mednode = IntermediaryNode("and{}".format(intermediary_id))
-            intermediary_id += 1
-            pathway.hyperedges.append(CausalEdge(sources, target, mednode,
-                                            edge.weight))
-    fuse_edges(pathway)
+        # Add meshes (edges).
+        for mesh in meshedcore.meshes:
+            mesh_found = False
+            for pathwaymesh in pathway.meshes:
+                if equivalent_meshes(mesh, pathwaymesh, enforcerank=False):
+                    mesh_found = True
+                    pathwaymesh.weight += mesh.weight
+                    break
+            if mesh_found == False:
+                add_mesh(pathway, mesh, midid)
+                midid += len(mesh.midnodes)
+
+#            # For each source and target node of the edge in event_path,
+#            # find the equivalent node in the pathway.
+#            source_labels = []
+#            for source_node in mesh.source.nodelist:
+#                source_labels.append(source_node.label)
+#            source_list = []
+#            for node in pathway.nodes:
+#                if node.label in source_labels:
+#                    source_list.append(node)
+#                if node.label == edge.target.label:
+#                    target = node
+#            sources = NodeGroup(source_list, "and")
+#            mednode = IntermediaryNode("and{}".format(intermediary_id))
+#            midid += 1
+#            pathway.meshes.append(Mesh(sources, target, mednode,
+#                                            edge.weight))
+#    fuse_edges(pathway)
+
+
     # Uncomment the next 3 lines and comment pathway.rank_sequential()
     # to build unranked version of graph
     #pathway.rank_intermediary()
@@ -2160,35 +2279,75 @@ def flush_ignored(graph_list, graph_files, ignorelist):
           .format(len(graphs_to_remove), init_len))
 
 
-def fuse_edges(graph):
-    """ Remove duplicate edges between two same nodes but sum weights. """
+def add_mesh(graph, mesh, startid):
+    """
+    Add a new mesh to a graph based on the labels of the event nodes found in
+    the graph and in the source or target of midedges from the mesh.
+    """
 
-    unique_edges = []
-    for edge1 in graph.hyperedges:
-        sources1 = edge1.source.nodelist
-        target1 = edge1.target.nodeid
-        new_edge = True
-        for edge2 in unique_edges:
-            sources2 = edge2.source.nodelist
-            target2 = edge2.target.nodeid
-            same_sources = same_nodes(sources1, sources2)
-            if same_sources == True and target1 == target2:
-                new_edge = False
-                break
-        if new_edge == True:
-            unique_edges.append(edge1)
-    for unique_edge in unique_edges:
-        unique_sources = unique_edge.source.nodelist
-        unique_target = unique_edge.target.nodeid
-        w = 0
-        for edge in graph.hyperedges:
-            sources = edge.source.nodelist
-            target = edge.target.nodeid
-            same_sources = same_nodes(unique_sources, sources)
-            if same_sources == True and unique_target == target:
-                w += edge.weight
-        unique_edge.weight = w
-    graph.hyperedges = unique_edges
+    new_mesh = Mesh(weight=mesh.weight)
+    midid = startid
+    midid_map = {}
+    for midnode in mesh.midnodes:
+        new_midnode = MidNode("mid{}".format(midid), midtype=midnode.midtype)
+        new_mesh.midnodes.append(new_midnode)
+        midid_map[midnode.nodeid] = "mid{}".format(midid)
+        midid += 1
+    for midedge in mesh.midedges:
+        if isinstance(midedge.source, EventNode):
+            for node in graph.eventnodes:
+                if node.label == midedge.source.label:
+                    source = node
+                    break
+        elif isinstance(midedge.source, MidNode):
+            for new_mid in new_mesh.midnodes:
+                if new_mid.nodeid == midid_map[midedge.source.nodeid]:
+                    source = new_mid
+                    break
+        if isinstance(midedge.target, EventNode):
+            for node in graph.eventnodes:
+                if node.label == midedge.target.label:
+                    target = node
+                    break
+        elif isinstance(midedge.target, MidNode):
+            for new_mid in new_mesh.midnodes:
+                if new_mid.nodeid == midid_map[midedge.target.nodeid]:
+                    target = new_mid
+                    break
+        new_midedge = MidEdge(source, target, mesh.weight)
+        new_mesh.midedges.append(new_midedge)
+    graph.meshes.append(new_mesh)
+
+
+#def fuse_edges(graph):
+#    """ Remove duplicate edges between two same nodes but sum weights. """
+#
+#    unique_edges = []
+#    for edge1 in graph.hyperedges:
+#        sources1 = edge1.source.nodelist
+#        target1 = edge1.target.nodeid
+#        new_edge = True
+#        for edge2 in unique_edges:
+#            sources2 = edge2.source.nodelist
+#            target2 = edge2.target.nodeid
+#            same_sources = same_nodes(sources1, sources2)
+#            if same_sources == True and target1 == target2:
+#                new_edge = False
+#                break
+#        if new_edge == True:
+#            unique_edges.append(edge1)
+#    for unique_edge in unique_edges:
+#        unique_sources = unique_edge.source.nodelist
+#        unique_target = unique_edge.target.nodeid
+#        w = 0
+#        for edge in graph.hyperedges:
+#            sources = edge.source.nodelist
+#            target = edge.target.nodeid
+#            same_sources = same_nodes(unique_sources, sources)
+#            if same_sources == True and unique_target == target:
+#                w += edge.weight
+#        unique_edge.weight = w
+#    graph.hyperedges = unique_edges
 
 
 
