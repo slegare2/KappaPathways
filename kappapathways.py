@@ -248,6 +248,60 @@ class Mesh(object):
         return inv_neighbors, ena_neighbors
 
 
+    def get_sources(self, targetnode):
+        """
+        Get the source nodes that enable a specific target node within a mesh.
+        """
+
+        sources = []
+        enablings = []
+        involvements = []
+        for midedge in self.midedges:
+            if midedge.target == targetnode:
+                if isinstance(midedge.source, EventNode):
+                    sources.append(midedge.source)
+                elif isinstance(midedge.source, MidNode):
+                    enablings.append(midedge.source)
+        for midedge in self.midedges:
+            if midedge.target in enablings:
+                if isinstance(midedge.source, EventNode):
+                    sources.append(midedge.source)
+                elif isinstance(midedge.source, MidNode):
+                    involvements.append(midedge.source)
+        for midedge in self.midedges:
+            if midedge.target in involvements:
+                sources.append(midedge.source)
+
+        return sources
+
+
+    def get_targets(self, sourcenode):
+        """
+        Get the source nodes that enable a specific target node within a mesh.
+        """
+
+        targets = []
+        involvements = []
+        enablings = []
+        for midedge in self.midedges:
+            if midedge.source == sourcenode:
+                if isinstance(midedge.target, EventNode):
+                    targets.append(midedge.target)
+                elif isinstance(midedge.target, MidNode):
+                    involvements.append(midedge.target)
+        for midedge in self.midedges:
+            if midedge.source in involvements:
+                if isinstance(midedge.target, EventNode):
+                    targets.append(midedge.target)
+                elif isinstance(midedge.target, MidNode):
+                    enablings.append(midedge.target)
+        for midedge in self.midedges:
+            if midedge.source in enablings:
+                targets.append(midedge.target)
+
+        return targets
+
+
 #    def build_from_group(self):
 #        """
 #        Create the midnodes and midedges forming a mesh from an
@@ -536,7 +590,7 @@ class CausalGraph(object):
                 if "Intro" in node.label:
                     node.intro = True
             self.find_first_rules()
-            self.rank_sequential()
+            self.rank_sequentially()
         elif self.meshedgraph == True:
            self.find_edgegroups()
            # At this point, self.edgegroups are not the "real" edgegroups.
@@ -735,7 +789,7 @@ class CausalGraph(object):
                     node.first = True
 
 
-    def rank_sequential(self):
+    def rank_sequentially(self):
         """
         Find the rank of each node, starting with first nodes and then adding
         the other nodes sequentially as soon as they have a secured enabling.
@@ -752,56 +806,57 @@ class CausalGraph(object):
         #for mednode in self.midnodes:
         #    mednode.rank = None
         while len(current_nodes) > 0:
-            # 1) Gather edge groups that have a current_node in their sources.
-            current_groups = []
-            for edgegroup in self.edgegroups:
-                for edge in edgegroup:
-                    for current_node in current_nodes:
-                        if current_node == edge.source:
-                            if edgegroup not in current_groups:
-                                current_groups.append(edgegroup)
-            # 2) Gather candidate nodes as any target of current edge groups.
+            # 1) Gather meshes that have a current_node in their sources.
+            current_meshes = []
+            for mesh in self.meshes:
+                mesh_sources, mesh_targets = mesh.get_events()
+                for current_node in current_nodes:
+                    if current_node in mesh_sources:
+                        if mesh not in current_meshes:
+                            current_meshes.append(mesh)
+            # 2) Gather candidate nodes as any target of current meshes.
             candidates = []
-            for group in current_groups:
-                for edge in group:
-                    if edge.target not in candidates:
-                        candidates.append(edge.target)
+            for mesh in current_meshes:
+                mesh_sources, mesh_targets = mesh.get_events()
+                for mesh_target in mesh_targets:
+                    if mesh_target not in candidates:
+                        candidates.append(mesh_target)
             # 3) Set rank of all candidate nodes that are secured: all the
             #    nodes pointing to them (ignoring intro nodes) are already
             #    ranked in at least one edge group.
             for candidate in candidates:
                 possible_ranks = []
-                for group in current_groups:
-                    incoming_edges = []
-                    for edge in group:
-                        if edge.source.intro == False:
-                            if edge.target == candidate:
-                                incoming_edges.append(edge)
-                    if len(incoming_edges) > 0:
+                for mesh in current_meshes:
+                    tmp_sources = mesh.get_sources(candidate)
+                    mesh_sources = []
+                    for node in tmp_sources:
+                        if node.intro == False:
+                            mesh_sources.append(node)
+                    if len(mesh_sources) > 0:
                         secured = True
-                        for inedge in incoming_edges:
-                            if inedge.source.rank == None:
+                        for mesh_source in mesh_sources:
+                            if mesh_source.rank == None:
                                 secured = False
                                 break
                         if secured == True:
                             source_ranks = []
-                            for inedge in incoming_edges:
-                                source_ranks.append(inedge.source.rank)
+                            for mesh_source in mesh_sources:
+                                source_ranks.append(mesh_source.rank)
                             possible_ranks.append(max(source_ranks)+1)
                 if len(possible_ranks) > 0:
                     candidate.rank = min(possible_ranks)
                     current_nodes.append(candidate)
-            # 4) Remove all current_nodes for which all outgoing edge groups
+            # 4) Remove all current_nodes for which all outgoing meshes
             #    have all their targets already ranked.
             next_nodes = []
             for current_node in current_nodes:
                 keep_node = False
                 node_targets = []
-                for edgegroup in self.edgegroups:
-                    for edge in edgegroup:
-                        if edge.source == current_node:
-                            if edge.target not in node_targets:
-                                node_targets.append(edge.target)
+                for mesh in self.meshes:
+                    mesh_sources, mesh_targets = mesh.get_events()
+                    for mesh_target in mesh_targets:
+                        if mesh_target not in node_targets:
+                            node_targets.append(mesh_target)
                 for node in node_targets:
                     if node.rank == None:
                         keep_node = True
@@ -809,13 +864,14 @@ class CausalGraph(object):
                 if keep_node == True:
                     next_nodes.append(current_node)
             current_nodes = next_nodes
-        # Rank intro nodes as the lower rank of a node it points to minus one.
+        # Rank intro nodes as the lowest rank of a node it points to minus one.
         for node in self.eventnodes:
             if node.intro == True:
                 target_ranks = []
-                for edge in self.causaledges:
-                    if edge.source == node:
-                        target_ranks.append(edge.target.rank)
+                for mesh in self.meshes:
+                    mesh_targets = mesh.get_targets(node)
+                    for mesh_target in mesh_targets:
+                        target_ranks.append(mesh_target.rank)
                 node.rank = min(target_ranks)-1
         #self.rank_intermediary(self.meshes)
         self.get_maxrank()
@@ -1685,6 +1741,7 @@ def mergecores(eoi, causalgraphs=None, edgelabels=False, showintro=True,
         causal_core_files = get_dot_files(eoi, "causalcore")
         causal_cores = []
         for core_file in causal_core_files:
+            print(core_file)
             core_path = "{}/{}".format(eoi, core_file)
             causal_cores.append(CausalGraph(core_path, eoi))
     else:
@@ -2002,7 +2059,7 @@ def equivalent_midnodes(neighbors1, neighbors2, enforcerank=True):
 #        #remove_ignored(core, ignorelist)
 #        merge_same_labels(core)
 #        fuse_edges(core)
-#        core.rank_sequential()
+#        core.rank_sequentially()
 #        #core.old_rank_nodes()
 #        core.build_dot_file(edgelabels, showintro)
 #    # Writing section.
@@ -2228,12 +2285,12 @@ def foldcores(eoi, causalgraphs=None, ignorelist=None, edgelabels=False,
 #    fuse_edges(pathway)
 
 
-    # Uncomment the next 3 lines and comment pathway.rank_sequential()
+    # Uncomment the next 3 lines and comment pathway.rank_sequentially()
     # to build unranked version of graph
     #pathway.rank_intermediary()
     #pathway.get_maxrank()
     #pathway.sequentialize_ids()
-    pathway.rank_sequential()
+    pathway.rank_sequentially()
     pathway.filename = "eventpathway.dot"
     pathway.build_dot_file(edgelabels, showintro)
     # Writing section.
@@ -2457,7 +2514,7 @@ def simplifypath(eoi, causalgraphs=None, threshold=0.2, edgelabels=False,
                                                        mednode,
                                                        edge.weight))
     fuse_edges(simplepathway)
-    simplepathway.rank_sequential()
+    simplepathway.rank_sequentially()
     simplepathway.filename = "eventpathway-simple.dot"
     simplepathway.build_dot_file(edgelabels, showintro)
     # Writing section.
@@ -2581,7 +2638,7 @@ def mapcores(eoi, causalgraphs=None, ignorelist=None, template=None,
                                                mednode, w, color=edge_color))
         for edge_to_add in edges_to_add:
             mappedcore.hyperedges.append(edge_to_add)
-        mappedcore.rank_sequential()
+        mappedcore.rank_sequentially()
         mappedcores.append(mappedcore)
     for i in range(len(mappedcores)):
         mappedcores[i].filename = "mapped-{}.dot".format(i+1)
