@@ -72,7 +72,7 @@ class CausalEdge(object):
     """
 
     def __init__(self, source, target, weight=1, relationtype="precedence",
-                 color="black", underlying=False):
+                 color="black", underlying=False, reverse=False):
         """ Initialize class CausalEdge. """
 
         self.source = source
@@ -81,6 +81,7 @@ class CausalEdge(object):
         self.relationtype = relationtype
         self.color = color
         self.underlying = underlying
+        self.reverse = reverse
         self.check_types()
 
 
@@ -302,101 +303,33 @@ class Mesh(object):
         return targets
 
 
-#    def build_from_group(self):
-#        """
-#        Create the midnodes and midedges forming a mesh from an
-#        edge group.
-#        """
-#
-#        self.midnodes = []
-#        self.midedges = []
-#        # Collect all sources and targets.
-#        sources = []
-#        targets = []
-#        for edge in self.edgegroup:
-#            if edge.source not in sources:
-#                sources.append(edge.source)
-#            if edge.target not in targets:
-#                targets.append(edge.target)
-#        # Create intermediary nodes for event nodes with more than one
-#        # input or output. Also create an edge between those intermediary
-#        # nodes and the corresponding event nodes.
-#        inv_sources = []
-#        for source in sources:
-#            outgoing = []
-#            for edge in self.edgegroup:
-#                if edge.source == source:
-#                    outgoing.append(edge)
-#            if len(outgoing) > 1:
-#                inv_sources.append(source)
-#                self.midnodes.append(MidNode("mid{}".format(self.midid),
-#                                             midtype="involvement"))
-#                self.midedges.append(MidEdge(source, self.midnodes[-1]))
-#                self.midid += 1
-#        ena_targets = []
-#        for target in targets:
-#            ingoing = []
-#            for edge in self.edgegroup:
-#                if edge.target == target:
-#                    ingoing.append(edge)
-#            if len(ingoing) > 1:
-#                ena_targets.append(target)
-#                self.midnodes.append(MidNode("mid{}".format(self.midid),
-#                                        midtype="enabling"))
-#                self.midedges.append(MidEdge(self.midnodes[-1], target))
-#                self.midid += 1
-#        # Add the intermediary edges corresponding to the original edges.
-#        for ori_edge in self.edgegroup:
-#            if ori_edge.source in inv_sources:
-#                for midedge in self.midedges:
-#                    if midedge.source == ori_edge.source:
-#                        s = midedge.target
-#            else:
-#                s = ori_edge.source
-#            if ori_edge.target in ena_targets:
-#                for midedge in self.midedges:
-#                    if midedge.target == ori_edge.target:
-#                        t = midedge.source
-#            else:
-#                t = ori_edge.target
-#            self.midedges.append(MidEdge(s, t))
-#        w = self.edgegroup[0].weight
-#
-#
-#    def build_from_midnodes(self):
-#        """
-#        Create the midnodes and midedges forming a mesh from group
-#        of edges between midnodes.
-#        """
-#
-#        self.midnodes = []
-#        self.midedges = []
-#        keep = True
-#        for edge in self.edgegroup:
-#            if isinstance(edge.source, MidNode):
-#                if edge.source not in midnodes:
-#                    self.midnodes.append(edge.source)
-#            if isinstance(edge.target, MidNode):
-#                if edge.target not in midnodes:
-#                    self.midnodes.append(edge.target)
-#        if len(midnodes) == 1:
-#            keep = False
-#            midnode = midnodes[0]
-#            if midnode.midtype == "involvement":
-#                for edge in group:
-#                    if edge.target != midnode:
-#                        keep = True
-#                        break
-#            if midnode.midtype == "enabling":
-#                for edge in group:
-#                    if edge.source != midnode:
-#                        keep = True
-#                        break
-#
-#        return keep, midnodes
-#
-#
-#        return keep
+    def reverse_midedges(self):
+        """
+        Reverse the direction of intermediary edges if the sources they
+        reach within the mesh have an higher average rank than the targets
+        they reach.
+        """
+
+        if len(self.midedges) > 1:
+            for midedge in self.midedges:
+                sources = self.get_sources(midedge.source)
+                targets = self.get_targets(midedge.target)
+                if isinstance(midedge.source, EventNode):
+                    sources.insert(0, midedge.source)
+                if isinstance(midedge.target, EventNode):
+                    targets.insert(0, midedge.target)
+                src_ranks = []
+                trg_ranks = []
+                for source in sources:
+                    src_ranks.append(source.rank)
+                for target in targets:
+                    trg_ranks.append(target.rank)
+                src_ave = statistics.mean(src_ranks)
+                trg_ave = statistics.mean(trg_ranks)
+                if src_ave > trg_ave:
+                    midedge.reverse = True
+                else:
+                    midedge.reverse = False
 
 
     def __repr__(self):
@@ -564,10 +497,19 @@ class CausalGraph(object):
                         weight = int(read_line[weight_start:weight_end])
                     else:
                         weight = 1
+                    if "rev=True" in line:
+                       rev = True
+                    else:
+                       rev = False
                     source_is_mid = isinstance(source, MidNode)
                     target_is_mid = isinstance(target, MidNode)
                     if source_is_mid or target_is_mid:
-                        tmp_midedges.append(MidEdge(source, target, weight))
+                        if rev == False:
+                            tmp_midedges.append(MidEdge(source, target,
+                                                        weight))
+                        elif rev == True:
+                            tmp_midedges.append(MidEdge(target, source,
+                                                        weight, reverse=rev))
                     else:
                         tmp_edges.append(CausalEdge(source, target, weight))
         for edge in tmp_edges:
@@ -803,8 +745,6 @@ class CausalGraph(object):
                 current_nodes.append(node)
             else:
                 node.rank = None
-        #for mednode in self.midnodes:
-        #    mednode.rank = None
         while len(current_nodes) > 0:
             # 1) Gather meshes that have a current_node in their sources.
             current_meshes = []
@@ -854,9 +794,10 @@ class CausalGraph(object):
                 node_targets = []
                 for mesh in self.meshes:
                     mesh_sources, mesh_targets = mesh.get_events()
-                    for mesh_target in mesh_targets:
-                        if mesh_target not in node_targets:
-                            node_targets.append(mesh_target)
+                    if current_node in mesh_sources:
+                        for mesh_target in mesh_targets:
+                            if mesh_target not in node_targets:
+                                node_targets.append(mesh_target)
                 for node in node_targets:
                     if node.rank == None:
                         keep_node = True
@@ -873,117 +814,29 @@ class CausalGraph(object):
                     for mesh_target in mesh_targets:
                         target_ranks.append(mesh_target.rank)
                 node.rank = min(target_ranks)-1
-        #self.rank_intermediary(self.meshes)
         self.get_maxrank()
         self.sequentialize_nodeids()
 
 
-    def old_rank_sequential(self):
-        """
-        Find the rank of each node, starting with first nodes and then adding
-        the other nodes sequentially as soon as they have a secured enabling.
-        """
-
-        # Initialize ranks.
-        current_nodes = []
-        for node in self.eventnodes:
-            if node.first == True:
-                node.rank = 1
-                current_nodes.append(node)
-            else:
-                node.rank = None
-        #for mednode in self.midnodes:
-        #    mednode.rank = None
-        while len(current_nodes) > 0:
-            # 1) Gather edge groups that have a current_node in their sources.
-            current_groups = []
-            for edgegroup in self.edgegroups:
-                for edge in edgegroup:
-                    for current_node in current_nodes:
-                        if current_node == edge.source:
-                            if edgegroup not in current_groups:
-                                current_groups.append(edgegroup)
-            # 2) Gather candidate nodes as any target of current edge groups.
-            candidates = []
-            for group in current_groups:
-                for edge in group:
-                    if edge.target not in candidates:
-                        candidates.append(edge.target)
-            # 3) Set rank of all candidate nodes that are secured: all the
-            #    nodes pointing to them (ignoring intro nodes) are already
-            #    ranked in at least one edge group.
-            for candidate in candidates:
-                possible_ranks = []
-                for group in current_groups:
-                    incoming_edges = []
-                    for edge in group:
-                        if edge.source.intro == False:
-                            if edge.target == candidate:
-                                incoming_edges.append(edge)
-                    if len(incoming_edges) > 0:
-                        secured = True
-                        for inedge in incoming_edges:
-                            if inedge.source.rank == None:
-                                secured = False
-                                break
-                        if secured == True:
-                            source_ranks = []
-                            for inedge in incoming_edges:
-                                source_ranks.append(inedge.source.rank)
-                            possible_ranks.append(max(source_ranks)+1)
-                if len(possible_ranks) > 0:
-                    candidate.rank = min(possible_ranks)
-                    current_nodes.append(candidate)
-            # 4) Remove all current_nodes for which all outgoing edge groups
-            #    have all their targets already ranked.
-            next_nodes = []
-            for current_node in current_nodes:
-                keep_node = False
-                node_targets = []
-                for edgegroup in self.edgegroups:
-                    for edge in edgegroup:
-                        if edge.source == current_node:
-                            if edge.target not in node_targets:
-                                node_targets.append(edge.target)
-                for node in node_targets:
-                    if node.rank == None:
-                        keep_node = True
-                        break
-                if keep_node == True:
-                    next_nodes.append(current_node)
-            current_nodes = next_nodes
-        # Rank intro nodes as the lower rank of a node it points to minus one.
-        for node in self.eventnodes:
-            if node.intro == True:
-                target_ranks = []
-                for edge in self.causaledges:
-                    if edge.source == node:
-                        target_ranks.append(edge.target.rank)
-                node.rank = min(target_ranks)-1
-        #self.rank_intermediary(self.meshes)
-        self.get_maxrank()
-        self.sequentialize_nodeids()
-
-
-    def rank_intermediary(self, edgegroup):
-        """
-        Rank intermediary nodes. Not used (ner well defined) for the moment.
-        Intermediary node ranking is left to graphviz for now.
-        """
-    
-        for edge in edgegroup:
-            source_ranks = []
-            for node in edge.source.nodelist:
-                source_ranks.append(node.rank)
-            if edge.target.rank > max(source_ranks):
-                edge.mednode.rank = (( edge.target.rank +
-                                       max(source_ranks) ) / 2.0)
-            elif edge.target.rank < min(source_ranks):
-                edge.mednode.rank = (( edge.target.rank +
-                                       min(source_ranks) ) / 2.0)
-            else:
-                ranks_set = list(set(source_ranks))
-                edge.mednode.rank = statistics.mean(ranks_set)
+#    def rank_intermediary(self, edgegroup):
+#        """
+#        Rank intermediary nodes. Not used (nor well defined) for the moment.
+#        Intermediary node ranking is left to graphviz for now.
+#        """
+#
+#        for edge in edgegroup:
+#            source_ranks = []
+#            for node in edge.source.nodelist:
+#                source_ranks.append(node.rank)
+#            if edge.target.rank > max(source_ranks):
+#                edge.mednode.rank = (( edge.target.rank +
+#                                       max(source_ranks) ) / 2.0)
+#            elif edge.target.rank < min(source_ranks):
+#                edge.mednode.rank = (( edge.target.rank +
+#                                       min(source_ranks) ) / 2.0)
+#            else:
+#                ranks_set = list(set(source_ranks))
+#                edge.mednode.rank = statistics.mean(ranks_set)
 
 
 # Not used in current implementation. May be needed to build species nodes.
@@ -1061,57 +914,6 @@ class CausalGraph(object):
         #self.causaledges = sorted_edges
 
 
-#    def cleanup(self):
-#        """
-#        Remove nodes that do not have a path to an intro node and an eoi node
-#        and any edge that points to or from these nodes. Then remove intro
-#        nodes that do not have any targets anymore.
-#        """
-#
-#        self.intro_nodes = []
-#        self.eoi_nodes = []
-#        for node in self.nodes:
-#            if node.intro == True:
-#                self.intro_nodes.append(node)
-#            if node.label == self.eoi:
-#                self.eoi_nodes.append(node)
-#        nodes_to_clean = []
-#        for i in range(len(self.nodes)):
-#            node = self.nodes[i]
-#            if node.intro == False and node.label != self.eoi:
-#                #paths_up = self.climb_up(node, self.intro_nodes)
-#                paths_up = self.follow_edges("up", node, self.intro_nodes)
-#                #paths_down = self.slide_down(node, self.eoi_nodes)
-#                paths_down = self.follow_edges("down", node, self.eoi_nodes)
-#                if len(paths_up) == 0 or len(paths_down) == 0:
-#                    nodes_to_clean.insert(0, i)
-#        edges_to_clean = []
-#        for j in range(len(self.hyperedges)):
-#            sources = self.hyperedges[j].source.nodelist
-#            target = self.hyperedges[j].target
-#            for i in nodes_to_clean:
-#                node = self.nodes[i]
-#                if node in sources or target == node:
-#                    edges_to_clean.insert(0, j)
-#        for j in edges_to_clean:
-#            del(self.hyperedges[j])
-#        for i in nodes_to_clean:
-#            del(self.nodes[i])
-#        intros_to_clean = []
-#        for i in range(len(self.nodes)):
-#            node = self.nodes[i]
-#            if node.intro == True:
-#                remove_intro = True
-#                for edge in self.hyperedges:
-#                    if node in edge.source.nodelist:
-#                        remove_intro = False
-#                        break
-#                if remove_intro == True:
-#                    intros_to_clean.insert(0, i)
-#        for i in intros_to_clean:
-#            del(self.nodes[i])
-
-
     def build_nointro(self):
         """
         Create new meshes for the version of the graph that hides
@@ -1155,11 +957,6 @@ class CausalGraph(object):
                 # Create a new mesh without intro nodes.
                 if len(noin1.midedges) > 0:
                     self.covermeshes.append(noin1)
-                    #nointro_groups.append(nointro1)
-                    #new_mesh = Mesh(nointro1, midid, w)
-                    #new_mesh.build_from_group()
-                    #self.covermeshes.append(new_mesh)
-                    #midid = self.covermeshes[-1].midid
 
 
     def find_max_midid(self):
@@ -1360,45 +1157,16 @@ class CausalGraph(object):
             are_same = False
 
         return are_same
-
-
-#    def same_edges(self, edgelist1, edgelist2):
-#        """
-#        Find if two lists of edges contain all the same edges.
-#        (The edges may be found in a different order in the two lists).
-#        """
-#
-#        group1 = edgelist1.copy()
-#        group2 = edgelist2.copy()
-#        found1 = []
-#        found2 = []
-#        for i in range(len(group1)):
-#            for edge2 in group2:
-#                if group1[i] == edge2:
-#                    found1.insert(0, i)
-#                    break
-#        for j in range(len(group2)):
-#            for edge1 in group1:
-#                if group2[j] == edge1:
-#                    found2.insert(0, j)
-#                    break
-#        for i in found1:
-#            del(group1[i])
-#        for j in found2:
-#            del(group2[j])
-#        if len(group1) == 0 and len(group2) == 0:
-#            are_same = True
-#        else:
-#            are_same = False
-#
-#        return are_same
-
+ 
 
     def build_dot_file(self, edgelabels=False, showintro=True):
         """ build a dot file of the CausalGraph. """
 
-        self.build_nointro() 
-        #self.rank_intermediary(self.coveredges)
+        self.build_nointro()
+        for mesh in self.meshes:
+            mesh.reverse_midedges()
+        for covermesh in self.covermeshes:
+            covermesh.reverse_midedges()
         # Write info about graph.
         dot_str = 'digraph G{\n'
         dot_str += '  meshedgraph="{}" ;\n'.format(self.meshedgraph)
@@ -1547,14 +1315,22 @@ class CausalGraph(object):
                     pensize = maxpenwidth
                 if showintro == False and mesh.underlying == True:
                     dot_str += "//"
-                dot_str += ('"{}" -> "{}" '.format(edge.source.nodeid,
-                                                   edge.target.nodeid))
+                if edge.reverse == False:
+                    dot_str += ('"{}" -> "{}" '.format(edge.source.nodeid,
+                                                       edge.target.nodeid))
+                elif edge.reverse == True:
+                    dot_str += ('"{}" -> "{}" '.format(edge.target.nodeid,
+                                                       edge.source.nodeid))
                 dot_str += '[penwidth={}'.format(pensize)
                 dot_str += ', color={}'.format(edge_color)
                 if edgelabels == True:
                     dot_str += ', label="  {}"'.format(mesh.weight)
                 if isinstance(edge.target, MidNode):
                     dot_str += ", dir=none"
+                elif edge.reverse == True:
+                        dot_str += ", dir=back"
+                if edge.reverse == True:
+                    dot_str += ", rev=True"
                 dot_str += ', weight={}] ;\n'.format(mesh.weight)
         # Draw cover edges if intro nodes are not shown.
         if showintro == False:
@@ -1567,14 +1343,22 @@ class CausalGraph(object):
                         pensize = minpenwidth
                     if pensize > maxpenwidth:
                         pensize = maxpenwidth
-                    dot_str += ('"{}" -> "{}" '.format(edge.source.nodeid,
-                                                       edge.target.nodeid))
+                    if edge.reverse == False:
+                        dot_str += ('"{}" -> "{}" '.format(edge.source.nodeid,
+                                                           edge.target.nodeid))
+                    elif edge.reverse == True:
+                        dot_str += ('"{}" -> "{}" '.format(edge.target.nodeid,
+                                                           edge.source.nodeid))
                     dot_str += '[penwidth={}'.format(pensize)
                     dot_str += ', color={}'.format(edge_color)
                     if edgelabels == True:
                         dot_str += ', label="  {}"'.format(covermesh.weight)
                     if isinstance(edge.target, MidNode):
                         dot_str += ", dir=none"
+                    elif edge.reverse == True:
+                        dot_str += ", dir=back"
+                    if edge.reverse == True:
+                        dot_str += ", rev=True"
                     dot_str += ', weight={}'.format(covermesh.weight)
                     dot_str += ', cover="True"] ;\n'
         # Close graph.
@@ -1741,7 +1525,6 @@ def mergecores(eoi, causalgraphs=None, edgelabels=False, showintro=True,
         causal_core_files = get_dot_files(eoi, "causalcore")
         causal_cores = []
         for core_file in causal_core_files:
-            print(core_file)
             core_path = "{}/{}".format(eoi, core_file)
             causal_cores.append(CausalGraph(core_path, eoi))
     else:
