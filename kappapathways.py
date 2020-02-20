@@ -326,7 +326,7 @@ class Mesh(object):
                     trg_ranks.append(target.rank)
                 src_ave = statistics.mean(src_ranks)
                 trg_ave = statistics.mean(trg_ranks)
-                if src_ave > trg_ave:
+                if src_ave >= trg_ave:
                     midedge.reverse = True
                 else:
                     midedge.reverse = False
@@ -754,13 +754,15 @@ class CausalGraph(object):
                     if current_node in mesh_sources:
                         if mesh not in current_meshes:
                             current_meshes.append(mesh)
-            # 2) Gather candidate nodes as any target of current meshes.
+            # 2) Gather candidate nodes as any target of current meshes
+            #    that is not ranked yet.
             candidates = []
             for mesh in current_meshes:
                 mesh_sources, mesh_targets = mesh.get_events()
                 for mesh_target in mesh_targets:
-                    if mesh_target not in candidates:
-                        candidates.append(mesh_target)
+                    if mesh_target.rank == None:
+                        if mesh_target not in candidates:
+                            candidates.append(mesh_target)
             # 3) Set rank of all candidate nodes that are secured: all the
             #    nodes pointing to them (ignoring intro nodes) are already
             #    ranked in at least one edge group.
@@ -1159,7 +1161,87 @@ class CausalGraph(object):
         return are_same
  
 
-    def build_dot_file(self, edgelabels=False, showintro=True):
+    def color_meshes(self, showintro=True):
+        """
+        Color meshes to better distinguish them when they have midnodes
+        and share at least 1 event node.
+        """
+
+        meshes_to_color = []
+        if showintro == True:
+            for mesh in self.meshes:
+                if len(mesh.midnodes) > 0:
+                    meshes_to_color.append(mesh)
+        else:
+            for mesh in self.meshes:
+                if len(mesh.midnodes) > 0 and mesh.underlying == False:
+                    meshes_to_color.append(mesh)
+            for covermesh in self.covermeshes:
+                if len(covermesh.midnodes) > 0:
+                    meshes_to_color.append(covermesh)
+        # For each mesh to color, find all other meshes that share
+        # at least 2 nodes.
+        nodeshares = []
+        for i in range(len(meshes_to_color)):
+            nodeshares.append([])
+        for i in range(len(meshes_to_color)):
+            s1, t1 = meshes_to_color[i].get_events()
+            nodelist1 = s1 + t1
+            for j in range(len(meshes_to_color)):
+                if i != j:
+                    s2, t2 = meshes_to_color[j].get_events()
+                    nodelist2 = s2 + t2
+                    n_same = 0
+                    for node1 in nodelist1:
+                        for node2 in nodelist2:
+                            if node1 == node2:
+                                n_same += 1
+                    if n_same >= 1:
+                        nodeshares[i].append(j)
+        # Create a list of dictionaries containing data from each mesh.
+        dictlist = []
+        for i in range(len(meshes_to_color)):
+            weight = meshes_to_color[i].weight
+            nshare = len(nodeshares[i])
+            d = {"index": i, "w": weight, "s": nshare}
+            dictlist.append(d)
+        sortlist = sorted(dictlist, key=lambda x: (x["w"], x["s"]),
+                          reverse=True)
+        # Assign color ids.
+        color_ids = []
+        for i in range(len(meshes_to_color)):
+            color_ids.append(0)
+        for d in sortlist:
+            mesh_index = d["index"]
+            neighbor_indexes = nodeshares[mesh_index]
+            used_colors = []
+            for neighbor_index in neighbor_indexes:
+                used_colors.append(color_ids[neighbor_index])
+            # Find the lowest non-zero color index that is absent from
+            # used_colors.
+            col = 1
+            color_found = False
+            while color_found == False:
+                if col not in used_colors:
+                    mesh_color_id = col
+                    color_found = True
+                col += 1
+            color_ids[mesh_index] = mesh_color_id
+        # Assign color values.
+        color_palette = ["blue3", "chartreuse4", "firebrick3", "darkviolet",
+                         "darkorange1", "deepskyblue1", "springgreen",
+                         "brown2", "magenta", "orange"]
+        for i in range(len(meshes_to_color)):
+            palette_index = (color_ids[i]-1)%len(color_palette)
+            meshes_to_color[i].color = color_palette[palette_index]
+            for midedge in meshes_to_color[i].midedges:
+                midedge.color = meshes_to_color[i].color
+            for midnode in meshes_to_color[i].midnodes:
+                if midnode.midtype == "enabling":
+                    midnode.color = meshes_to_color[i].color
+
+
+    def build_dot_file(self, edgelabels=False, showintro=True, color=True):
         """ build a dot file of the CausalGraph. """
 
         self.build_nointro()
@@ -1167,6 +1249,8 @@ class CausalGraph(object):
             mesh.reverse_midedges()
         for covermesh in self.covermeshes:
             covermesh.reverse_midedges()
+        if color == True:
+            self.color_meshes(showintro)
         # Write info about graph.
         dot_str = 'digraph G{\n'
         dot_str += '  meshedgraph="{}" ;\n'.format(self.meshedgraph)
@@ -1382,7 +1466,7 @@ class CausalGraph(object):
         mid_str += 'color={}, '.format(mesh.color)
         mid_str += 'fillcolor={}, '.format(midnode.color)
         mid_str += 'midtype={}, '.format(midnode.midtype)
-        mid_str += 'width={}, height={}'.format(pensize, pensize)
+        mid_str += 'width={:.4}, height={:.4}'.format(pensize, pensize)
 
         return mid_str
 
@@ -1514,7 +1598,7 @@ def run_kaflow(eoi, trace_path, kaflowpath):
 # ==================== Causal Cores Merging Section ===========================
 
 def mergecores(eoi, causalgraphs=None, edgelabels=False, showintro=True,
-               writedots=True, rmprev=False, printmsg=True):
+               color=True, writedots=True, rmprev=False, printmsg=True):
     """
     Merge equivalent causal cores and count occurrence.
     Write the final cores as meshed graphs.
@@ -1562,7 +1646,7 @@ def mergecores(eoi, causalgraphs=None, edgelabels=False, showintro=True,
     for i in range(len(sorted_cores)):
         sorted_cores[i].filename = "meshedcore-{}.dot".format(i+1)
     for graph in sorted_cores:
-        graph.build_dot_file(edgelabels, showintro)
+        graph.build_dot_file(edgelabels, showintro, color)
     # Writing section.
     if writedots == True:
         for graph in sorted_cores:
@@ -2002,7 +2086,7 @@ def equivalent_midnodes(neighbors1, neighbors2, enforcerank=True):
 # .................. Event Paths Merging Section ..............................
 
 def foldcores(eoi, causalgraphs=None, ignorelist=None, edgelabels=False,
-               showintro=False, writedot=True, rmprev=False):
+               showintro=False, color=True, writedot=True, rmprev=False):
     """ Merge meshed cores into a single event pathway. """
 
     # Reading section.
@@ -2075,7 +2159,7 @@ def foldcores(eoi, causalgraphs=None, ignorelist=None, edgelabels=False,
     #pathway.sequentialize_ids()
     pathway.rank_sequentially()
     pathway.filename = "eventpathway.dot"
-    pathway.build_dot_file(edgelabels, showintro)
+    pathway.build_dot_file(edgelabels, showintro, color)
     # Writing section.
     if writedot == True:
         output_path1 = "{}/{}".format(eoi, pathway.filename)
