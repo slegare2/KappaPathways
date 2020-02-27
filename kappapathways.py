@@ -2567,14 +2567,14 @@ def mapcores(eoi, causalgraphs=None, ignorelist=None, template=None,
     else:
         meshedcores = causalgraphs
         core_files = None
+    flush_ignored(meshedcores, core_files, ignorelist)
     # Reading event pathway template.
     if template == None:
         template_path = "{}/eventpathway.dot".format(eoi)
     else:
         template_path = template
-    mappedcores = []
     # Doing the work.
-    flush_ignored(meshedcores, core_files, ignorelist) 
+    mappedcores = []
     for meshedcore in meshedcores:
         mappedcore = CausalGraph(template_path, eoi)
         mappedcore.occurrence = meshedcore.occurrence
@@ -2640,6 +2640,123 @@ def mapcores(eoi, causalgraphs=None, ignorelist=None, template=None,
 
 
 # ++++++++++++ End of Core Mapping on Event Pathway Section ++++++++++++++++++
+
+# ::::::::::::::::::::::: Node Highlight Section ::::::::::::::::::::::::::::::
+
+def highlightnodes(eoi, nodelabels=None, causalgraphs=None, ignorelist=None,
+                   template=None, edgelabels=False, showintro=False,
+                   writedot=True, rmprev=False):
+    """
+    For each nodelabel, create a new CausalGraph for each path that can lead
+    to a node with that label in the cores. Then give the weight of each exit
+    mesh from that label on each new CausalGraph.
+    If nodelabels is None, do for each node labels found in template pathway.
+    """
+
+    # Reading cores.
+    if causalgraphs == None:
+        core_files = get_dot_files(eoi, "meshedcore")
+        meshedcores = []
+        for core_file in core_files:
+            core_path = "{}/{}".format(eoi, core_file)
+            meshedcores.append(CausalGraph(core_path, eoi))
+    else:
+        meshedcores = causalgraphs
+        core_files = None
+    flush_ignored(meshedcores, core_files, ignorelist)
+    # Reading event pathway template.
+    if template == None:
+        template_path = "{}/eventpathway.dot".format(eoi)
+    else:
+        template_path = template
+    # Check node labels to highlight.
+    if nodelabels == None:
+        nodelabels = []
+        template_graph = CausalGraph(template_path, eoi)
+        for eventnode in template_graph.eventnodes:
+            nodelabels.append(eventnode.label)
+    elif not isinstance(nodelabels, list):
+        nodelabels = [nodelabels]
+    for nodelabel in nodelabels:
+        graphs_path = "{}/{}".format(eoi, nodelabel)
+        if not os.path.exists(graphs_path):
+            os.mkdir(graphs_path)
+    # Extract path to nodes carying label.
+    for nodelabel in nodelabels:
+        extracted_paths = extract_paths(eoi, nodelabel, meshedcores)
+        # Then merge the paths keeping track of the filenames ...
+        mergedpaths = mergecores(extracted_paths)
+
+        dir_path = "{}/{}".format(eoi, nodelabel)
+        for extracted_path in extracted_paths:
+            extracted_path.build_dot_file(edgelabels, showintro)
+            output_path = "{}/{}".format(dir_path, extracted_path.filename)
+            outfile = open(output_path, "w")
+            outfile.write(extracted_path.dot_file)
+            outfile.close()
+
+
+
+def extract_paths(eoi, nodelabel, meshedcores):
+    """
+    For the given node label, create a new CausalGraph for each path
+    that can lead to a node with that label in the meshedcores.
+    """
+
+    extracted_paths = []
+    for meshedcore in meshedcores:
+        event_instances = []
+        for eventnode in meshedcore.eventnodes:
+            if eventnode.label == nodelabel:
+                event_instances.append(eventnode)
+        for event_instance in event_instances:
+            extracted_path = CausalGraph(eoi=eoi, meshedgraph=True)
+            extracted_path.maxrank = event_instance.rank
+            extracted_path.occurrence = meshedcore.occurrence
+            slash = meshedcore.filename.rfind("/")
+            fname = "{}_{}.dot".format(meshedcore.filename[slash+1:-4],
+                                       event_instance.nodeid)
+            extracted_path.filename = fname
+            extracted_path.eventnodes = [event_instance]
+            extracted_path.meshes = []
+            # Reconstruct the graph upstream of event_instance.
+            current_nodes = [event_instance]
+            current_meshes = []
+            for mesh in meshedcore.meshes:
+                sources, targets = mesh.get_events()
+                for current_node in current_nodes:
+                    if current_node in targets:
+                        if mesh not in current_meshes:
+                            current_meshes.append(mesh)
+            for current_mesh in current_meshes:
+                if current_mesh not in extracted_path.meshes:
+                    extracted_path.meshes.append(current_mesh)
+            while len(current_meshes) > 0:
+                current_nodes = []
+                for current_mesh in current_meshes:
+                    sources, targets = current_mesh.get_events()
+                    for source in sources:
+                        if source not in current_nodes:
+                            current_nodes.append(source)
+                current_meshes = []
+                for mesh in meshedcore.meshes:
+                    sources, targets = mesh.get_events()
+                    for current_node in current_nodes:
+                        if current_node in targets:
+                            if mesh not in current_meshes:
+                                current_meshes.append(mesh)
+                for current_node in current_nodes:
+                    if current_node not in extracted_path.eventnodes:
+                        extracted_path.eventnodes.append(current_node)
+                for current_mesh in current_meshes:
+                    if current_mesh not in extracted_path.meshes:
+                        extracted_path.meshes.append(current_mesh)
+            extracted_paths.append(extracted_path)
+
+    return extracted_paths
+
+
+# ::::::::::::::::::: End of Node Highlight Section :::::::::::::::::::::::::::
 
 # """"""""""""""" Species Pathway Conversion Section """"""""""""""""""""""""""
 
