@@ -13,6 +13,7 @@ import json
 import math
 import statistics
 import random
+import copy
 
 
 class EventNode(object):
@@ -22,7 +23,7 @@ class EventNode(object):
     """
 
     def __init__(self, nodeid, label, rank=None, weight=None, intro=False,
-                 first=False):
+                 first=False, highlighted=False):
         """ Initialize class EventNode. """
 
         self.nodeid = nodeid
@@ -31,6 +32,7 @@ class EventNode(object):
         self.weight = weight
         self.intro = intro
         self.first = first
+        self.highlighted = highlighted
         self.check_types()
 
 
@@ -1436,14 +1438,17 @@ class CausalGraph(object):
                         node_shape = 'ellipse'
                     if showintro == False and node.intro == True:
                         dot_str += '//'
-                    dot_str += ('"{}" [label="{}", '
+                    dot_str += ('"{}" [label="{}"'
                                 .format(node.nodeid, node.label))
-                    dot_str += 'shape={}, style=filled, '.format(node_shape)
-                    dot_str += 'fillcolor={}'.format(node_color)
+                    dot_str += ', shape={}, style=filled'.format(node_shape)
+                    if node.highlighted == True:
+                       dot_str += ', fillcolor=gold, penwidth=2'
+                    else:
+                       dot_str += ', fillcolor={}'.format(node_color)
                     if node.intro == True:
-                       dot_str += ', intro={}'.format(node.intro)
+                        dot_str += ', intro={}'.format(node.intro)
                     if node.first == True:
-                       dot_str += ', first={}'.format(node.first)
+                        dot_str += ', first={}'.format(node.first)
                     dot_str += "] ;\n"
             # Draw intermediary nodes that emulate hyperedges if two
             # sources or more are drawn.
@@ -1744,7 +1749,7 @@ def run_kaflow(eoi, trace_path, kaflowpath):
 # ==================== Causal Cores Merging Section ===========================
 
 def mergecores(eoi, causalgraphs=None, edgelabels=False, showintro=True,
-               color=True, writedots=True, rmprev=False, printmsg=True):
+               color=True, writedot=True, rmprev=False, printmsg=True):
     """
     Merge equivalent causal cores and count occurrence.
     Write the final cores as meshed graphs.
@@ -1780,8 +1785,12 @@ def mergecores(eoi, causalgraphs=None, edgelabels=False, showintro=True,
             file_name = causal_cores[index].filename
             dash = file_name.rfind("-")
             period = file_name.rfind(".")
-            number = int(file_name[dash+1:period])
-            prevcores.append(number)
+            if "_node" in file_name:
+                underscore = file_name.index("_node")
+                previd = file_name[:period]
+            else:
+                previd = file_name[dash+1:period]
+            prevcores.append(previd)
         current_core.prevcores = prevcores
         merged_cores.append(current_core)
         for i in range(len(equivalent_list)-1, -1, -1):
@@ -1794,7 +1803,7 @@ def mergecores(eoi, causalgraphs=None, edgelabels=False, showintro=True,
     for graph in sorted_cores:
         graph.build_dot_file(edgelabels, showintro, color)
     # Writing section.
-    if writedots == True:
+    if writedot == True:
         for graph in sorted_cores:
             output_path = "{}/{}".format(eoi, graph.filename)
             outfile = open(output_path, "w")
@@ -2052,7 +2061,7 @@ def equivalent_midnodes(neighbors1, neighbors2, enforcerank=True):
 # +++++++++++++++++++++++ Cores Looping Section +++++++++++++++++++++++++++++++
 
 #def loopcores(eoi, causalgraphs=None, ignorelist=None, edgelabels=False,
-#              showintro=False, writedots=True, rmprev=False,
+#              showintro=False, writedot=True, rmprev=False,
 #              writepremerge=False):
 #    """ Build looped event paths by merging identical nodes within cores. """
 #
@@ -2084,12 +2093,12 @@ def equivalent_midnodes(neighbors1, neighbors2, enforcerank=True):
 #                outfile = open(output_path, "w")
 #                outfile.write(graph.dot_file)
 #                outfile.close()
-#    looped_paths = mergecores(eoi, cores, writedots=False,
+#    looped_paths = mergecores(eoi, cores, writedot=False,
 #                              edgelabels=edgelabels, showintro=showintro,
 #                              printmsg=False)
 #    for i in range(len(looped_paths)):
 #        looped_paths[i].filename = "eventpath-{}.dot".format(i+1)
-#    if writedots == True:
+#    if writedot == True:
 #        for graph in looped_paths:
 #            output_path = "{}/{}".format(eoi, graph.filename)
 #            outfile = open(output_path, "w")
@@ -2231,7 +2240,7 @@ def equivalent_midnodes(neighbors1, neighbors2, enforcerank=True):
 
 # .................. Event Paths Merging Section ..............................
 
-def foldcores(eoi, causalgraphs=None, ignorelist=None, edgelabels=False,
+def foldcores(eoi, causalgraphs=None, ignorelist=[], edgelabels=False,
                showintro=False, color=True, writedot=True, rmprev=False):
     """ Merge meshed cores into a single event pathway. """
 
@@ -2550,7 +2559,7 @@ def ignored_edge(edge, ignore_list):
 
 # ++++++++++++++ Core Mapping on Event Pathway Section ++++++++++++++++++++++
 
-def mapcores(eoi, causalgraphs=None, ignorelist=None, template=None,
+def mapcores(eoi, causalgraphs=None, ignorelist=[], template=None,
              edgelabels=False, showintro=False, writedot=True, rmprev=False):
     """
     Create a new CausalGraph for each core, where the core is mapped on
@@ -2573,11 +2582,14 @@ def mapcores(eoi, causalgraphs=None, ignorelist=None, template=None,
         template_path = "{}/eventpathway.dot".format(eoi)
     else:
         template_path = template
+    templategraph = CausalGraph(template_path, eoi)
+    totoc = templategraph.occurrence
     # Doing the work.
     mappedcores = []
     for meshedcore in meshedcores:
         mappedcore = CausalGraph(template_path, eoi)
         mappedcore.occurrence = meshedcore.occurrence
+        mappedcore.prevcores = meshedcore.prevcores
         for mesh in mappedcore.meshes:
             mesh.color = "grey90"
             mesh.weight = meshedcore.occurrence
@@ -2623,6 +2635,7 @@ def mapcores(eoi, causalgraphs=None, ignorelist=None, template=None,
     for i in range(len(mappedcores)):
         mappedcores[i].filename = "mapped-{}.dot".format(i+1)
     for mappedcore in mappedcores:
+        #mappedcore.occurrence = "{} / {}".format(mappedcore.occurrence, totoc)
         mappedcore.build_dot_file(edgelabels, showintro, color=False)
     # Writing section.
     if writedot == True:
@@ -2638,12 +2651,13 @@ def mapcores(eoi, causalgraphs=None, ignorelist=None, template=None,
             file_path = "{}/{}".format(eoi, path_file)
             os.remove(file_path)
 
+    return mappedcores
 
 # ++++++++++++ End of Core Mapping on Event Pathway Section ++++++++++++++++++
 
 # ::::::::::::::::::::::: Node Highlight Section ::::::::::::::::::::::::::::::
 
-def highlightnodes(eoi, nodelabels=None, causalgraphs=None, ignorelist=None,
+def highlightnodes(eoi, nodelabels=None, causalgraphs=None, ignorelist=[],
                    template=None, edgelabels=False, showintro=False,
                    writedot=True, rmprev=False):
     """
@@ -2683,21 +2697,170 @@ def highlightnodes(eoi, nodelabels=None, causalgraphs=None, ignorelist=None,
             os.mkdir(graphs_path)
     # Extract path to nodes carying label.
     for nodelabel in nodelabels:
-        extracted_paths = extract_paths(eoi, nodelabel, meshedcores)
-        # Then merge the paths keeping track of the filenames ...
-        mergedpaths = mergecores(extracted_paths)
+        meshedcorescopy = copy.deepcopy(meshedcores)
+        extractedpaths = extractpaths(eoi, nodelabel, meshedcorescopy)
+        #dir_path = "{}/{}".format(eoi, nodelabel)
+        #for extractedpath in extractedpaths:
+        #    extractedpath.build_dot_file(edgelabels)
+        #    output_path = "{}/{}".format(dir_path, extractedpath.filename)
+        #    outfile = open(output_path, "w")
+        #    outfile.write(extractedpath.dot_file)
+        #    outfile.close()
 
+        # Merge the paths keeping track of the filenames in prevcores.
+        # mergecores destroys the causalgraphs used, so use the copy.
+        mergedpaths = mergecores(eoi, causalgraphs=extractedpaths,
+                                 color=False, writedot=False,
+                                 printmsg=True)
+        for i in range(len(mergedpaths)):
+            mergedpaths[i].filename = "path-{}.dot".format(i+1)
+        #dir_path = "{}/{}".format(eoi, nodelabel)
+        #for mergedpath in mergedpaths:
+        #    mergedpath.build_dot_file(edgelabels)
+        #    output_path = "{}/{}".format(dir_path, mergedpath.filename)
+        #    outfile = open(output_path, "w")
+        #    outfile.write(mergedpath.dot_file)
+        #    outfile.close()
+
+        mappedpaths = mapcores(eoi, causalgraphs=mergedpaths,
+                               writedot=False)
+        for i in range(len(mappedpaths)):
+            mappedpaths[i].filename = "mappedpath-{}.dot".format(i+1)
+        #dir_path = "{}/{}".format(eoi, nodelabel)
+        #for mappedpath in mappedpaths:
+        #    mappedpath.build_dot_file(edgelabels=False, color=False)
+        #    output_path = "{}/{}".format(dir_path, mappedpath.filename)
+        #    outfile = open(output_path, "w")
+        #    outfile.write(mappedpath.dot_file)
+        #    outfile.close()
+
+        # Add the outgoing edges from the highlighted node.
+        for mappedpath in mappedpaths:
+            for eventnode in mappedpath.eventnodes:
+                if eventnode.label == nodelabel:
+                    eventnode.highlighted = True
+            ## Resequantialize ids and midids as extractpaths may have
+            ## removed some.
+            #midid = 1
+            #for mesh in mergedpath.meshes:
+            #    for midnode in mesh.midnodes:
+            #        midnode.nodeid = "mid{}".format(midid)
+            #        midid += 1
+            #revnodes = []
+            #for eventnode in mergedpath.eventnodes:
+            #    revnodes.insert(0,eventnode)
+            #mergedpath.eventnodes = revnodes
+            ## Find gaps in event node ids.
+            #eventnodeids = []
+            #for eventnode in mergedpath.eventnodes:
+            #    eventnodeids.append(int(eventnode.nodeid[4:]))
+            #maxnodeid = max(eventnodeids)
+            #gapids = []
+            #for i in range(1, maxnodeid+1):
+            #    if i not in eventnodeids:
+            #        gapids.append(i)
+            #eventnodeid = maxnodeid+1
+            ## Get existing event node labels.
+            #seen_labels = []
+            #for eventnode in mergedpath.eventnodes:
+            #    seen_labels.append(eventnode.label)
+            ## Get event nodes and meshes from prevcores.
+            #print(mergedpath.filename)
+            seen_meshes = []
+            meshes_to_top = []
+            for prevcore in mappedpath.prevcores:
+                underscore = prevcore.index("_")
+                originalfile = "{}/{}.dot".format(eoi,prevcore[:underscore])
+                highnodeid = prevcore[underscore+1:]
+                origaph = None
+                for meshedcore in meshedcores:
+                    if meshedcore.filename == originalfile:
+                        origaph = meshedcore
+                        break
+                highnode = None
+                for eventnode in origaph.eventnodes:
+                    if eventnode.nodeid == highnodeid:
+                        highnode = eventnode
+                        break
+                # Add missing event nodes and gather meshes to add.
+                meshes_to_add = []
+                for mesh in origaph.meshes:
+                    sources, targets = mesh.get_events()
+                    if highnode in sources:
+                        meshes_to_add.append(mesh)
+                        #for target in targets:
+                        #    if target.label not in seen_labels:
+                        #        seen_labels.append(target.label)
+                        #        if len(gapids) > 0:
+                        #            n_id = "node{}".format(gapids[0])
+                        #            del(gapids[0])
+                        #        else:
+                        #            n_id = "node{}".format(eventnodeid)
+                        #            eventnodeid += 1
+                        #        new_node = EventNode(n_id,
+                        #                             target.label,
+                        #                             target.rank,
+                        #                             intro=target.intro,
+                        #                             first=target.first)
+                        #        mergedpath.eventnodes.append(new_node)
+                        #for source in sources:
+                        #    if source.label not in seen_labels:
+                        #        seen_labels.append(source.label)
+                        #        if len(gapids) > 0:
+                        #            n_id = "node{}".format(gapids[0])
+                        #            del(gapids[0])
+                        #        else:
+                        #            n_id = "node{}".format(eventnodeid)
+                        #            eventnodeid += 1
+                        #        new_node = EventNode(n_id,
+                        #                             source.label,
+                        #                             source.rank,
+                        #                             intro=source.intro,
+                        #                             first=source.first)
+                        #        mergedpath.eventnodes.append(new_node)
+                # Add the meshes to mergedpath.
+                for mesh_to_add in meshes_to_add:
+                    #mesh_found = False
+                    for i in range(len(mappedpath.meshes)):
+                        pathmesh = mappedpath.meshes[i]
+                        if equivalent_meshes(mesh_to_add, pathmesh,
+                                             enforcerank=False):
+                            if pathmesh not in seen_meshes:
+                                seen_meshes.append(pathmesh)
+                                pathmesh.weight = mesh_to_add.weight * 3
+                                pathmesh.color = "black"
+                                for midedge in pathmesh.midedges:
+                                    midedge.color = "black"
+                                for midnode in pathmesh.midnodes:
+                                    if midnode.midtype == "enabling":
+                                        midnode.color = "black"
+                                meshes_to_top.append(i)
+                            else:
+                                pathmesh.weight += mesh_to_add.weight * 3
+                            #mesh_found = True
+                            break
+                    #if mesh_found == False:
+                    #    add_mesh(mappedpath, mesh_to_add, midid)
+                    #    midid += len(mesh_to_add.midnodes)
+            #for i in sorted(meshes_to_top, reverse=True):
+            #    mappedpath.meshes.append(mappedpath.meshes[i])
+            #    del(mappedpath.meshes[i])
+
+        for i in range(len(mappedpaths)):
+            mappedpaths[i].get_maxrank()
+            mappedpaths[i].filename = "highlight-{}.dot".format(i+1)
         dir_path = "{}/{}".format(eoi, nodelabel)
-        for extracted_path in extracted_paths:
-            extracted_path.build_dot_file(edgelabels, showintro)
-            output_path = "{}/{}".format(dir_path, extracted_path.filename)
+        for mappedpath in mappedpaths:
+            mappedpath.build_dot_file(edgelabels=False, showintro=showintro,
+                                      color=False)
+            output_path = "{}/{}".format(dir_path, mappedpath.filename)
             outfile = open(output_path, "w")
-            outfile.write(extracted_path.dot_file)
+            outfile.write(mappedpath.dot_file)
             outfile.close()
 
 
 
-def extract_paths(eoi, nodelabel, meshedcores):
+def extractpaths(eoi, nodelabel, meshedcores):
     """
     For the given node label, create a new CausalGraph for each path
     that can lead to a node with that label in the meshedcores.
@@ -2710,8 +2873,10 @@ def extract_paths(eoi, nodelabel, meshedcores):
             if eventnode.label == nodelabel:
                 event_instances.append(eventnode)
         for event_instance in event_instances:
+            for event_instance2 in event_instances:
+                event_instance2.highlighted = False
+            event_instance.highlighted = True
             extracted_path = CausalGraph(eoi=eoi, meshedgraph=True)
-            extracted_path.maxrank = event_instance.rank
             extracted_path.occurrence = meshedcore.occurrence
             slash = meshedcore.filename.rfind("/")
             fname = "{}_{}.dot".format(meshedcore.filename[slash+1:-4],
@@ -2751,6 +2916,12 @@ def extract_paths(eoi, nodelabel, meshedcores):
                 for current_mesh in current_meshes:
                     if current_mesh not in extracted_path.meshes:
                         extracted_path.meshes.append(current_mesh)
+            for mesh in extracted_path.meshes:
+                sources, targets = mesh.get_events()
+                for target in targets:
+                    if target not in extracted_path.eventnodes:
+                        extracted_path.eventnodes.append(target)
+            extracted_path.get_maxrank()
             extracted_paths.append(extracted_path)
 
     return extracted_paths
@@ -4256,13 +4427,13 @@ def findpathway(eoi, kappamodel, kasimpath, kaflowpath, simtime=1000,
     getcausalcores(eoi, kappamodel, kasimpath, kaflowpath, simtime, simseed)
 
     # 2) Merge Equivalent Causal Cores.
-    mergedcores = mergecores(eoi, edgelabels=edgelabels, writedots=True,
+    mergedcores = mergecores(eoi, edgelabels=edgelabels, writedot=True,
                              rmprev=True)
 
     # 3) Loop causal cores to create event paths.
     loopedcores = loopcores(eoi, causalgraphs=mergedcores,
                             ignorelist=ignorelist, edgelabels=edgelabels,
-                            writedots=True, rmprev=False, writepremerge=False)
+                            writedot=True, rmprev=False, writepremerge=False)
 
     # 4) Merge all event paths into one event pathway.
     eventpath = foldcores(eoi, causalgraphs=loopedcores,
