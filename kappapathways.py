@@ -218,40 +218,45 @@ class Mesh(object):
         return sources, targets
 
 
-    def get_neighbors(self):
-        """ Get the event nodes connected to each midnodes. """
+    def extend_midedges(self):
+        """
+        Get event nodes connected to each midedge. Consider only midedges whose
+        source is an involvement or whose target is an enabling (This means
+        that we ignore edges that are from an event node to an involvement or
+        from an enabling to an event node).
+        """
 
-        inv_neighbors = []
-        ena_neighbors = []
-        for midnode in self.midnodes:
-            event_srcs = []
-            event_trgs = []
-            if midnode.midtype == "involvement":
-                for midedge in self.midedges:
-                    if midedge.target == midnode:
-                        event_srcs.append(midedge.source)
-                    if midedge.source == midnode:
-                        if isinstance(midedge.target, EventNode):
-                            event_trgs.append(midedge.target)
-                        elif isinstance(midedge.target, MidNode):
-                            for midedge2 in self.midedges:
-                                if midedge2.source == midedge.target:
-                                    event_trgs.append(midedge2.target)
-                inv_neighbors.append({"srcs": event_srcs, "trgs": event_trgs})
-            if midnode.midtype == "enabling":
-                for midedge in self.midedges:
-                    if midedge.source == midnode:
-                        event_trgs.append(midedge.target)
-                    if midedge.target == midnode:
-                        if isinstance(midedge.source, EventNode):
-                            event_srcs.append(midedge.source)
-                        elif isinstance(midedge.source, MidNode):
-                            for midedge2 in self.midedges:
-                                if midedge2.target == midedge.source:
-                                    event_srcs.append(midedge2.source)
-                ena_neighbors.append({"srcs": event_srcs, "trgs": event_trgs})
+        neighbors = []
+        for midedge in self.midedges:
+            # Filter edges.
+            src_is_inv = False
+            if isinstance(midedge.source, MidNode):
+                if midedge.source.midtype == "involvement":
+                    src_is_inv = True
+            trg_is_ena = False
+            if isinstance(midedge.target, MidNode):
+                if midedge.target.midtype == "enabling":
+                    trg_is_ena = True
+            # Get the neighbors of filtered edges.
+            if src_is_inv == True or trg_is_ena == True:
+                event_srcs = []
+                event_trgs = []
+                if isinstance(midedge.source, EventNode):
+                    event_srcs.append(midedge.source)
+                elif isinstance(midedge.source, MidNode):
+                    for midedge2 in self.midedges:
+                        if midedge2.target == midedge.source:
+                            event_srcs.append(midedge2.source)
+                if isinstance(midedge.target, EventNode):
+                    event_trgs.append(midedge.target)
+                elif isinstance(midedge.target, MidNode):
+                    for midedge2 in self.midedges:
+                        if midedge2.source == midedge.target:
+                            event_trgs.append(midedge2.target)
+                neighbors.append({"reltype": midedge.relationtype,
+                                  "srcs": event_srcs, "trgs": event_trgs})
 
-        return inv_neighbors, ena_neighbors
+        return neighbors
 
 
     def get_sources(self, targetnode):
@@ -365,7 +370,7 @@ class CausalGraph(object):
     """ Data structure for causal graphs. """
 
     def __init__(self, filename=None, eoi=None, meshedgraph=False,
-                 nodestype="event", showintro=True):
+                 nodestype="event", showintro=True, precedenceonly=True):
         """ Initialize class CausalGraph. """
 
         # Header variables.
@@ -374,6 +379,7 @@ class CausalGraph(object):
         self.meshedgraph = meshedgraph
         self.nodestype = nodestype # event or species
         self.showintro = showintro
+        self.precedenceonly = precedenceonly
         # Main variables.
         self.eventnodes = []
         self.causaledges = []
@@ -400,6 +406,10 @@ class CausalGraph(object):
         self.label_mapping = {}
         dotfile = open(dotpath, "r").readlines()
         for line in dotfile:
+            if 'precedenceonly="True"' in line:
+                self.precedenceonly = True
+            if 'precedenceonly="False"' in line:
+                self.precedenceonly = False
             if 'meshedgraph="True"' in line:
                 self.meshedgraph = True
             if "nodestype=" in line:
@@ -504,6 +514,19 @@ class CausalGraph(object):
                         weight = int(read_line[weight_start:weight_end])
                     else:
                         weight = 1
+                    if self.precedenceonly == False:
+                        if self.meshedgraph == False:
+                            if "color=grey" in line:
+                                edgetype = "conflict"
+                            else:
+                                edgetype = "causal"
+                        elif self.meshedgraph == True:
+                            if "style=dotted" in line:
+                                edgetype = "conflict"
+                            else:
+                                edgetype = "causal"
+                    else:
+                        edgetype = "precedence"
                     if "rev=True" in line:
                        rev = True
                     else:
@@ -513,12 +536,16 @@ class CausalGraph(object):
                     if source_is_mid or target_is_mid:
                         if rev == False:
                             tmp_midedges.append(MidEdge(source, target,
-                                                        weight))
+                                                        weight,
+                                                        relationtype=edgetype))
                         elif rev == True:
                             tmp_midedges.append(MidEdge(target, source,
-                                                        weight, reverse=rev))
+                                                        weight,
+                                                        relationtype=edgetype,
+                                                        reverse=rev))
                     else:
-                        tmp_edges.append(CausalEdge(source, target, weight))
+                        tmp_edges.append(CausalEdge(source, target, weight,
+                                                    relationtype=edgetype))
         for edge in tmp_edges:
             self.causaledges.insert(0, edge)
         for midedge in tmp_midedges:
@@ -657,7 +684,8 @@ class CausalGraph(object):
                             t = midedge.source
                 else:
                     t = ori_edge.target
-                new_mesh.midedges.append(MidEdge(s, t))
+                reltype = ori_edge.relationtype
+                new_mesh.midedges.append(MidEdge(s, t, relationtype=reltype))
             new_mesh.weight = edgegroup[0].weight
             self.meshes.append(new_mesh)
         self.meshedgraph = True
@@ -722,57 +750,6 @@ class CausalGraph(object):
             new_mesh = Mesh(causaledge.weight)
             new_mesh.midedges.append(causaledge)
             self.meshes.append(new_mesh)
-        #for group in self.edgegroups:
-        #    keep, midnodes_set = self.keep_group(group)
-        #    if keep == True:
-        #        new_mesh = Mesh()
-        #        if len(midnodes_set) > 0:
-        #            for midnode in midnodes_set:
-        #                new_mesh.midnodes.append(midnode)
-        #                for midedge in self.midedges:
-        #                    if midedge.source == midnode:
-        #                        if midedge not in new_mesh.midedges:
-        #                            new_mesh.midedges.append(midedge)
-        #                    if midedge.target == midnode:
-        #                        if midedge not in new_mesh.midedges:
-        #                            new_mesh.midedges.append(midedge)
-        #        else:
-        #            new_mesh.midedges.append(group[0])
-        #        new_mesh.weight = new_mesh.midedges[0].weight
-        #        self.meshes.append(new_mesh)
-
-
-
-#    def keep_group(self, group):
-#        """
-#        Method to reject edge groups that are all edges to involvements or
-#        from enablings.
-#        """
-#
-#        keep = True
-#        midnodes = []
-#        for edge in group:
-#            if isinstance(edge.source, MidNode):
-#                if edge.source not in midnodes:
-#                    midnodes.append(edge.source)
-#            if isinstance(edge.target, MidNode):
-#                if edge.target not in midnodes:
-#                    midnodes.append(edge.target)
-#        if len(midnodes) == 1:
-#            keep = False
-#            midnode = midnodes[0]
-#            if midnode.midtype == "involvement":
-#                for edge in group:
-#                    if edge.target != midnode:
-#                        keep = True
-#                        break
-#            if midnode.midtype == "enabling":
-#                for edge in group:
-#                    if edge.source != midnode:
-#                        keep = True
-#                        break
-#
-#        return keep, midnodes
 
 
     def find_first_rules(self):
@@ -1004,8 +981,8 @@ class CausalGraph(object):
                         noin1 = self.nointro_mesh(mesh1, midid)
                         midid += len(noin1.midnodes)
                         if len(noin1.midedges) > 0:
-                            # Check all other meshes that have the same edge
-                            # group when ignoring edges with intro nodes as
+                            # Check all other meshes that have the same
+                            # midedges when ignoring edges with intro nodes as
                             # source. They will all be grouped inside a single
                             # mesh without intro nodes as sources.
                             for mesh2 in self.meshes:
@@ -1014,7 +991,8 @@ class CausalGraph(object):
                                         if mesh2.underlying == False:
                                             noin2 = self.nointro_mesh(mesh2,
                                                                       midid)
-                                            if self.same_meshes(noin1, noin2):
+                                            if self.equivalent_meshes(noin1,
+                                                                      noin2):
                                                 mesh_list.append(mesh2)
             if len(mesh_list) > 0:
                 # Compute weight of nointro edge as the sum of all its
@@ -1097,8 +1075,10 @@ class CausalGraph(object):
                         if tmpid_map[new_node.nodeid] == midedge.target.nodeid:
                             t = new_node
                 w = midedge.weight
+                rel = midedge.relationtype
                 col = new_mesh.color
-                new_mesh.midedges.append(MidEdge(s, t, w, color=col))
+                new_mesh.midedges.append(MidEdge(s, t, w, relationtype=rel,
+                                                 color=col))
         # Treat involvement nodes that have no incoming edge from an event
         # node as ghost nodes.
         for midnode in new_mesh.midnodes:
@@ -1144,9 +1124,11 @@ class CausalGraph(object):
                         if new_mesh.midedges[j].target == midnode:
                             if j not in midedges_to_remove:
                                 midedges_to_remove.append(j)
+                    rel = in_edge.relationtype
                     midedges_to_add.append(MidEdge(in_edge.source,
                                                    out_edge.target,
                                                    in_edge.weight,
+                                                   relationtype=rel,
                                                    color=mesh.color))
         for j in sorted(midedges_to_remove, reverse=True):
             del(new_mesh.midedges[j])
@@ -1162,10 +1144,10 @@ class CausalGraph(object):
         return new_mesh
 
 
-    def same_meshes(self, mesh1, mesh2):
+    def equivalent_meshes(self, mesh1, mesh2):
         """
-        Find if two meshes connect the same event nodes in the same way
-        (with equivalent midedges and midnodes).
+        Find whether two meshes connect the same event nodes
+        with equivalent midedges.
         """
 
         nn1 = len(mesh1.midnodes)
@@ -1177,8 +1159,6 @@ class CausalGraph(object):
         else:
             are_same = False
         if are_same == True:
-            #sources1, targets1 = self.get_mesh_events(mesh1)
-            #sources2, targets2 = self.get_mesh_events(mesh2)
             sources1, targets1 = mesh1.get_events()
             sources2, targets2 = mesh2.get_events()
             same_sources = same_objects(sources1, sources2)
@@ -1188,13 +1168,10 @@ class CausalGraph(object):
             else:
                 are_same = False
         if are_same == True:
-            #inv_neighbors1, ena_neighbors1 = self.get_neighbors(mesh1.midnodes)
-            #inv_neighbors2, ena_neighbors2 = self.get_neighbors(mesh2.midnodes)
-            inv_neighbors1, ena_neighbors1 = mesh1.get_neighbors()
-            inv_neighbors2, ena_neighbors2 = mesh2.get_neighbors()
-            same_inv = self.same_midnodes(inv_neighbors1, inv_neighbors2)
-            same_ena = self.same_midnodes(ena_neighbors1, ena_neighbors2)
-            if same_inv == True and same_ena == True:
+            neighbors1 = mesh1.extend_midedges()
+            neighbors2 = mesh2.extend_midedges()
+            equi_midedges = self.equivalent_midedges(neighbors1, neighbors2)
+            if equi_midedges == True:
                 are_same = True
             else:
                 are_same = False
@@ -1202,28 +1179,38 @@ class CausalGraph(object):
         return are_same
 
 
-    def same_midnodes(self, neighbors1, neighbors2):
+    def equivalent_midedges(self, neighbors1, neighbors2):
         """
-        Find if two lists of midnodes described as their respective
-        neighbors contain all the same midnodes.
+        Find whether two lists of midedges (described as their respective
+        neighbors) connect to the same event nodes.
         """
-
+ 
         list1 = neighbors1.copy()
         list2 = neighbors2.copy()
         found1 = []
         found2 = []
         for i in range(len(list1)):
-            for midnode2 in list2:
-                if same_objects(list1[i]["srcs"], midnode2["srcs"]):
-                    if same_objects(list1[i]["trgs"], midnode2["trgs"]):
-                        found1.insert(0, i)
-                        break
+            s1 = list1[i]["srcs"]
+            t1 = list1[i]["trgs"]
+            for j in range(len(list2)):
+                s2 = list2[j]["srcs"]
+                t2 = list2[j]["trgs"]
+                if list1[i]["reltype"] == list2[j]["reltype"]:
+                    if same_objects(s1, s2):
+                        if same_objects(t1, t2):
+                            found1.insert(0, i)
+                            break
         for j in range(len(list2)):
-            for midnode1 in list1:
-                if same_objects(list2[j]["srcs"], midnode1["srcs"]):
-                    if same_objects(list2[j]["trgs"], midnode1["trgs"]):
-                        found2.insert(0, j)
-                        break
+            s2 = list2[j]["srcs"]
+            t2 = list2[j]["trgs"]
+            for i in range(len(list1)):
+                s1 = list1[i]["srcs"]
+                t1 = list1[i]["trgs"]
+                if list2[j]["reltype"] == list1[i]["reltype"]:
+                    if same_objects(s2, s1):
+                        if same_objects(t2, t1):
+                            found2.insert(0, j)
+                            break
         for i in found1:
             del(list1[i])
         for j in found2:
@@ -1232,9 +1219,9 @@ class CausalGraph(object):
             are_same = True
         else:
             are_same = False
-
-        return are_same
  
+        return are_same
+
 
     def color_meshes(self, showintro=True):
         """
@@ -1386,6 +1373,7 @@ class CausalGraph(object):
             self.color_meshes(showintro)
         # Write info about graph.
         dot_str = 'digraph G{\n'
+        dot_str += '  precedenceonly="{}" ;\n'.format(self.precedenceonly)
         dot_str += '  meshedgraph="{}" ;\n'.format(self.meshedgraph)
         dot_str += '  nodestype="{}" ;\n'.format(self.nodestype)
         if self.eoi != None:
@@ -1547,19 +1535,6 @@ class CausalGraph(object):
                                                   maxpenwidth,
                                                   edgelabels)
                     dot_str += ', cover="True"] ;\n'
-                #for connector in covermesh.connectors:
-                #    print("======")
-                #    print(connector.source)
-                #    print("------")
-                #    print(connector.target)
-                #    dot_str += self.write_midedge(covermesh,
-                #                                  connector,
-                #                                  average_weight,
-                #                                  minpenwidth,
-                #                                  medpenwidth,
-                #                                  maxpenwidth,
-                #                                  edgelabels)
-                #    dot_str += ', cover="True"] ;\n'
         # Close graph.
         dot_str += "}"
         self.dot_file = dot_str
@@ -1617,6 +1592,8 @@ class CausalGraph(object):
             mid_str += ", dir=back"
         if midedge.reverse == True:
             mid_str += ", rev=True"
+        if midedge.relationtype == "conflict":
+            mid_str += ", style=dotted"
         mid_str += ', weight={}'.format(mesh.weight)
 
         return mid_str
@@ -1673,7 +1650,8 @@ def same_objects(list1, list2):
 
 # -------------------- Causal Cores Generation Section ------------------------
 
-def getcausalcores(eoi, kappamodel, kasimpath, kaflowpath, simtime=1000, simseed=None):
+def getcausalcores(eoi, kappamodel, kasimpath, kaflowpath, simtime=1000,
+                   simseed=None, precedenceonly=True):
     """ 
     Generate initial causal cores of given event of interest by running KaSim 
     and then KaFlow.
@@ -1681,7 +1659,7 @@ def getcausalcores(eoi, kappamodel, kasimpath, kaflowpath, simtime=1000, simseed
 
     new_model = add_eoi(eoi, kappamodel)
     trace_path = run_kasim(new_model, kasimpath, simtime, simseed)
-    run_kaflow(eoi, trace_path, kaflowpath)
+    run_kaflow(eoi, trace_path, kaflowpath, precedenceonly)
 
 
 def add_eoi(eoi, kappamodel):
@@ -1736,13 +1714,33 @@ def run_kasim(kappa_with_eoi, kasimpath, simtime, simseed):
     return trace_path
 
 
-def run_kaflow(eoi, trace_path, kaflowpath):
-   """ Run KaFlow on the trace containing the EOI. """
+def run_kaflow(eoi, trace_path, kaflowpath, precedenceonly):
+    """ Run KaFlow on the trace containing the EOI. """
 
-   subprocess.run(("{}".format(kaflowpath),
-                   "--precedence-only",
-                   "-o", "{}/causalcore-".format(eoi),
-                   "{}".format(trace_path)))
+    if precedenceonly == True:
+        subprocess.run(("{}".format(kaflowpath),
+                        "--precedence-only",
+                        "-o", "{}/causalcore-".format(eoi),
+                        "{}".format(trace_path)))
+    elif precedenceonly == False:
+        subprocess.run(("{}".format(kaflowpath),
+                        "-o", "{}/causalcore-".format(eoi),
+                        "{}".format(trace_path)))
+    # Add a line to indicate whether precedenceonly is True or False all
+    # causal core files.
+    causal_core_files = get_dot_files(eoi, "causalcore")
+    for causal_core_file in causal_core_files:
+        input_file = open("{}/{}".format(eoi, causal_core_file), "r")
+        content = input_file.readlines()
+        input_file.close()
+        input_file.close()
+        if precedenceonly == True:
+            content.insert(1, '  precedenceonly="True"\n')
+        elif precedenceonly == False:
+            content.insert(1, '  precedenceonly="False"\n')
+        output_file = open("{}/{}".format(eoi, causal_core_file), "w")
+        output_file.writelines(content)
+        output_file.close()
 
 # ---------------- End of Causal Cores Generation Section  --------------------
 
@@ -1766,22 +1764,26 @@ def mergecores(eoi, causalgraphs=None, edgelabels=False, showintro=True,
        causal_cores = causalgraphs
        causal_core_files = None
     # Doing the work.
+    #for causal_core in causal_cores:
+    #    for mesh in causal_core.meshes:
+    #        for midedge in mesh.midedges:
+    #            print(midedge.relationtype)
     merged_cores = []
     while len(causal_cores) > 0:
         current_core = causal_cores[0]
-        equivalent_list = [0]
+        analogous_list = [0]
         for i in range(1, len(causal_cores)):
-            same_core, equi_meshes = equivalent_graphs(current_core,
+            same_core, equi_meshes = analogous_graphs(current_core,
                                                       causal_cores[i])
             if same_core == True:
-                equivalent_list.append(i)
+                analogous_list.append(i)
                 current_core.occurrence += causal_cores[i].occurrence
                 for j in range(len(current_core.meshes)):
                     equi_index = equi_meshes[j]
                     w = causal_cores[i].meshes[equi_index].weight
                     current_core.meshes[j].weight += w
         prevcores = []
-        for index in equivalent_list:
+        for index in analogous_list:
             file_name = causal_cores[index].filename
             dash = file_name.rfind("-")
             period = file_name.rfind(".")
@@ -1793,8 +1795,8 @@ def mergecores(eoi, causalgraphs=None, edgelabels=False, showintro=True,
             prevcores.append(previd)
         current_core.prevcores = prevcores
         merged_cores.append(current_core)
-        for i in range(len(equivalent_list)-1, -1, -1):
-            index = equivalent_list[i]
+        for i in range(len(analogous_list)-1, -1, -1):
+            index = analogous_list[i]
             del(causal_cores[index])
     sorted_cores = sorted(merged_cores, key=lambda x: x.occurrence,
                           reverse=True)
@@ -1849,10 +1851,10 @@ def get_dot_files(eoi, prefix=None):
     return sorted_list
 
 
-def equivalent_graphs(graph1, graph2):
+def analogous_graphs(graph1, graph2):
     """
-    Equivalent causal graphs have the equivalent meshes between the same
-    rules, but the exact time of their events can differ.
+    Analogous causal graphs have analogous meshes. That is, all their meshes
+    are between nodes with same labels at same ranks.
     """
 
     equi_meshes = []
@@ -1862,7 +1864,7 @@ def equivalent_graphs(graph1, graph2):
         for mesh1 in graph1.meshes:
             for i in graph2_indexes:
                 mesh2 = graph2.meshes[i]
-                are_equi = equivalent_meshes(mesh1, mesh2)
+                are_equi = analogous_meshes(mesh1, mesh2, enforcerank=True)
                 if are_equi == True:
                     equi_meshes.append(i)
                     graph2_indexes.remove(i)
@@ -1885,11 +1887,11 @@ def equivalent_graphs(graph1, graph2):
     return equi_graphs, equi_meshes
 
 
-def equivalent_meshes(mesh1, mesh2, enforcerank=True):
+def analogous_meshes(mesh1, mesh2, enforcerank=True):
     """
-    Find if two meshes connect to event nodes with same labels and
-    optionally with same ranks. They must also connect with with
-    equivalent midedges and midnodes.
+    Find whether two meshes connect the event nodes with same labels
+    with analogous midedges.
+    Optionally, nodes may be also required to be at same ranks.
     """
 
     nn1 = len(mesh1.midnodes)
@@ -1903,20 +1905,18 @@ def equivalent_meshes(mesh1, mesh2, enforcerank=True):
     if are_equi == True:
         sources1, targets1 = mesh1.get_events()
         sources2, targets2 = mesh2.get_events()
-        equi_sources = equivalent_nodes(sources1, sources2, enforcerank)
-        equi_targets = equivalent_nodes(targets1, targets2, enforcerank)
+        equi_sources = analogous_nodes(sources1, sources2, enforcerank)
+        equi_targets = analogous_nodes(targets1, targets2, enforcerank)
         if equi_sources == True and equi_targets == True:
             are_equi = True
         else:
             are_equi = False
     if are_equi == True:
-        inv_neighbors1, ena_neighbors1 = mesh1.get_neighbors()
-        inv_neighbors2, ena_neighbors2 = mesh2.get_neighbors()
-        equi_inv = equivalent_midnodes(inv_neighbors1, inv_neighbors2,
-                                       enforcerank)
-        equi_ena = equivalent_midnodes(ena_neighbors1, ena_neighbors2,
-                                       enforcerank)
-        if equi_inv == True and equi_ena == True:
+        neighbors1 = mesh1.extend_midedges()
+        neighbors2 = mesh2.extend_midedges()
+        equi_midedges = analogous_midedges(neighbors1, neighbors2,
+                                           enforcerank)
+        if equi_midedges == True:
             are_equi = True
         else:
             are_equi = False
@@ -1924,10 +1924,13 @@ def equivalent_meshes(mesh1, mesh2, enforcerank=True):
     return are_equi
 
 
-def equivalent_nodes(nodelist1, nodelist2, enforcerank=True):
+def analogous_nodes(nodelist1, nodelist2, enforcerank=True):
     """
     Find whether two lists of nodes contain nodes with
-    same labels and optionally with same ranks.
+    same labels.
+    Optionally, nodes may be also required to be at same ranks.
+    (This is comparable to the function "same_objects" used in
+    method "equivalent_meshes".)
     """
 
     list1 = nodelist1.copy()
@@ -1959,17 +1962,20 @@ def equivalent_nodes(nodelist1, nodelist2, enforcerank=True):
     for j in found2:
         del(list2[j])
     if len(list1) == 0 and len(list2) == 0:
-        are_same = True
+        are_equi = True
     else:
-        are_same = False
+        are_equi = False
 
-    return are_same
+    return are_equi
 
 
-def equivalent_midnodes(neighbors1, neighbors2, enforcerank=True):
+def analogous_midedges(neighbors1, neighbors2, enforcerank=True):
     """
-    Find if two lists of midnodes described as their respective
-    neighbors contain all the same midnodes.
+    Find whether two lists of midedges (described as their respective
+    neighbors) connect to event nodes with same labels.
+    Optionally, nodes may be also required to be at same ranks.
+    (This is comparable to the function "equivalent_midedges" used in
+    method "equivalent_meshes".)
     """
 
     list1 = neighbors1.copy()
@@ -1977,266 +1983,39 @@ def equivalent_midnodes(neighbors1, neighbors2, enforcerank=True):
     found1 = []
     found2 = []
     for i in range(len(list1)):
-        for midnode2 in list2:
-            s1 = list1[i]["srcs"]
-            s2 = midnode2["srcs"]
-            if equivalent_nodes(s1, s2, enforcerank):
-                t1 = list1[i]["trgs"]
-                t2 = midnode2["trgs"]
-                if equivalent_nodes(t1, t2, enforcerank):
-                    found1.insert(0, i)
-                    break
-    for j in range(len(list2)):
-        for midnode1 in list1:
+        s1 = list1[i]["srcs"]
+        t1 = list1[i]["trgs"]
+        for j in range(len(list2)):
             s2 = list2[j]["srcs"]
-            s1 = midnode1["srcs"]
-            if equivalent_nodes(s2, s1, enforcerank):
-                t2 = list2[j]["trgs"]
-                t1 = midnode1["trgs"]
-                if equivalent_nodes(t2, t1, enforcerank):
-                    found2.insert(0, j)
-                    break
+            t2 = list2[j]["trgs"]
+            if list1[i]["reltype"] == list2[j]["reltype"]:
+                if analogous_nodes(s1, s2, enforcerank):
+                    if analogous_nodes(t1, t2, enforcerank):
+                        found1.insert(0, i)
+                        break
+    for j in range(len(list2)):
+        s2 = list2[j]["srcs"]
+        t2 = list2[j]["trgs"]
+        for i in range(len(list1)):
+            s1 = list1[i]["srcs"]
+            t1 = list1[i]["trgs"]
+            if list2[j]["reltype"] == list1[i]["reltype"]:
+                if analogous_nodes(s2, s1, enforcerank):
+                    if analogous_nodes(t2, t1, enforcerank):
+                        found2.insert(0, j)
+                        break
     for i in found1:
         del(list1[i])
     for j in found2:
         del(list2[j])
     if len(list1) == 0 and len(list2) == 0:
-        are_same = True
+        are_equi = True
     else:
-        are_same = False
+        are_equi = False
 
-    return are_same
-
-
-#def equivalent_edgegroups(edgelist1, edgelist2):
-#    """ Find whether two edge groups contain equivalent edges. """
-#
-#    group1 = edgelist1.copy()
-#    group2 = edgelist2.copy()
-#    found1 = []
-#    found2 = []
-#    for i in range(len(group1)):
-#        for edge2 in group2:
-#            if equivalent_edges(group1[i], edge2):
-#                found1.insert(0, i)
-#                break
-#    for j in range(len(group2)):
-#        for edge1 in group1:
-#            if equivalent_edges(group2[j], edge1):
-#                found2.insert(0, j)
-#                break
-#    for i in found1:
-#        del(group1[i])
-#    for j in found2:
-#        del(group2[j])
-#    if len(group1) == 0 and len(group2) == 0:
-#        are_equi = True
-#    else:
-#        are_equi = False
-#
-#    return are_equi
-
-
-#def equivalent_edges(edge1, edge2):
-#    """ Find whether two edges are between the same rules at same rank. """
-#
-#    same_source = False
-#    if edge1.source.label == edge2.source.label:
-#        if edge1.source.rank == edge2.source.rank:
-#            same_source = True
-#    same_target = False
-#    if edge1.target.label == edge2.target.label:
-#        if edge1.target.rank == edge2.target.rank:
-#            same_target = True
-#    if same_source == True and same_target == True:
-#        equi_edges = True
-#    else:
-#        equi_edges = False
-#
-#    return equi_edges
-
+    return are_equi
 
 # ================ End of Causal Cores Merging Section ========================
-
-# +++++++++++++++++++++++ Cores Looping Section +++++++++++++++++++++++++++++++
-
-#def loopcores(eoi, causalgraphs=None, ignorelist=None, edgelabels=False,
-#              showintro=False, writedot=True, rmprev=False,
-#              writepremerge=False):
-#    """ Build looped event paths by merging identical nodes within cores. """
-#
-#    # Reading section.
-#    if causalgraphs == None:
-#        core_files = get_dot_files(eoi, "core")
-#        cores = []
-#        for core_file in core_files:
-#            core_path = "{}/{}".format(eoi, core_file)
-#            cores.append(CausalGraph(core_path, eoi))
-#    else:
-#       cores = causalgraphs
-#       core_files = None
-#    # Doing the work.
-#    flush_ignored(cores, core_files, ignorelist)
-#    for core in cores:
-#        #remove_ignored(core, ignorelist)
-#        merge_same_labels(core)
-#        fuse_edges(core)
-#        core.rank_sequentially()
-#        #core.old_rank_nodes()
-#        core.build_dot_file(edgelabels, showintro)
-#    # Writing section.
-#    if writepremerge == True:
-#        for i in range(len(cores)):
-#            cores[i].filename = "loopedcore-{}.dot".format(i+1)
-#        for graph in cores:
-#                output_path = "{}/{}".format(eoi, graph.filename)
-#                outfile = open(output_path, "w")
-#                outfile.write(graph.dot_file)
-#                outfile.close()
-#    looped_paths = mergecores(eoi, cores, writedot=False,
-#                              edgelabels=edgelabels, showintro=showintro,
-#                              printmsg=False)
-#    for i in range(len(looped_paths)):
-#        looped_paths[i].filename = "eventpath-{}.dot".format(i+1)
-#    if writedot == True:
-#        for graph in looped_paths:
-#            output_path = "{}/{}".format(eoi, graph.filename)
-#            outfile = open(output_path, "w")
-#            outfile.write(graph.dot_file)
-#            outfile.close()
-#    if rmprev == True:
-#        if core_files == None:
-#            core_files = get_dot_files(eoi, "core")
-#        for core_file in core_files:
-#            file_path = "{}/{}".format(eoi, core_file)
-#            os.remove(file_path)
-#    print("Finding loops in cores.")
-#    print("Merging equivalent looped cores, {} event paths obtained."
-#          .format(len(looped_paths)))
-#
-#    return looped_paths
-
-
-#def flush_ignored(graph_list, graph_files, ignorelist):
-#    """
-#    Remove cores that contain any ignored term in any of its nodes.
-#    """
-#
-#    init_len = len(graph_list)
-#    graphs_to_remove = []
-#    for i in range(len(graph_list)):
-#        graph = graph_list[i]
-#        remove_graph = False
-#        for node in graph.nodes:
-#            if any(ignorestr in node.label for ignorestr in ignorelist):
-#                remove_graph = True
-#                break
-#        if remove_graph == True:
-#            graphs_to_remove.insert(0, i)
-#    for i in graphs_to_remove:
-#        if graph_files != None:
-#           slash = graph_list[i].filename.index("/")
-#           fname = graph_list[i].filename[slash+1:]
-#           graph_files.remove(fname)
-#        del(graph_list[i])
-#    print("Ignoring {} cores out of {} because they contain reverse rules."
-#          .format(len(graphs_to_remove), init_len))
-
-
-#def merge_same_labels(graph):
-#    """
-#    Merge every node with same label within a graph. Merging between two
-#    nodes is done by deleting the second node and changing any edge which was
-#    coming from or going to the second node to now come from or go to the
-#    second node.
-#    If two nodes with same label appear as sources of a same hyperedge, 
-#    the intermediary edge from the second node is simply removed.
-#    """
-#
-#    same_label_remains = True
-#    while same_label_remains == True:
-#        same_label_remains = False
-#        for node1 in graph.nodes:
-#            same_label_nodes = [node1]
-#            for node2 in graph.nodes:
-#                if node2 != node1:
-#                    if node1.label == node2.label:
-#                        same_label_nodes.append(node2)
-#            if len(same_label_nodes) > 1:
-#                same_label_remains = True
-#                merge_nodes(same_label_nodes, graph)
-#                break
-
-
-#def merge_nodes(nodes_to_merge, graph):
-#    """ Merge every node from the list onto the node of lowest rank. """
-#
-#    ranks = []
-#    for node in nodes_to_merge:
-#        ranks.append(node.rank)
-#    lowest_rank = min(ranks)
-#    for i in range(len(nodes_to_merge)):
-#        if nodes_to_merge[i].rank == lowest_rank:
-#            main_node = nodes_to_merge[i]
-#            del(nodes_to_merge[i])
-#            break
-#    for edge in graph.hyperedges:
-#        # Replace sources.
-#        sources_found = False
-#        nodes_to_remove = []
-#        for i in range(len(edge.source.nodelist)):
-#            src = edge.source.nodelist[i]
-#            if src in nodes_to_merge:
-#                nodes_to_remove.insert(0, i)
-#                sources_found = True
-#        if sources_found == True:
-#            for i in nodes_to_remove:
-#                del(edge.source.nodelist[i])
-#            label_already_found = False
-#            for node in edge.source.nodelist:
-#                if node.label == main_node.label:
-#                    label_already_found = True
-#            if label_already_found == False:
-#                edge.source.nodelist.append(main_node)
-#        # Replace target.
-#        if edge.target in nodes_to_merge:
-#            edge.target = main_node
-#    for i in range(len(graph.nodes)-1, -1, -1):
-#        if graph.nodes[i] in nodes_to_merge:
-#            del(graph.nodes[i])
-
-
-#def fuse_edges(graph):
-#    """ Remove duplicate edges between two same nodes but sum weights. """
-#
-#    unique_edges = []
-#    for edge1 in graph.hyperedges:
-#        sources1 = edge1.source.nodelist
-#        target1 = edge1.target.nodeid
-#        new_edge = True
-#        for edge2 in unique_edges:
-#            sources2 = edge2.source.nodelist
-#            target2 = edge2.target.nodeid
-#            same_sources = same_nodes(sources1, sources2)
-#            if same_sources == True and target1 == target2:
-#                new_edge = False
-#                break
-#        if new_edge == True:
-#            unique_edges.append(edge1)
-#    for unique_edge in unique_edges:
-#        unique_sources = unique_edge.source.nodelist
-#        unique_target = unique_edge.target.nodeid
-#        w = 0
-#        for edge in graph.hyperedges:
-#            sources = edge.source.nodelist
-#            target = edge.target.nodeid
-#            same_sources = same_nodes(unique_sources, sources)
-#            if same_sources == True and unique_target == target:
-#                w += edge.weight
-#        unique_edge.weight = w
-#    graph.hyperedges = unique_edges
-
-# ++++++++++++++++++ End of Cores Looping Section +++++++++++++++++++++++++++++
 
 # .................. Event Paths Merging Section ..............................
 
@@ -2280,7 +2059,7 @@ def foldcores(eoi, causalgraphs=None, ignorelist=[], edgelabels=False,
         for mesh in meshedcore.meshes:
             mesh_found = False
             for pathwaymesh in pathway.meshes:
-                if equivalent_meshes(mesh, pathwaymesh, enforcerank=False):
+                if analogous_meshes(mesh, pathwaymesh, enforcerank=False):
                     mesh_found = True
                     pathwaymesh.weight += mesh.weight
                     break
@@ -2374,7 +2153,8 @@ def add_mesh(graph, mesh, startid):
                 if new_mid.nodeid == midid_map[midedge.target.nodeid]:
                     target = new_mid
                     break
-        new_midedge = MidEdge(source, target, mesh.weight)
+        rel = midedge.relationtype
+        new_midedge = MidEdge(source, target, mesh.weight, relationtype=rel)
         new_mesh.midedges.append(new_midedge)
     graph.meshes.append(new_mesh)
 
@@ -2765,7 +2545,6 @@ def highlightnodes(eoi, nodelabels=None, causalgraphs=None, ignorelist=[],
             #for eventnode in mergedpath.eventnodes:
             #    seen_labels.append(eventnode.label)
             ## Get event nodes and meshes from prevcores.
-            #print(mergedpath.filename)
             seen_meshes = []
             meshes_to_top = []
             for prevcore in mappedpath.prevcores:
@@ -3323,12 +3102,6 @@ def complete_req(graph, mod_nodes):
                 if not species_in(path_req, comp_req_set):
                     comp_req_set.append(path_req)
         mod_node.full_req = comp_req_set
-    #for n in mod_nodes:
-    #    if n.intro == False:
-    #        print(n.rule)
-    #        for req in n.full_req:
-    #            print(req)
-            
 
 
 def get_mod_nodes(eoi, graph):
@@ -4123,7 +3896,6 @@ def oldspeciespathway(eoi, kappamodel, causalgraph=None, edgelabels=False,
     for node in added_nodes:
         mod_nodes.append(node)
     for node in pathway.nodes:
-        print(node)
         if node in mod_nodes:
             node.label = node.species
     rebranch(pathway, mod_nodes)
