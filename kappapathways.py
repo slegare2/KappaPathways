@@ -14,6 +14,7 @@ import math
 import statistics
 import random
 import copy
+import textwrap
 
 
 class EventNode(object):
@@ -73,9 +74,9 @@ class CausalEdge(object):
     can be precedence (default), causal or conflict.
     """
 
-    def __init__(self, source, target, prob=1, relationtype="precedence",
-                 color="black", underlying=False, reverse=False,
-                 defaultwidth=False, constraint=True):
+    def __init__(self, source, target, occurrence=1, prob=1,
+                 relationtype="precedence", color="black", underlying=False,
+                 reverse=False, defaultwidth=False):
         """ Initialize class CausalEdge. """
 
         self.source = source
@@ -87,7 +88,6 @@ class CausalEdge(object):
         self.underlying = underlying
         self.reverse = reverse
         self.defaultwidth = defaultwidth
-        self.constraint = constraint
         self.check_types()
 
 
@@ -110,6 +110,8 @@ class CausalEdge(object):
         res =  "Edge"
         if self.prob != None:
             res += "  prob = {}".format(self.prob)
+        if self.weight != None:
+            res += "  weight = {}".format(self.weight)
         res += "\n"
         res += "source: {}\n".format(self.source)
         res += "target: {}\n".format(self.target)
@@ -191,13 +193,14 @@ class Mesh(object):
     A mesh is made of a group of edges glued together by intermediary nodes.
     """
 
-    def __init__(self, prob=1, underlying=False, color="black"):
+    def __init__(self, occurrence=1, prob=1, underlying=False, color="black", meshid=None):
         """ Initialize class Mesh. """
 
         self.prob = prob
         self.weight = prob
         self.underlying = underlying
         self.color = color
+        self.meshid = meshid
         self.midnodes = []
         self.midedges = []
 
@@ -457,7 +460,9 @@ class CausalGraph(object):
                             node_id = ori_id
                         label_start = read_line.index("label=")+7
                         label_end = read_line[label_start:].index('"')+label_start
-                        label = "{}".format(read_line[label_start:label_end])
+                        #label = read_line[label_start:label_end].strip()
+                        label_srt = read_line[label_start:label_end].strip()
+                        label = label_str.replace("\\n ", "")
                         if "intro=True" in read_line:
                             is_intro = True
                         else:
@@ -1370,20 +1375,37 @@ class CausalGraph(object):
         return overlap
 
 
+    def assign_meshid(self, showintro):
+        """
+        Assign a unique numeral id to every mesh and cover mesh. Id assignment is done the same way """
+
+        meshid = 1
+        for mesh in self.meshes:
+            mesh.reverse_midedges()
+            #if showintro == True:
+            mesh.meshid = meshid
+            meshid += 1
+            #elif showintro == False and mesh.underlying == False:
+            #    mesh.meshid = meshid
+            #    meshid += 1
+        for covermesh in self.covermeshes:
+            covermesh.reverse_midedges()
+            covermesh.meshid = meshid
+            meshid += 1
+
+
     def build_dot_file(self, edgelabels=False, showintro=True, color=True,
-                       weightedges=False):
+                       weightedges=False, identifyedges=False):
         """ build a dot file of the CausalGraph. """
 
         if showintro == False:
             self.build_nointro()
-        for mesh in self.meshes:
-            mesh.reverse_midedges()
-        for covermesh in self.covermeshes:
-            covermesh.reverse_midedges()
+        self.assign_meshid(showintro)
         if color == True:
             self.color_meshes(showintro)
         # Write info about graph.
         dot_str = 'digraph G{\n'
+        #dot_str += '  fontsize=40 ;\n'
         dot_str += '  precedenceonly="{}" ;\n'.format(self.precedenceonly)
         dot_str += '  meshedgraph="{}" ;\n'.format(self.meshedgraph)
         dot_str += '  nodestype="{}" ;\n'.format(self.nodestype)
@@ -1396,10 +1418,14 @@ class CausalGraph(object):
             dot_str += '  maxrank="{}" ;\n'.format(self.maxrank)
         if self.prevcores != None:
             dot_str += '  prevcores="{}" ;\n'.format(self.prevcores)
-        if "core" in self.filename:
-            dot_str += '  ranksep=0.25 ;\n'
-        else:
-            dot_str += '  ranksep=0.5 ;\n'
+        #if "core" in self.filename:
+        #    dot_str += '  ranksep=0.25 ;\n'
+        #else:
+        #    dot_str += '  ranksep=0.5 ;\n'
+        #dot_str += '  nodesep=0.2 ;\n' # Default nodesep is 0.25
+        dot_str += '  splines=true ;\n'
+        dot_str += '  node [pin=true] ;\n'
+        #dot_str += '  edge [fontsize=18] ;\n'
         # Compute some statistics to assign edge and intermediary node width.
         minpenwidth = 1
         medpenwidth = 3
@@ -1412,20 +1438,23 @@ class CausalGraph(object):
             all_probs.append(covermesh.prob)
         average_prob = statistics.mean(all_probs)
         # Draw nodes.
-        for int_rank in range((self.maxrank+1)*2):
-            current_rank = int_rank/2
+        midranks = 1
+        for int_rank in range((self.maxrank+1)*(midranks+1)):
+            current_rank = int_rank/(midranks+1)
             rank_str = "{}".format(current_rank)
             if showintro == False and current_rank < 1:
                 dot_str += "//"
-            if int_rank%2 == 0:
+            #if int_rank%nsteps == 0:
+            if current_rank%1 == 0:
                 dot_str += ('{{ rank = same ; "{}" ['
                             'shape=plaintext];\n'.format(int(current_rank)))
             else:
-                dot_str += ('{{ rank = same ; "{}" [label="", '
+                dot_str += ('{{ rank = same ; "{:.2}" [label="", '
                             'shape=plaintext];\n'.format(current_rank))
             for node in self.eventnodes:
                 if node.rank == current_rank:
-                    node_shape = 'invhouse'
+                    #node_shape = 'invhouse'
+                    node_shape = 'rectangle'
                     node_color = 'lightblue'
                     if node.intro == True:
                         node_shape = 'rectangle'
@@ -1437,8 +1466,21 @@ class CausalGraph(object):
                         node_shape = 'ellipse'
                     if showintro == False and node.intro == True:
                         dot_str += '//'
+                    node_lines = textwrap.wrap(node.label, 20,
+                                              break_long_words=False)
+                    node_str = ""
+                    for i in range(len(node_lines)):
+                        if i == 0:
+                            node_str += " {} ".format(node_lines[i])
+                        else:
+                            node_str += "\\n {} ".format(node_lines[i])
+                    print(node_str)
+                    print("----")
+                    ori_text = node_str.replace("\\n ", "").strip()
+                    print(ori_text)
+                    print("====")
                     dot_str += ('"{}" [label="{}"'
-                                .format(node.nodeid, node.label))
+                                .format(node.nodeid, node_str))
                     dot_str += ', shape={}, style=filled'.format(node_shape)
                     if node.highlighted == True:
                        dot_str += ', fillcolor=gold, penwidth=2'
@@ -1506,26 +1548,40 @@ class CausalGraph(object):
                                                       maxpenwidth)
                         dot_str += ', cover="True"] ;\n'
         # Draw invisible ranking edges.
-        for int_rank in range(self.maxrank*2):
-            rank = int_rank/2
+        for int_rank in range(self.maxrank*(midranks+1)):
+            rank = int_rank/(midranks+1)
             if showintro == False and rank < 1:
                 dot_str += '//'
-            next_rank = rank+0.5
-            if int_rank%2 == 0:
+            next_rank = rank+(1.0/(midranks+1))
+            if rank%1 == 0:
                 rank_str = '{}'.format(int(rank))
-                next_str = '{}'.format(next_rank)
             else:
-                rank_str = '{}'.format(rank)
+                rank_str = '{:.2}'.format(rank)
+            if next_rank%1 == 0:
                 next_str = '{}'.format(int(next_rank))
+            else:
+                next_str = '{:.2}'.format(next_rank)
+            #if int_rank%nsteps == 0:
+            #    rank_str = '{}'.format(int(rank))
+            #    next_str = '{}'.format(next_rank)
+            #else:
+            #    rank_str = '{}'.format(rank)
+            #    next_str = '{}'.format(int(next_rank))
             dot_str += ('"{}" -> "{}" [style="invis"] ;\n'
                         .format(rank_str, next_str))
         # Draw each intermediary edge found in each mesh. Comment if
         # Underlying. The probability of each intermediary edge within
         # a mesh should be the same.
         for mesh in self.meshes:
+            nsources = 0
             for midedge in mesh.midedges:
                 if showintro == False and mesh.underlying == True:
                     dot_str += "//"
+                writemeshid = False
+                if isinstance(midedge.source, EventNode):
+                    nsources += 1
+                    if identifyedges == True and nsources == 1:
+                        writemeshid = True
                 dot_str += self.write_midedge(mesh,
                                               midedge,
                                               average_prob,
@@ -1533,12 +1589,19 @@ class CausalGraph(object):
                                               medpenwidth,
                                               maxpenwidth,
                                               edgelabels,
-                                              weightedges)
+                                              weightedges,
+                                              writemeshid)
                 dot_str += '] ;\n'
         # Draw cover edges if intro nodes are not shown.
         if showintro == False:
             for covermesh in self.covermeshes:
+                nsources = 0
                 for midedge in covermesh.midedges:
+                    writemeshid = False
+                    if isinstance(midedge.source, EventNode):
+                        nsources += 1
+                        if identifyedges == True and nsources == 1:
+                            writemeshid = True
                     dot_str += self.write_midedge(covermesh,
                                                   midedge,
                                                   average_prob,
@@ -1546,7 +1609,8 @@ class CausalGraph(object):
                                                   medpenwidth,
                                                   maxpenwidth,
                                                   edgelabels,
-                                                  weightedges)
+                                                  weightedges,
+                                                  writemeshid)
                     dot_str += ', cover="True"] ;\n'
         # Close graph.
         dot_str += "}"
@@ -1579,7 +1643,8 @@ class CausalGraph(object):
 
 
     def write_midedge(self, mesh, midedge, average_prob, minpenwidth,
-                      medpenwidth, maxpenwidth, edgelabels, weightedges):
+                      medpenwidth, maxpenwidth, edgelabels, weightedges,
+                      writemeshid):
         """ Write the line of a dot file for a single midedge. """
 
         midedge_color = midedge.color
@@ -1602,6 +1667,9 @@ class CausalGraph(object):
         mid_str += ', color={}'.format(midedge_color)
         if edgelabels == True:
             mid_str += ', label="  {}"'.format(mesh.prob)
+            #mid_str += ', label=" "'.format(mesh.prob)
+            mid_str += ', fontcolor={}'.format(midedge.color)
+            #mid_str += ', fontcolor=transparent'.format(midedge.color)
         if isinstance(midedge.target, MidNode):
             mid_str += ", dir=none"
         elif midedge.reverse == True:
@@ -1613,8 +1681,13 @@ class CausalGraph(object):
         mid_str += ', prob={}'.format(mesh.prob)
         if weightedges == True:
             mid_str += ', weight={}'.format(mesh.weight)
-        if midedge.constraint == False:
-            mid_str += ', constraint=false'
+        if writemeshid == True:
+            if midedge.reverse == False:
+                mid_str += ', headlabel="#{} \\n sdfgs"'.format(mesh.meshid)
+                mid_str += ', fontcolor={}'.format(midedge.color)
+            elif midedge.reverse == True:
+                mid_str += ', taillabel="#{}"'.format(mesh.meshid)
+                mid_str += ', fontcolor={}'.format(midedge.color)
 
         return mid_str
 
@@ -2041,7 +2114,7 @@ def analogous_midedges(neighbors1, neighbors2, enforcerank=True):
 
 def foldcores(eoi, causalgraphs=None, ignorelist=[], edgelabels=False,
               showintro=False, color=True, writedot=True, rmprev=False,
-              weightedges=False):
+              weightedges=False, identifyedges=False):
     """ Fold meshed cores into a single event pathway. """
 
     # Reading section.
@@ -2096,7 +2169,7 @@ def foldcores(eoi, causalgraphs=None, ignorelist=[], edgelabels=False,
     #pathway.sequentialize_ids()
     pathway.rank_sequentially()
     pathway.filename = "eventpathway.dot"
-    pathway.build_dot_file(edgelabels, showintro, color, weightedges)
+    pathway.build_dot_file(edgelabels, showintro, color, weightedges, identifyedges)
     # Writing section.
     if writedot == True:
         output_path1 = "{}/{}".format(eoi, pathway.filename)
@@ -2372,14 +2445,14 @@ def mapcores(eoi, causalgraphs=None, ignorelist=[], template=None,
         midid = mappedcore.find_max_midid()+1
         max_rank = meshedcore.maxrank
         for mesh in mappedcore.meshes:
-            mesh.color = "grey90"
+            mesh.color = "grey80"
             #mesh.prob = meshedcore.occurrence
             for midnode in mesh.midnodes:
-                midnode.bordercolor = "grey90"
+                midnode.bordercolor = "grey80"
                 if midnode.midtype == "enabling":
-                    midnode.fillcolor = "grey90"
+                    midnode.fillcolor = "grey80"
             for midedge in mesh.midedges:
-                midedge.color = "grey90"
+                midedge.color = "grey80"
         for mesh in meshedcore.meshes:
             # Determine color of mesh in mapped core.
             sources, targets = mesh.get_events()
@@ -2400,10 +2473,10 @@ def mapcores(eoi, causalgraphs=None, ignorelist=[], template=None,
                 if midnode.midtype == "enabling":
                     midnode.fillcolor = '"{:.3} 1 1"'.format(col_val)
             for midedge in mesh.midedges:
-                if isinstance(midedge.target, MidNode):
-                    midedge.color = midedge.target.bordercolor
-                elif isinstance(midedge.target, EventNode):
-                    col_val = 0.25+(midedge.target.rank/max_rank)*0.75
+                if isinstance(midedge.source, MidNode):
+                    midedge.color = midedge.source.bordercolor
+                elif isinstance(midedge.source, EventNode):
+                    col_val = 0.25+(midedge.source.rank/max_rank)*0.75
                     midedge.color = '"{:.3} 1 1"'.format(col_val)
             # Find equivalent meshes in the template.
             analog_meshes = []
@@ -2411,8 +2484,8 @@ def mapcores(eoi, causalgraphs=None, ignorelist=[], template=None,
                 mappedmesh = mappedcore.meshes[i]
                 if analogous_meshes(mesh, mappedmesh, enforcerank=False):
                     analog_meshes.append(i)
-                    mesh.prob = mappedmesh.prob
-                    mesh.weight = mappedmesh.prob
+                    #mesh.prob = mappedmesh.prob
+                    #mesh.weight = mappedmesh.prob
             if len(analog_meshes) == 0:
                 raise ValueError("No analogous mesh found in template.")
             insertpos = None
@@ -2423,20 +2496,19 @@ def mapcores(eoi, causalgraphs=None, ignorelist=[], template=None,
                     insertpos = analog_meshes[0]
                     add_mesh(mappedcore, mesh, midid, insertpos)
                     midid += len(mesh.midnodes)
-                    for midedge in mappedcore.meshes[insertpos].midedges:
+                    for midedge in mesh.midedges:
                         midedge.defaultwidth = True
+                        midedge.weight = mesh.weight
                 else:
                     add_mesh(mappedcore, mesh, midid, insertpos)
                     midid += len(mesh.midnodes)
                     for midedge in mappedcore.meshes[-1].midedges:
                         midedge.defaultwidth = True
-                        midedge.constraint = False
             else:
                 add_mesh(mappedcore, mesh, midid, insertpos)
                 midid += len(mesh.midnodes)
                 for midedge in mappedcore.meshes[-1].midedges:
                     midedge.defaultwidth = True
-                    midedge.constraint = False
         mappedcore.rank_sequentially()
         mappedcores.append(mappedcore)
     for i in range(len(mappedcores)):
