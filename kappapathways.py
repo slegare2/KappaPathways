@@ -24,7 +24,7 @@ class EventNode(object):
     """
 
     def __init__(self, nodeid, label, rank=None, occurrence=None, prob=None,
-                 intro=False, first=False, highlighted=False):
+                 intro=False, first=False, highlighted=False, pos=None):
         """ Initialize class EventNode. """
 
         self.nodeid = nodeid
@@ -35,6 +35,7 @@ class EventNode(object):
         self.intro = intro
         self.first = first
         self.highlighted = highlighted
+        self.pos = pos
         self.check_types()
 
 
@@ -77,7 +78,8 @@ class CausalEdge(object):
     def __init__(self, source, target, occurrence=1, prob=1.0,
                  relationtype="precedence", color="black", underlying=False,
                  reverse=False, defaultwidth=False, labelcarrier=True,
-                 indicator=False):
+                 indicator=False, meshid=None, pos=None, labelpos=None,
+                 rankposdict=None):
         """ Initialize class CausalEdge. """
 
         self.source = source
@@ -92,6 +94,10 @@ class CausalEdge(object):
         self.defaultwidth = defaultwidth
         self.labelcarrier = labelcarrier
         self.indicator = indicator
+        self.meshid = meshid
+        self.pos = pos
+        self.labelpos = labelpos
+        self.rankposdict = rankposdict
         self.check_types()
 
 
@@ -135,7 +141,8 @@ class MidNode(object):
     """
 
     def __init__(self, nodeid, rank=None, midtype="enabling", ghost=False,
-                 logic="and", fillcolor="black", bordercolor="black"):
+                 logic="and", fillcolor="black", bordercolor="black",
+                 pos=None):
         """ Initialize class MidNode. """
 
         self.nodeid = nodeid
@@ -144,12 +151,11 @@ class MidNode(object):
         self.midtype = midtype # enabling or involvement
         self.ghost = ghost
         self.logic = logic
-        if self.midtype == "enabling":
-            self.fillcolor = "black"
-            self.bordercolor = "black"
-        elif self.midtype == "involvement":
+        self.fillcolor = fillcolor
+        self.bordercolor = bordercolor
+        self.pos = pos
+        if self.midtype == "involvement":
             self.fillcolor = "white"
-            self.bordercolor = "black"
         self.check_types()
 
 
@@ -451,8 +457,13 @@ class CausalGraph(object):
         self.meshes = []
         self.edgegroups = []
         self.midnodegroups = []
-        # Post-computed variables.
+        # Cover edges and midnodes computed from nointro.
+        self.coveredges = []
+        self.covermidnodes = []
+        self.covermidedges = []
         self.covermeshes = []
+        self.covermidnodegroups = []
+        # Post-computed variables.
         self.occurrence = 1
         self.maxrank = None
         self.prevcores = None
@@ -504,122 +515,153 @@ class CausalGraph(object):
                 rank = int(medrank)
             if line[0] == "}":
                 rank = None
+            # Read nodes.
             if "label=" in line and "Occurrence" not in line:
                 if "->" not in line and "rank = same" not in line:
-                    if 'cover="True"' not in line:
-                        if line[0:2] == "//":
-                           read_line = line[2:]
+                    if line[0:2] == "//":
+                       read_line = line[2:]
+                    else:
+                       read_line = line
+                    tokens = read_line.split()
+                    ori_id = tokens[0]
+                    if '"' in ori_id:
+                        ori_id = ori_id[1:-1]
+                    if "node" not in ori_id:
+                        node_id = "node{}".format(ori_id)
+                    else:
+                        node_id = ori_id
+                    label_start = read_line.index("label=")+7
+                    label_end = read_line[label_start:].index('"')+label_start
+                    label_str = read_line[label_start:label_end].strip()
+                    label = label_str.replace("\\n ", "")
+                    if "intro=True" in read_line:
+                        is_intro = True
+                    else:
+                        is_intro = False
+                    if "first=True" in read_line:
+                        is_first = True
+                    else:
+                        is_first = False
+                    if "midtype" in read_line:
+                        mid_start = read_line.index('midtype')+8
+                        mid_end = read_line[mid_start:].index(',')+mid_start
+                        midtype = read_line[mid_start:mid_end]
+                        if "style=dotted" in read_line:
+                            ghost = True
                         else:
-                           read_line = line
-                        tokens = read_line.split()
-                        ori_id = tokens[0]
-                        if '"' in ori_id:
-                            ori_id = ori_id[1:-1]
-                        if "node" not in ori_id:
-                            node_id = "node{}".format(ori_id)
-                        else:
-                            node_id = ori_id
-                        label_start = read_line.index("label=")+7
-                        label_end = read_line[label_start:].index('"')+label_start
-                        #label = read_line[label_start:label_end].strip()
-                        label_str = read_line[label_start:label_end].strip()
-                        label = label_str.replace("\\n ", "")
-                        if "intro=True" in read_line:
-                            is_intro = True
-                        else:
-                            is_intro = False
-                        if "first=True" in read_line:
-                            is_first = True
-                        else:
-                            is_first = False
-                        if "midtype" in read_line:
-                            mid_start = read_line.index('midtype')+8
-                            mid_end = read_line[mid_start:].index(',')+mid_start
-                            midtype = read_line[mid_start:mid_end]
-                            self.midnodes.append(MidNode(ori_id, rank, midtype))
-                        else:
-                            self.eventnodes.append(EventNode(node_id, label,
-                                                             rank,
-                                                             intro=is_intro,
-                                                             first=is_first))
-                            self.label_mapping[node_id] = label
+                            ghost = False
+                        fillcolor = get_field("fillcolor=", read_line, "black")
+                        bordercolor = get_field(" color=", read_line, "black")
+                        new_midnode = MidNode(ori_id, rank, midtype,
+                                              ghost=ghost, fillcolor=fillcolor,
+                                              bordercolor=bordercolor)
+                        if 'cover="True"' not in line:
+                            self.midnodes.append(new_midnode)
+                        elif 'cover="True"' in line:
+                            self.covermidnodes.append(new_midnode)
+                    else:
+                        self.eventnodes.append(EventNode(node_id, label,
+                                                         rank,
+                                                         intro=is_intro,
+                                                         first=is_first))
+                        self.label_mapping[node_id] = label
+        # Read edges.
         tmp_edges = []
         tmp_midedges = []
+        tmp_cedges = []
+        tmp_cmidedges = []
         for line in dotfile:
-            if "->" in line and 'style="invis"' not in line:
-                if 'cover="True"' not in line and "tee" not in line:
-                    if line[0:2] == "//":
-                        read_line = line[2:]
-                    else:
-                        read_line = line
-                    tokens = read_line.split()
-                    source_id = tokens[0]
-                    if '"' in source_id:
-                        source_id = source_id[1:-1]
-                    if "node" not in source_id and "mid" not in source_id:
-                        source_id = "node{}".format(source_id)
-                    target_id = tokens[2]
-                    if '"' in target_id:
-                        target_id = target_id[1:-1]
-                    if "node" not in target_id and "mid" not in target_id:
-                        target_id = "node{}".format(target_id)
-                    for node in self.eventnodes:
-                        if node.nodeid == source_id:
-                            source = node
-                        if node.nodeid == target_id:
-                            target = node
-                    for node in self.midnodes:
-                        if node.nodeid == source_id:
-                            source = node
-                        if node.nodeid == target_id:
-                            target = node
-                    if "occ=" in line:
-                        occ_start = read_line.index("occ=")+4
-                        rem = read_line[occ_start:]
-                        if "," in rem:
-                            occ_end = rem.index(",")+occ_start
+            if "->" in line and '[style="invis"]' not in line:
+                if line[0:2] == "//":
+                    read_line = line[2:]
+                    underlying = True
+                else:
+                    read_line = line
+                    underlying = False
+                tokens = read_line.split()
+                source_id = tokens[0]
+                if '"' in source_id:
+                    source_id = source_id[1:-1]
+                if "node" not in source_id and "mid" not in source_id:
+                    source_id = "node{}".format(source_id)
+                target_id = tokens[2]
+                if '"' in target_id:
+                    target_id = target_id[1:-1]
+                if "node" not in target_id and "mid" not in target_id:
+                    target_id = "node{}".format(target_id)
+                source = None
+                target = None
+                for node in self.eventnodes:
+                    if node.nodeid == source_id:
+                        source = node
+                    if node.nodeid == target_id:
+                        target = node
+                for node in self.midnodes:
+                    if node.nodeid == source_id:
+                        source = node
+                    if node.nodeid == target_id:
+                        target = node
+                for node in self.covermidnodes:
+                    if node.nodeid == source_id:
+                        source = node
+                    if node.nodeid == target_id:
+                        target = node
+                meshid = get_field("meshid=", read_line, 1)
+                meshid = int(meshid)
+                occ = get_field("occ=", read_line, 1)
+                occ = int(occ)
+                color = get_field("color=", read_line, "black")
+                if "label=" in line:
+                    labelcarrier = True
+                else:
+                    labelcarrier = False
+                if self.precedenceonly == False:
+                    if self.meshedgraph == False:
+                        if "color=grey" in line:
+                            edgetype = "conflict"
                         else:
-                            occ_end = rem.index("]")+occ_start
-                        occ = int(read_line[occ_start:occ_end])
-                    else:
-                        occ = 1
-                    if self.precedenceonly == False:
-                        if self.meshedgraph == False:
-                            if "color=grey" in line:
-                                edgetype = "conflict"
-                            else:
-                                edgetype = "causal"
-                        elif self.meshedgraph == True:
-                            if "style=dotted" in line:
-                                edgetype = "conflict"
-                            else:
-                                edgetype = "causal"
-                    else:
-                        edgetype = "precedence"
-                    if "rev=True" in line:
-                       rev = True
-                    else:
-                       rev = False
-                    source_is_mid = isinstance(source, MidNode)
-                    target_is_mid = isinstance(target, MidNode)
-                    if source_is_mid or target_is_mid:
-                        if rev == False:
-                            tmp_midedges.append(MidEdge(source, target,
-                                                        occurrence=occ,
-                                                        relationtype=edgetype))
-                        elif rev == True:
-                            tmp_midedges.append(MidEdge(target, source,
-                                                        occurrence=occ,
-                                                        relationtype=edgetype,
-                                                        reverse=rev))
-                    else:
-                        tmp_edges.append(CausalEdge(source, target,
-                                                    occurrence=occ,
-                                                    relationtype=edgetype))
+                            edgetype = "causal"
+                    elif self.meshedgraph == True:
+                        if "style=dotted" in line:
+                            edgetype = "conflict"
+                        else:
+                            edgetype = "causal"
+                else:
+                    edgetype = "precedence"
+                if "rev=True" in line:
+                   rev = True
+                   source_save = source
+                   source = target
+                   target = source_save
+                else:
+                   rev = False
+                source_is_mid = isinstance(source, MidNode)
+                target_is_mid = isinstance(target, MidNode)
+                if source_is_mid or target_is_mid:
+                    new_edge = MidEdge(source, target, occurrence=occ,
+                                       relationtype=edgetype, reverse=rev,
+                                       meshid=meshid, underlying=underlying,
+                                       color=color, labelcarrier=labelcarrier)
+                    if 'cover="True"' not in line:
+                        tmp_midedges.append(new_edge)
+                    elif 'cover="True"' in line:
+                        tmp_cmidedges.append(new_edge)
+                else:
+                    new_edge = CausalEdge(source, target, occurrence=occ,
+                                          relationtype=edgetype, meshid=meshid,
+                                          underlying=underlying, color=color)
+                    if 'cover="True"' not in line:
+                        tmp_edges.append(new_edge)
+                    elif 'cover="True"' in line:
+                        tmp_cedges.append(new_edge)
         for edge in tmp_edges:
             self.causaledges.insert(0, edge)
         for midedge in tmp_midedges:
             self.midedges.insert(0, midedge)
+        for cedge in tmp_cedges:
+            self.coveredges.insert(0, cedge)
+        for cmidedge in tmp_cmidedges:
+            self.covermidedges.insert(0, cmidedge)
         self.postprocess()
 
 
@@ -641,8 +683,14 @@ class CausalGraph(object):
             self.find_first_rules()
             self.rank_sequentially()
         elif self.meshedgraph == True:
-           self.find_midnodegroups()
-           self.read_meshes()
+           self.find_midnodegroups(cover=False)
+           self.find_midnodegroups(cover=True)
+           self.read_meshes(cover=False)
+           self.read_meshes(cover=True)
+           sorted_meshes = sorted(self.meshes, key=lambda x: x.meshid)
+           sorted_covermeshes = sorted(self.covermeshes, key=lambda x: x.meshid)
+           self.meshes = sorted_meshes
+           self.covermeshes = sorted_covermeshes
         if self.eoi == None:
             self.get_maxrank()
             for node in self.nodes:
@@ -762,10 +810,18 @@ class CausalGraph(object):
         self.meshedgraph = True
 
 
-    def find_midnodegroups(self):
+    def find_midnodegroups(self, cover=False):
         """ Find groups of midnodes connected together by midedges. """
 
-        midnodescopy = self.midnodes.copy()
+        if cover == False:
+            worknodes = self.midnodes
+            workedges = self.midedges
+            workgroups = self.midnodegroups
+        elif cover == True:
+            worknodes = self.covermidnodes
+            workedges = self.covermidedges
+            workgroups = self.covermidnodegroups
+        midnodescopy = worknodes.copy()
         while len(midnodescopy) > 0:
             current_group = [midnodescopy[0]]
             del(midnodescopy[0])
@@ -775,7 +831,7 @@ class CausalGraph(object):
                 # Find midnodes connected to current midnodes through midedges.
                 midnodes_to_add = []
                 for current_midnode in current_group:
-                    for midedge in self.midedges:
+                    for midedge in workedges:
                         if midedge.source == current_midnode:
                             if isinstance(midedge.target, MidNode):
                                 if midedge.target not in current_group:
@@ -798,17 +854,27 @@ class CausalGraph(object):
                 for i in copy_to_remove:
                     del(midnodescopy[i])
                 if new_midnode_found == False:
-                    self.midnodegroups.append(current_group)
+                    workgroups.append(current_group)
 
 
-    def read_meshes(self):
+    def read_meshes(self, cover=False):
         """ Rebuild meshes based on midnodes and their edges. """
 
-        for midnodegroup in self.midnodegroups:
+        if cover == False:
+            workgroups = self.midnodegroups
+            workedges = self.midedges
+            workmeshes = self.meshes
+            workcausal = self.causaledges
+        elif cover == True:
+            workgroups = self.covermidnodegroups
+            workedges = self.covermidedges
+            workmeshes = self.covermeshes
+            workcausal = self.coveredges
+        for midnodegroup in workgroups:
             new_mesh = Mesh()
             for midnode in midnodegroup:
                 new_mesh.midnodes.append(midnode)
-                for midedge in self.midedges:
+                for midedge in workedges:
                     if midedge.source == midnode:
                         if midedge not in new_mesh.midedges:
                             new_mesh.midedges.append(midedge)
@@ -817,11 +883,15 @@ class CausalGraph(object):
                             new_mesh.midedges.append(midedge)
             new_mesh.occurrence = new_mesh.midedges[0].occurrence
             new_mesh.weight = new_mesh.midedges[0].occurrence
-            self.meshes.append(new_mesh)
-        for causaledge in self.causaledges:
+            new_mesh.meshid = new_mesh.midedges[0].meshid
+            new_mesh.underlying = new_mesh.midedges[0].underlying
+            workmeshes.append(new_mesh)
+        for causaledge in workcausal:
             new_mesh = Mesh(occurrence=causaledge.occurrence)
             new_mesh.midedges.append(causaledge)
-            self.meshes.append(new_mesh)
+            new_mesh.meshid = new_mesh.midedges[0].meshid
+            new_mesh.underlying = new_mesh.midedges[0].underlying
+            workmeshes.append(new_mesh)
 
 
     def find_first_rules(self):
@@ -1439,18 +1509,13 @@ class CausalGraph(object):
 
 
     def assign_meshid(self, showintro):
-        """
-        Assign a unique numeral id to every mesh and cover mesh. Id assignment is done the same way """
+        """ Assign a unique numeral id to every mesh and cover mesh. """
 
         meshid = 1
         for mesh in self.meshes:
             mesh.reverse_midedges()
-            #if showintro == True:
             mesh.meshid = meshid
             meshid += 1
-            #elif showintro == False and mesh.underlying == False:
-            #    mesh.meshid = meshid
-            #    meshid += 1
         for covermesh in self.covermeshes:
             covermesh.reverse_midedges()
             covermesh.meshid = meshid
@@ -1503,18 +1568,26 @@ class CausalGraph(object):
                                 break
 
 
-    def build_dot_file(self, showintro=True, addedgelabels=True,
-                       showedgelabels=True, edgeid=True, edgeocc=False,
-                       edgeprob=True, weightedges=False, color=True):
-        """ build a dot file of the CausalGraph. """
+    def compute_visuals(self, showintro=True, color=True):
+        """
+        Compute visuals like color and label carriers.
+        This erases previous visuals.
+        """
 
         if showintro == False:
             self.build_nointro()
         self.assign_meshid(showintro)
         if color == True:
             self.color_meshes(showintro)
-        self.compute_probabilities()
         self.assign_label_carrier()
+
+
+    def build_dot_file(self, showintro=True, addedgelabels=True,
+                       showedgelabels=True, edgeid=True, edgeocc=False,
+                       edgeprob=True, weightedges=False, color=True):
+        """ build a dot file of the CausalGraph. """
+
+        self.compute_probabilities()
         # Write info about graph.
         dot_str = 'digraph G{\n'
         dot_str += '  precedenceonly="{}" ;\n'.format(self.precedenceonly)
@@ -1553,11 +1626,23 @@ class CausalGraph(object):
             if showintro == False and current_rank < 1:
                 dot_str += "//"
             if current_rank%1 == 0:
+                rank_str = str(int(current_rank))
                 dot_str += ('{{ rank = same ; "{}" ['
-                            'shape=plaintext];\n'.format(int(current_rank)))
+                            'shape=plaintext'.format(rank_str))
+                if self.rankposdict != None:
+                    if rank_str in self.rankposdict.keys():
+                        rankpos = self.rankposdict[rank_str]
+                        dot_str += ', pos={}'.format(rankpos)
+                dot_str +='];\n'
             else:
-                dot_str += ('{{ rank = same ; "{:.2f}" [label="", '
-                            'shape=plaintext];\n'.format(current_rank))
+                rank_str = "{:.2f}".format(current_rank)
+                dot_str += ('{{ rank = same ; "{}" [label="", '
+                            'shape=plaintext'.format(rank_str))
+                if self.rankposdict != None:
+                    if rank_str in self.rankposdict.keys():
+                        rankpos = self.rankposdict[rank_str]
+                        dot_str += ', pos={}'.format(rankpos)
+                dot_str += '];\n'
             for node in self.eventnodes:
                 if node.rank == current_rank:
                     #node_shape = 'invhouse'
@@ -1592,6 +1677,8 @@ class CausalGraph(object):
                         dot_str += ', intro={}'.format(node.intro)
                     if node.first == True:
                         dot_str += ', first={}'.format(node.first)
+                    if node.pos != None:
+                        dot_str += ', pos={}'.format(node.pos)
                     dot_str += "] ;\n"
             # Draw intermediary nodes that emulate hyperedges if two
             # sources or more are drawn.
@@ -1651,8 +1738,14 @@ class CausalGraph(object):
                 next_str = '{}'.format(int(next_rank))
             else:
                 next_str = '{:.2f}'.format(next_rank)
-            dot_str += ('"{}" -> "{}" [style="invis"] ;\n'
-                        .format(rank_str, next_str))
+            dot_str += ('"{}" -> "{}" [style="invis"'.format(rank_str,
+                                                             next_str))
+            if self.rankposdict != None:
+                edge_str = "{} -> {}".format(rank_str, next_str)
+                if edge_str in self.rankposdict.keys():
+                    edgerankpos = self.rankposdict[edge_str]
+                    dot_str += ', pos={}'.format(edgerankpos)
+            dot_str += '] ;\n'
         # Draw each intermediary edge found in each mesh. Comment if
         # Underlying. The occurrence of each intermediary edge within
         # a mesh should be the same.
@@ -1691,16 +1784,18 @@ class CausalGraph(object):
         if pensize > maxpenwidth:
             pensize = maxpenwidth
         pensize = math.sqrt(pensize)/12
-        mid_str = '"{}" [label="", '.format(midnode.nodeid)
-        mid_str += 'shape=circle, '
+        mid_str = '"{}" [label=""'.format(midnode.nodeid)
+        mid_str += ', shape=circle'
         if midnode.ghost == True:
-            mid_str += 'style=dotted, '
+            mid_str += ', style=dotted'
         else:
-            mid_str += 'style=filled, '
-        mid_str += 'color={}, '.format(midnode.bordercolor)
-        mid_str += 'fillcolor={}, '.format(midnode.fillcolor)
-        mid_str += 'midtype={}, '.format(midnode.midtype)
-        mid_str += 'width={:.4f}, height={:.4f}'.format(pensize, pensize)
+            mid_str += ', style=filled'
+        mid_str += ', color={}'.format(midnode.bordercolor)
+        mid_str += ', fillcolor={}'.format(midnode.fillcolor)
+        mid_str += ', midtype={}'.format(midnode.midtype)
+        mid_str += ', width={:.4f}, height={:.4f}'.format(pensize, pensize)
+        if midnode.pos != None:
+            mid_str += ', pos={}'.format(midnode.pos)
 
         return mid_str
 
@@ -1746,6 +1841,8 @@ class CausalGraph(object):
                     if edgeocc == True:
                         label_str += ")"
                 mid_str += ', label="{}"'.format(label_str)
+                if midedge.labelpos != None:
+                    mid_str += ', lp={}'.format(midedge.labelpos)
             if showedgelabels == True:
                 mid_str += ', fontcolor={}'.format(midedge.color)
             elif showedgelabels == False:
@@ -1780,6 +1877,8 @@ class CausalGraph(object):
         mid_str += ', prob={}'.format(mesh.prob)
         if weightedges == True:
             mid_str += ', weight={}'.format(mesh.weight)
+        if midedge.pos != None:
+            mid_str += ', pos={}'.format(midedge.pos)
 
         return mid_str
 
@@ -1832,6 +1931,21 @@ def same_objects(list1, list2):
     return are_same
 
 
+def get_field(field, read_str, default):
+    """ Extract the value of field in dot file line. """
+
+    if field in read_str:
+        field_start = read_str.index(field)+len(field)
+        rem = read_str[field_start:]
+        if "," in rem:
+            field_end = rem.index(",")+field_start
+        else:
+            field_end = rem.index("]")+field_start
+        value = read_str[field_start:field_end]
+    else:
+        value = default
+
+    return value
 
 # -------------------- Causal Cores Generation Section ------------------------
 
@@ -1951,10 +2065,6 @@ def mergecores(eoi, causalgraphs=None, showintro=True, addedgelabels=False,
        causal_cores = causalgraphs
        causal_core_files = None
     # Doing the work.
-    #for causal_core in causal_cores:
-    #    for mesh in causal_core.meshes:
-    #        for midedge in mesh.midedges:
-    #            print(midedge.relationtype)
     merged_cores = []
     while len(causal_cores) > 0:
         current_core = causal_cores[0]
@@ -1990,6 +2100,7 @@ def mergecores(eoi, causalgraphs=None, showintro=True, addedgelabels=False,
     for i in range(len(sorted_cores)):
         sorted_cores[i].filename = "meshedcore-{}.dot".format(i+1)
     for graph in sorted_cores:
+        graph.compute_visuals(showintro, color)
         graph.build_dot_file(showintro, addedgelabels, showedgelabels,
                              edgeid, edgeocc, edgeprob, weightedges, color)
     # Writing section.
@@ -2265,6 +2376,7 @@ def foldcores(eoi, causalgraphs=None, ignorelist=[], showintro=False,
     #pathway.sequentialize_ids()
     pathway.rank_sequentially()
     pathway.filename = "eventpathway.dot"
+    pathway.compute_visuals(showintro, color)
     pathway.build_dot_file(showintro, addedgelabels, showedgelabels, edgeid,
                            edgeocc, edgeprob, weightedges, color)
     # Writing section.
@@ -2533,13 +2645,12 @@ def mapcores(eoi, causalgraphs=None, template=None, ignorelist=[],
     else:
         template_path = template
     templategraph = CausalGraph(template_path, eoi)
+    read_layout(eoi, templategraph, showintro)
+    totocc = templategraph.occurrence
+    templategraph.filename = "mapped.dot"
     templategraph.build_dot_file(showintro, addedgelabels, showedgelabels,
                                       edgeid, edgeocc, edgeprob, weightedges,
                                       color=True)
-    #templategraph.build_nointro()
-    #read_layout(eoi, templategraph, showintro)
-    totocc = templategraph.occurrence
-    templategraph.filename = "mapped.dot"
     output_path = "{}/{}".format(eoi, templategraph.filename)
     outfile = open(output_path, "w")
     outfile.write(templategraph.dot_file)
@@ -2652,6 +2763,7 @@ def read_layout(eoi, graph, si):
     layout_file = open("{}/layout.dot".format(eoi), "r").readlines()
     posdict = {}
     labelposdict = {}
+    rankposdict = {}
     for i in range(len(layout_file)):
         if ";" in layout_file[i]:
             start_line = i+1
@@ -2669,32 +2781,40 @@ def read_layout(eoi, graph, si):
             idstr = "{} -> {}".format(tokens[0], tokens[2])
         if "pos=" in line:
             read_start = line.index("pos=") + 4
-            possrt = line[read_start:-2]
+            posstr = line[read_start:-2]
             line2 = line
             j = 1
             # The position of long edges may span several lines.
             while line2[-2] == "\\":
                 line2 = layout_file[i+j]
-                possrt += line2[:-2]
+                posstr += line2[:-2]
                 j += 1
-            posdict[idstr] = possrt
+            if "node" in idstr or "mid" in idstr:
+                posdict[idstr] = posstr
+            else:
+                rankposdict[idstr] = posstr
         if tokens[0][:3] == "lp=":
             read_start = line.index("lp=") + 3
             labelposdict[idstr] = line[read_start:-2]
     for eventnode in graph.eventnodes:
         if si == True or (si == False and eventnode.intro == False):
             eventnode.pos = posdict[eventnode.nodeid]
-    for mesh in graph.meshes:
-        if si == True or (si == False and mesh.underlying == False):
-            for midnode in mesh.midnodes:
-                midnode.pos = posdict[midnode.nodeid]
-            for midedge in mesh.midedges:
-                idstr = "{} -> {}".format(midedge.source.nodeid,
-                                          midedge.target.nodeid)
-                midedge.pos = posdict[idstr]
-                midedge.labelpos = labelposdict[idstr]
-    #for k in labelposdict.keys():
-    #    print(k, ":" , labelposdict[k])
+    for meshlist in [graph.meshes, graph.covermeshes]:
+        for mesh in meshlist:
+            if si == True or (si == False and mesh.underlying == False):
+                for midnode in mesh.midnodes:
+                    midnode.pos = posdict[midnode.nodeid]
+                for midedge in mesh.midedges:
+                    if midedge.reverse == False:
+                        idstr = "{} -> {}".format(midedge.source.nodeid,
+                                                  midedge.target.nodeid)
+                    elif midedge.reverse == True:
+                        idstr = "{} -> {}".format(midedge.target.nodeid,
+                                                  midedge.source.nodeid)
+                    midedge.pos = posdict[idstr]
+                    if midedge.labelcarrier == True:
+                        midedge.labelpos = labelposdict[idstr]
+    graph.rankposdict = rankposdict
 
 # ++++++++++++ End of Core Mapping on Event Pathway Section ++++++++++++++++++
 
