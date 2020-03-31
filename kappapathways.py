@@ -78,8 +78,7 @@ class CausalEdge(object):
     def __init__(self, source, target, occurrence=1, prob=1.0,
                  relationtype="precedence", color="black", underlying=False,
                  reverse=False, defaultwidth=False, labelcarrier=True,
-                 indicator=False, meshid=None, pos=None, labelpos=None,
-                 rankposdict=None):
+                 indicator=False, meshid=None, pos=None, labelpos=None):
         """ Initialize class CausalEdge. """
 
         self.source = source
@@ -97,7 +96,6 @@ class CausalEdge(object):
         self.meshid = meshid
         self.pos = pos
         self.labelpos = labelpos
-        self.rankposdict = rankposdict
         self.check_types()
 
 
@@ -439,7 +437,8 @@ class CausalGraph(object):
     """ Data structure for causal graphs. """
 
     def __init__(self, filename=None, eoi=None, meshedgraph=False,
-                 nodestype="event", showintro=True, precedenceonly=True):
+                 nodestype="event", showintro=True, precedenceonly=True,
+                 rankposdict=None):
         """ Initialize class CausalGraph. """
 
         # Header variables.
@@ -449,6 +448,7 @@ class CausalGraph(object):
         self.nodestype = nodestype # event or species
         self.showintro = showintro
         self.precedenceonly = precedenceonly
+        self.rankposdict = rankposdict
         # Main variables.
         self.eventnodes = []
         self.causaledges = []
@@ -1151,16 +1151,34 @@ class CausalGraph(object):
                     self.covermeshes.append(noin1)
 
 
-    def find_max_midid(self):
+    def find_max_midid(self, cover=False):
         """ Find the highest intermediary node id in the graph. """
 
         midids = []
         for mesh in self.meshes:
             for midnode in mesh.midnodes:
                 midids.append(int(midnode.nodeid[3:]))
+        if cover == True:
+            for mesh in self.covermeshes:
+                for midnode in mesh.midnodes:
+                    midids.append(int(midnode.nodeid[3:]))
         max_midid = max(midids)
 
         return max_midid
+
+
+    def find_max_meshid(self, cover=False):
+        """ Find the highest mesh id in the graph. """
+
+        meshids = []
+        for mesh in self.meshes:
+            meshids.append(mesh.meshid)
+        if cover == True:
+            for mesh in self.covermeshes:
+                meshids.append(mesh.meshid)
+        max_meshid = max(meshids)
+
+        return max_meshid
 
 
     def check_intro(self, mesh):
@@ -1513,11 +1531,9 @@ class CausalGraph(object):
 
         meshid = 1
         for mesh in self.meshes:
-            mesh.reverse_midedges()
             mesh.meshid = meshid
             meshid += 1
         for covermesh in self.covermeshes:
-            covermesh.reverse_midedges()
             covermesh.meshid = meshid
             meshid += 1
 
@@ -1574,11 +1590,20 @@ class CausalGraph(object):
         This erases previous visuals.
         """
 
+        # Meshes without intro nodes.
         if showintro == False:
             self.build_nointro()
+        # Reverse edges that point upwards.
+        for mesh in self.meshes:
+            mesh.reverse_midedges()
+        for covermesh in self.covermeshes:
+            covermesh.reverse_midedges()
+        # Assign mesh ids.
         self.assign_meshid(showintro)
+        # Color meshes.
         if color == True:
             self.color_meshes(showintro)
+        # Assign which edges will carry labels.
         self.assign_label_carrier()
 
 
@@ -1587,7 +1612,6 @@ class CausalGraph(object):
                        edgeprob=True, weightedges=False, color=True):
         """ build a dot file of the CausalGraph. """
 
-        self.compute_probabilities()
         # Write info about graph.
         dot_str = 'digraph G{\n'
         dot_str += '  precedenceonly="{}" ;\n'.format(self.precedenceonly)
@@ -2100,6 +2124,7 @@ def mergecores(eoi, causalgraphs=None, showintro=True, addedgelabels=False,
     for i in range(len(sorted_cores)):
         sorted_cores[i].filename = "meshedcore-{}.dot".format(i+1)
     for graph in sorted_cores:
+        graph.compute_probabilities()
         graph.compute_visuals(showintro, color)
         graph.build_dot_file(showintro, addedgelabels, showedgelabels,
                              edgeid, edgeocc, edgeprob, weightedges, color)
@@ -2376,6 +2401,7 @@ def foldcores(eoi, causalgraphs=None, ignorelist=[], showintro=False,
     #pathway.sequentialize_ids()
     pathway.rank_sequentially()
     pathway.filename = "eventpathway.dot"
+    pathway.compute_probabilities()
     pathway.compute_visuals(showintro, color)
     pathway.build_dot_file(showintro, addedgelabels, showedgelabels, edgeid,
                            edgeocc, edgeprob, weightedges, color)
@@ -2645,121 +2671,202 @@ def mapcores(eoi, causalgraphs=None, template=None, ignorelist=[],
     else:
         template_path = template
     templategraph = CausalGraph(template_path, eoi)
-    read_layout(eoi, templategraph, showintro)
-    totocc = templategraph.occurrence
-    templategraph.filename = "mapped.dot"
-    templategraph.build_dot_file(showintro, addedgelabels, showedgelabels,
-                                      edgeid, edgeocc, edgeprob, weightedges,
-                                      color=True)
-    output_path = "{}/{}".format(eoi, templategraph.filename)
-    outfile = open(output_path, "w")
-    outfile.write(templategraph.dot_file)
-    outfile.close()
-    ## Doing the work.
-    #mappedcores = []
-    #for meshedcore in meshedcores:
-    #    mappedcore = CausalGraph(template_path, eoi)
-    #    mappedcore.occurrence = meshedcore.occurrence
-    #    mappedcore.prevcores = meshedcore.prevcores
-    #    edges_to_add = []
-    #    midid = mappedcore.find_max_midid()+1
-    #    max_rank = meshedcore.maxrank
-    #    for mesh in mappedcore.meshes:
-    #        mesh.color = "grey80"
-    #        mesh.occurrence = meshedcore.occurrence
-    #        for midnode in mesh.midnodes:
-    #            midnode.bordercolor = "grey80"
-    #            if midnode.midtype == "enabling":
-    #                midnode.fillcolor = "grey80"
-    #        for midedge in mesh.midedges:
-    #            midedge.color = "grey80"
-    #    for mesh in meshedcore.meshes:
-    #        # Determine color of mesh in mapped core.
-    #        sources, targets = mesh.get_events()
-    #        target_ranks = []
-    #        for target in targets:
-    #            target_ranks.append(target.rank)
-    #        mesh_rank = max(target_ranks)
-    #        col_val = 0.25+(mesh_rank/max_rank)*0.75
-    #        mesh.color = '"{:.3f} 1 1"'.format(col_val)
-    #        for midnode in mesh.midnodes:
-    #            targets = mesh.get_targets(midnode)
-    #            target_ranks = []
-    #            for target in targets:
-    #                target_ranks.append(target.rank)
-    #            rank = min(target_ranks)
-    #            col_val = 0.25+(rank/max_rank)*0.75
-    #            midnode.bordercolor = '"{:.3f} 1 1"'.format(col_val)
-    #            if midnode.midtype == "enabling":
-    #                midnode.fillcolor = '"{:.3f} 1 1"'.format(col_val)
-    #        for midedge in mesh.midedges:
-    #            if isinstance(midedge.source, MidNode):
-    #                midedge.color = midedge.source.bordercolor
-    #            elif isinstance(midedge.source, EventNode):
-    #                col_val = 0.25+(midedge.source.rank/max_rank)*0.75
-    #                midedge.color = '"{:.3f} 1 1"'.format(col_val)
-    #        # Find equivalent meshes in the template.
-    #        analog_meshes = []
-    #        for i in range(len(mappedcore.meshes)):
-    #            mappedmesh = mappedcore.meshes[i]
-    #            if analogous_meshes(mesh, mappedmesh, enforcerank=False):
-    #                analog_meshes.append(i)
-    #                #mesh.occurrence = mappedmesh.occurrence
-    #                #mesh.weight = mappedmesh.occurrence
-    #        if len(analog_meshes) == 0:
-    #            raise ValueError("No analogous mesh found in template.")
-    #        insertpos = None
-    #        if len(analog_meshes) == 1:
-    #            if mappedcore.meshes[analog_meshes[0]].color == "grey90":
-    #                mesh.weight = mappedcore.meshes[analog_meshes[0]].weight
-    #                del(mappedcore.meshes[analog_meshes[0]])
-    #                insertpos = analog_meshes[0]
-    #                add_mesh(mappedcore, mesh, midid, insertpos)
-    #                midid += len(mesh.midnodes)
-    #                for midedge in mesh.midedges:
-    #                    midedge.defaultwidth = True
-    #                    midedge.weight = mesh.weight
-    #            else:
-    #                add_mesh(mappedcore, mesh, midid, insertpos)
-    #                midid += len(mesh.midnodes)
-    #                for midedge in mappedcore.meshes[-1].midedges:
-    #                    midedge.defaultwidth = True
-    #        else:
-    #            add_mesh(mappedcore, mesh, midid, insertpos)
-    #            midid += len(mesh.midnodes)
-    #            for midedge in mappedcore.meshes[-1].midedges:
-    #                midedge.defaultwidth = True
-    #    mappedcore.rank_sequentially()
-    #    mappedcores.append(mappedcore)
-    #for i in range(len(mappedcores)):
-    #    mappedcores[i].filename = "mapped-{}.dot".format(i+1)
-    #for mappedcore in mappedcores:
-    #    mappedcore.occurrence = "{} / {}".format(mappedcore.occurrence, totocc)
-    #    mappedcore.build_dot_file(showintro, addedgelabels, showedgelabels,
-    #                              edgeid, edgeocc, edgeprob, weightedges,
-    #                              color=False)
-    ## Writing section.
-    #if writedot == True:
-    #    for graph in mappedcores:
-    #        output_path = "{}/{}".format(eoi, graph.filename)
-    #        outfile = open(output_path, "w")
-    #        outfile.write(graph.dot_file)
-    #        outfile.close()
-    #if rmprev == True:
-    #    if path_files == None:
-    #        path_files = get_dot_files(eoi, "core")
-    #    for path_file in path_files:
-    #        file_path = "{}/{}".format(eoi, path_file)
-    #        os.remove(file_path)
+    produce_layout(eoi, templategraph)
+    occtot = templategraph.occurrence
+    #read_layout(eoi, templategraph, showintro)
+    #templategraph.filename = "mapped.dot"
+    #templategraph.build_dot_file(showintro, addedgelabels, showedgelabels,
+    #                                  edgeid, edgeocc, edgeprob, weightedges,
+    #                                  color=True)
+    #output_path = "{}/{}".format(eoi, templategraph.filename)
+    #outfile = open(output_path, "w")
+    #outfile.write(templategraph.dot_file)
+    #outfile.close()
 
-    #return mappedcores
+    # Doing the work.
+    mappedcores = []
+    for meshedcore in meshedcores:
+        mappedcore = CausalGraph(template_path, eoi)
+        read_layout(eoi, mappedcore, showintro)
+        mappedcore.occurrence = meshedcore.occurrence
+        mappedcore.prevcores = meshedcore.prevcores
+        edges_to_add = []
+        midid = mappedcore.find_max_midid(cover=True)+1
+        meshid = mappedcore.find_max_meshid(cover=True)+1
+        maxr = meshedcore.maxrank-1
+        # Set default color and mesh use counter in mapped core template.
+        for meshlist in [mappedcore.meshes, mappedcore.covermeshes]:
+            for mesh in meshlist:
+                mesh.count = 0
+                mesh.color = "grey80"
+                for midnode in mesh.midnodes:
+                    midnode.bordercolor = "grey80"
+                    if midnode.midtype == "enabling":
+                        midnode.fillcolor = "grey80"
+                for midedge in mesh.midedges:
+                    midedge.color = "grey80"
+        # Loop on each mesh of the meshedcore.
+        additional_meshes = []
+        for coremesh in meshedcore.meshes:
+            # Find analoguous mesh in mapped core template.
+            analog_meshes = []
+            for i in range(len(mappedcore.meshes)):
+                mappedmesh = mappedcore.meshes[i]
+                if analogous_meshes(coremesh, mappedmesh, enforcerank=False):
+                    analog_meshes.append(i)
+            if len(analog_meshes) != 1:
+                raise ValueError("Exactly 1 analogous mesh expected in template.")
+            else:
+                mindex = analog_meshes[0]
+                if mappedcore.meshes[mindex].count == 0:
+                    # Change color and pensize of mapped core mesh.
+                    set_core_colors(mappedcore.meshes[mindex], coremesh, maxr)
+                    for midedge in mappedcore.meshes[mindex].midedges:
+                        midedge.defaultwidth = True
+                        midedge.labelcarrier = False
+                elif mappedcore.meshes[mindex].count > 0:
+                    # Duplicate mesh.
+                    dupl_mesh = duplicate_mesh(mappedcore.meshes[mindex],
+                                               midid, meshid)
+                    midid += len(mesh.midnodes)
+                    meshid += 1
+                    set_core_colors(dupl_mesh, coremesh, maxr)
+                    #for midedge in dupl_mesh.midedges:
+                    #    midedge.defaultwidth = True
+                    use_count = mappedcore.meshes[mindex].count
+                    translate_mesh(dupl_mesh, use_count)
+                    additional_meshes.append(dupl_mesh)
+                mappedcore.meshes[mindex].count += 1
+        for addmesh in additional_meshes:
+            mappedcore.meshes.append(addmesh)
+        # Loop on each covermesh of the meshedcore.
+        additional_meshes = []
+        for coremesh in meshedcore.covermeshes:
+            # Find analoguous mesh in mapped core template.
+            analog_meshes = []
+            for i in range(len(mappedcore.covermeshes)):
+                mappedmesh = mappedcore.covermeshes[i]
+                if analogous_meshes(coremesh, mappedmesh, enforcerank=False):
+                    analog_meshes.append(i)
+            if len(analog_meshes) != 1:
+                raise ValueError("Exactly 1 analogous mesh expected in template.")
+            else:
+                mindex = analog_meshes[0]
+                if mappedcore.covermeshes[mindex].count == 0:
+                    # Change color and pensize of mapped core mesh.
+                    set_core_colors(mappedcore.covermeshes[mindex], coremesh, maxr)
+                    for midedge in mappedcore.covermeshes[mindex].midedges:
+                        midedge.defaultwidth = True
+                        midedge.labelcarrier = False
+                elif mappedcore.covermeshes[mindex].count > 0:
+                    # Duplicate mesh.
+                    dupl_mesh = duplicate_mesh(mappedcore.covermeshes[mindex],
+                                               midid, meshid)
+                    midid += len(mesh.midnodes)
+                    meshid += 1
+                    set_core_colors(dupl_mesh, coremesh, maxr)
+                    #for midedge in dupl_mesh.midedges:
+                    #    midedge.defaultwidth = True
+                    use_count = mappedcore.covermeshes[mindex].count
+                    translate_mesh(dupl_mesh, use_count)
+                    additional_meshes.append(dupl_mesh)
+                mappedcore.covermeshes[mindex].count += 1
+        for addmesh in additional_meshes:
+            mappedcore.covermeshes.append(addmesh)
+
+        #    # Determine color of mesh in mapped core.
+        #    sources, targets = mesh.get_events()
+        #    target_ranks = []
+        #    for target in targets:
+        #        target_ranks.append(target.rank)
+        #    mesh_rank = max(target_ranks)
+        #    col_val = 0.25+(mesh_rank/max_rank)*0.75
+        #    mesh.color = '"{:.3f} 1 1"'.format(col_val)
+        #    for midnode in mesh.midnodes:
+        #        targets = mesh.get_targets(midnode)
+        #        target_ranks = []
+        #        for target in targets:
+        #            target_ranks.append(target.rank)
+        #        rank = min(target_ranks)
+        #        col_val = 0.25+(rank/max_rank)*0.75
+        #        midnode.bordercolor = '"{:.3f} 1 1"'.format(col_val)
+        #        if midnode.midtype == "enabling":
+        #            midnode.fillcolor = '"{:.3f} 1 1"'.format(col_val)
+        #    for midedge in mesh.midedges:
+        #        if isinstance(midedge.source, MidNode):
+        #            midedge.color = midedge.source.bordercolor
+        #        elif isinstance(midedge.source, EventNode):
+        #            col_val = 0.25+(midedge.source.rank/max_rank)*0.75
+        #            midedge.color = '"{:.3f} 1 1"'.format(col_val)
+        #    # Find equivalent meshes in the template.
+        #    analog_meshes = []
+        #    for i in range(len(mappedcore.meshes)):
+        #        mappedmesh = mappedcore.meshes[i]
+        #        if analogous_meshes(mesh, mappedmesh, enforcerank=False):
+        #            analog_meshes.append(i)
+        #            #mesh.occurrence = mappedmesh.occurrence
+        #            #mesh.weight = mappedmesh.occurrence
+        #    if len(analog_meshes) == 0:
+        #        raise ValueError("No analogous mesh found in template.")
+        #
+        #    insertpos = None
+        #    if len(analog_meshes) == 1:
+        #        if mappedcore.meshes[analog_meshes[0]].color == "grey90":
+        #            mesh.weight = mappedcore.meshes[analog_meshes[0]].weight
+        #            del(mappedcore.meshes[analog_meshes[0]])
+        #            insertpos = analog_meshes[0]
+        #            add_mesh(mappedcore, mesh, midid, insertpos)
+        #            midid += len(mesh.midnodes)
+        #            for midedge in mesh.midedges:
+        #                midedge.defaultwidth = True
+        #                midedge.weight = mesh.weight
+        #        else:
+        #            add_mesh(mappedcore, mesh, midid, insertpos)
+        #            midid += len(mesh.midnodes)
+        #            for midedge in mappedcore.meshes[-1].midedges:
+        #                midedge.defaultwidth = True
+        #    else:
+        #        add_mesh(mappedcore, mesh, midid, insertpos)
+        #        midid += len(mesh.midnodes)
+        #        for midedge in mappedcore.meshes[-1].midedges:
+        #            midedge.defaultwidth = True
+        ###mappedcore.rank_sequentially()
+        mappedcores.append(mappedcore)
+    for i in range(len(mappedcores)):
+        mappedcores[i].filename = "mapped-{}.dot".format(i+1)
+    for mappedcore in mappedcores:
+        mappedcore.compute_probabilities()
+        mappedcore.occurrence = "{} / {}".format(mappedcore.occurrence, occtot)
+        mappedcore.build_dot_file(showintro, addedgelabels, showedgelabels,
+                                  edgeid, edgeocc, edgeprob, weightedges,
+                                  color=False)
+    # Writing section.
+    if writedot == True:
+        for graph in mappedcores:
+            output_path = "{}/{}".format(eoi, graph.filename)
+            outfile = open(output_path, "w")
+            outfile.write(graph.dot_file)
+            outfile.close()
+    if rmprev == True:
+        if path_files == None:
+            path_files = get_dot_files(eoi, "core")
+        for path_file in path_files:
+            file_path = "{}/{}".format(eoi, path_file)
+            os.remove(file_path)
+
+    return mappedcores
+
+
+def produce_layout(eoi, graph):
+    """ Produce dot file with explicit positions. """
+
+    subprocess.run(("/usr/bin/dot", "{}".format(graph.filename), "-o", 
+                    "{}/layout.dot".format(eoi)))
 
 
 def read_layout(eoi, graph, si):
     """ Read the layout produced by dot. """
 
-    subprocess.run(("/usr/bin/dot", "{}".format(graph.filename), "-o", 
-                    "{}/layout.dot".format(eoi)))
     layout_file = open("{}/layout.dot".format(eoi), "r").readlines()
     posdict = {}
     labelposdict = {}
@@ -2815,6 +2922,128 @@ def read_layout(eoi, graph, si):
                     if midedge.labelcarrier == True:
                         midedge.labelpos = labelposdict[idstr]
     graph.rankposdict = rankposdict
+
+
+def set_core_colors(mappedmesh, coremesh, max_rank):
+    """ Assign colors of mapped mesh based on ranks of core mesh. """
+
+    # Get core source ranks
+    msources, mtargets = mappedmesh.get_events()
+    csources, ctargets = coremesh.get_events()
+    for msource in msources:
+        ranks = []
+        for csource in csources:
+            if csource.label == msource.label:
+                ranks.append(csource.rank)
+        if len(ranks) < 1:
+            raise ValueError("Event node {} not found in core mesh"
+                              .format(msource.label))
+        else:
+            msource.corerank = max(ranks)
+    # Assign colors based on core ranks.
+    # For each midnode and midedge, assign color based on highest
+    # rank among reachable sources.
+    source_ranks = []
+    for source in msources:
+        source_ranks.append(source.corerank)
+    mesh_rank = max(source_ranks)
+    col_val = 0.25+(mesh_rank/max_rank)*0.75
+    mappedmesh.color = '"{:.3f} 1 1"'.format(col_val)
+    for midnode in mappedmesh.midnodes:
+        sources = mappedmesh.get_sources(midnode)
+        source_ranks = []
+        for source in sources:
+            source_ranks.append(source.corerank)
+        if len(source_ranks) == 0:
+            source_ranks = [0]
+        rank = max(source_ranks)
+        col_val = 0.25+(rank/max_rank)*0.75
+        midnode.bordercolor = '"{:.3f} 1 1"'.format(col_val)
+        if midnode.midtype == "enabling":
+            midnode.fillcolor = '"{:.3f} 1 1"'.format(col_val)
+    for midedge in mappedmesh.midedges:
+        if isinstance(midedge.source, MidNode):
+            midedge.color = midedge.source.bordercolor
+        elif isinstance(midedge.source, EventNode):
+            col_val = 0.25+(midedge.source.corerank/max_rank)*0.75
+            midedge.color = '"{:.3f} 1 1"'.format(col_val)
+
+
+def duplicate_mesh(mapmesh, startid, meshid):
+    """
+    Build a copy of given mesh with new midids and a new meshid.
+    """
+
+    duplicate_mesh = Mesh(occurrence=mapmesh.occurrence, prob=mapmesh.prob,
+                          underlying=mapmesh.underlying, color=mapmesh.color,
+                          meshid=meshid)
+    midid = startid
+    midid_map = {}
+    for midnode in mapmesh.midnodes:
+        new_midnode = MidNode("mid{}".format(midid), midtype=midnode.midtype,
+                              ghost=midnode.ghost, pos=midnode.pos)
+        new_midnode.fillcolor = midnode.fillcolor
+        new_midnode.bordercolor = midnode.bordercolor
+        duplicate_mesh.midnodes.append(new_midnode)
+        midid_map[midnode.nodeid] = "mid{}".format(midid)
+        midid += 1
+    for midedge in mapmesh.midedges:
+        if isinstance(midedge.source, EventNode):
+            source = midedge.source
+        elif isinstance(midedge.source, MidNode):
+            for new_mid in duplicate_mesh.midnodes:
+                if new_mid.nodeid == midid_map[midedge.source.nodeid]:
+                    source = new_mid
+                    break
+        if isinstance(midedge.target, EventNode):
+            target = midedge.target
+        elif isinstance(midedge.target, MidNode):
+            for new_mid in duplicate_mesh.midnodes:
+                if new_mid.nodeid == midid_map[midedge.target.nodeid]:
+                    target = new_mid
+                    break
+        new_midedge = MidEdge(source, target, occurrence=mapmesh.occurrence,
+            relationtype=midedge.relationtype, color=midedge.color,
+            underlying=midedge.underlying, reverse=midedge.reverse,
+            labelcarrier=midedge.labelcarrier, indicator=midedge.indicator,
+            meshid=meshid, pos=midedge.pos, labelpos=midedge.labelpos)
+        duplicate_mesh.midedges.append(new_midedge)
+
+    return duplicate_mesh
+
+
+def translate_mesh(mesh, use_count):
+    """
+    Translate a mesh depending on how many duplicates
+    already exist in the graph.
+    """
+
+    dist = 20
+    for midedge in mesh.midedges:
+        if midedge.pos != None:
+            tokens = midedge.pos[1:-1].split()
+            new_coords = []
+            for token in tokens:
+                if token[0] == "e" or token[0] == "s":
+                    coord = token[2:]
+                else:
+                    coord = token
+                comma = coord.index(",")
+                xpos = int(float(coord[:comma]))
+                new_xpos = xpos + (dist * use_count)
+                new_coord = "{}{}".format(new_xpos, coord[comma:])
+                if token[0] == "e":
+                    new_coord = "e,{}".format(new_coord)
+                if token[0] == "s":
+                    new_coord = "s,{}".format(new_coord)
+                new_coords.append(new_coord)
+            new_pos = '"'
+            for i in range(len(new_coords)):
+                if i > 0:
+                    new_pos += ' '
+                new_pos += '{}'.format(new_coords[i])
+            new_pos += '"'
+            midedge.pos = new_pos
 
 # ++++++++++++ End of Core Mapping on Event Pathway Section ++++++++++++++++++
 
