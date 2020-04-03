@@ -1609,7 +1609,7 @@ class CausalGraph(object):
 
     def build_dot_file(self, showintro=True, addedgelabels=True,
                        showedgelabels=True, edgeid=True, edgeocc=False,
-                       edgeprob=True, weightedges=False, color=True):
+                       edgeprob=True, weightedges=False):
         """ build a dot file of the CausalGraph. """
 
         # Write info about graph.
@@ -2127,7 +2127,7 @@ def mergecores(eoi, causalgraphs=None, showintro=True, addedgelabels=False,
         graph.compute_probabilities()
         graph.compute_visuals(showintro, color)
         graph.build_dot_file(showintro, addedgelabels, showedgelabels,
-                             edgeid, edgeocc, edgeprob, weightedges, color)
+                             edgeid, edgeocc, edgeprob, weightedges)
     # Writing section.
     if writedot == True:
         for graph in sorted_cores:
@@ -2404,7 +2404,7 @@ def foldcores(eoi, causalgraphs=None, ignorelist=[], showintro=False,
     pathway.compute_probabilities()
     pathway.compute_visuals(showintro, color)
     pathway.build_dot_file(showintro, addedgelabels, showedgelabels, edgeid,
-                           edgeocc, edgeprob, weightedges, color)
+                           edgeocc, edgeprob, weightedges)
     # Writing section.
     if writedot == True:
         output_path1 = "{}/{}".format(eoi, pathway.filename)
@@ -2605,7 +2605,7 @@ def simplifypathway(eoi, causalgraphs=None, threshold=0.2, edgelabels=False,
     simplepathway.rank_sequentially()
     simplepathway.filename = "eventpathway-simple.dot"
     simplepathway.build_dot_file(showintro, addedgelabels, showedgelabels,
-                                 edgeid, edgeocc, edgeprob, weightedges, color)
+                                 edgeid, edgeocc, edgeprob, weightedges)
     # Writing section.
     if writedot == True:
         output_path1 = "{}/{}".format(eoi, simplepathway.filename)
@@ -2686,6 +2686,8 @@ def mapcores(eoi, causalgraphs=None, template=None, ignorelist=[],
     mappedcores = []
     #for meshedcore in [meshedcores[12]]:
     for meshedcore in meshedcores:
+        if len(meshedcore.covermeshes) == 0:
+            meshedcore.build_nointro()
         mappedcore = CausalGraph(template_path, eoi)
         read_layout(eoi, mappedcore, showintro)
         mappedcore.compute_probabilities()
@@ -2758,8 +2760,7 @@ def mapcores(eoi, causalgraphs=None, template=None, ignorelist=[],
     for mappedcore in mappedcores:
         mappedcore.occurrence = "{} / {}".format(mappedcore.occurrence, occtot)
         mappedcore.build_dot_file(showintro, addedgelabels, showedgelabels,
-                                  edgeid, edgeocc, edgeprob, weightedges,
-                                  color=False)
+                                  edgeid, edgeocc, edgeprob, weightedges)
     # Writing section.
     if writedot == True:
         for graph in mappedcores:
@@ -2871,7 +2872,7 @@ def mapmesh(coremeshes, mapmeshes, add_list, current_rank, midid, meshid,
                    # Duplicate mesh.
                    dupl_mesh = duplicate_mesh(mapmeshes[mindex],
                                               midid, meshid)
-                   midid += len(coremesh.midnodes)
+                   midid += len(mapmeshes[mindex].midnodes)
                    meshid += 1
                    set_core_colors(dupl_mesh, coremesh, maxr)
                    for midedge in dupl_mesh.midedges:
@@ -3020,9 +3021,11 @@ def change_coordinates(pos_str, dist, use_count):
 
 # ::::::::::::::::::::::: Node Highlight Section ::::::::::::::::::::::::::::::
 
-def highlightnodes(eoi, nodelabels=None, causalgraphs=None, ignorelist=[],
-                   template=None, edgelabels=False, showintro=False,
-                   writedot=True, rmprev=False, weightedges=False):
+def highlightnodes(eoi, nodelabels=None, causalgraphs=None, template=None,
+                   ignorelist=[], showintro=False, addedgelabels=True,
+                   showedgelabels=True, edgeid=True, edgeocc=False,
+                   edgeprob=True, weightedges=True, writedot=True,
+                   rmprev=False, transdist=18):
     """
     For each nodelabel, create a new CausalGraph for each path that can lead
     to a node with that label in the cores. Then give the probability of each
@@ -3058,13 +3061,14 @@ def highlightnodes(eoi, nodelabels=None, causalgraphs=None, ignorelist=[],
         graphs_path = "{}/{}".format(eoi, nodelabel)
         if not os.path.exists(graphs_path):
             os.mkdir(graphs_path)
-    # Extract path to nodes carying label.
+    # Loop on node labels.
     for nodelabel in nodelabels:
+        # Extract path to nodes carrying label.
         meshedcorescopy = copy.deepcopy(meshedcores)
         extractedpaths = extractpaths(eoi, nodelabel, meshedcorescopy)
         #dir_path = "{}/{}".format(eoi, nodelabel)
         #for extractedpath in extractedpaths:
-        #    extractedpath.build_dot_file(edgelabels, showintro=True)
+        #    extractedpath.build_dot_file(edgeprob=False)
         #    output_path = "{}/{}".format(dir_path, extractedpath.filename)
         #    outfile = open(output_path, "w")
         #    outfile.write(extractedpath.dot_file)
@@ -3075,8 +3079,8 @@ def highlightnodes(eoi, nodelabels=None, causalgraphs=None, ignorelist=[],
         mergedpaths = mergecores(eoi, causalgraphs=extractedpaths,
                                  showintro=True, color=False,
                                  writedot=False, msg=False)
-        for i in range(len(mergedpaths)):
-            mergedpaths[i].filename = "path-{}.dot".format(i+1)
+        #for i in range(len(mergedpaths)):
+        #    mergedpaths[i].filename = "path-{}.dot".format(i+1)
         #dir_path = "{}/{}".format(eoi, nodelabel)
         #for mergedpath in mergedpaths:
         #    output_path = "{}/{}".format(dir_path, mergedpath.filename)
@@ -3084,55 +3088,36 @@ def highlightnodes(eoi, nodelabels=None, causalgraphs=None, ignorelist=[],
         #    outfile.write(mergedpath.dot_file)
         #    outfile.close()
 
-        mappedpaths = mapcores(eoi, causalgraphs=mergedpaths,
-                               writedot=False, msg=False, showintro=True)
-        for i in range(len(mappedpaths)):
-            mappedpaths[i].filename = "mappedpath-{}.dot".format(i+1)
-        #dir_path = "{}/{}".format(eoi, nodelabel)
-        #for mappedpath in mappedpaths:
-        #    mappedpath.build_dot_file(edgelabels=False, color=False,
-        #                              showintro=True)
-        #    output_path = "{}/{}".format(dir_path, mappedpath.filename)
-        #    outfile = open(output_path, "w")
-        #    outfile.write(mappedpath.dot_file)
-        #    outfile.close()
+        # Map merged paths on mapped core template.
+        mappedpaths = mapcores(eoi, causalgraphs=mergedpaths, template=None,
+                               ignorelist=ignorelist, showintro=showintro,
+                               addedgelabels=addedgelabels,
+                               showedgelabels=showedgelabels, edgeid=edgeid,
+                               edgeocc=edgeocc, edgeprob=edgeprob,
+                               weightedges=weightedges, msg=False,
+                               transdist=transdist,
+                               writedot=False)
+        # If writedot=False in the previous command, the file are written
+        # in the eoi directory rather than in the nodelabel directory.
 
         # Add the outgoing edges from the highlighted node.
+        #for mappedpath in [mappedpaths[5]]:
         for mappedpath in mappedpaths:
             for eventnode in mappedpath.eventnodes:
                 if eventnode.label == nodelabel:
                     eventnode.highlighted = True
-            ## Resequantialize ids and midids as extractpaths may have
-            ## removed some.
-            #midid = 1
-            #for mesh in mappedpath.meshes:
-            #    for midnode in mesh.midnodes:
-            #        midnode.nodeid = "mid{}".format(midid)
-            #        midid += 1
-            #revnodes = []
-            #for eventnode in mappedpath.eventnodes:
-            #    revnodes.insert(0,eventnode)
-            #mappedpath.eventnodes = revnodes
-            ## Find gaps in event node ids.
-            #eventnodeids = []
-            #for eventnode in mappedpath.eventnodes:
-            #    eventnodeids.append(int(eventnode.nodeid[4:]))
-            #maxnodeid = max(eventnodeids)
-            #gapids = []
-            #for i in range(1, maxnodeid+1):
-            #    if i not in eventnodeids:
-            #        gapids.append(i)
-            #eventnodeid = maxnodeid+1
-            ## Get existing event node labels.
-            #seen_labels = []
-            #for eventnode in mappedpath.eventnodes:
-            #    seen_labels.append(eventnode.label)
-            ## Get event nodes and meshes from prevcores.
-            seen_meshes = []
-            meshes_to_top = []
+            # Get event nodes and meshes from prevcores.
+            #seen_meshes = []
+            #meshes_to_top = []
+            midid = mappedpath.find_max_midid(cover=True)+1
+            meshid = mappedpath.find_max_meshid(cover=True)+1
+            for pathmesh in mappedpath.meshes:
+                pathmesh.skip = False
+            for cpathmesh in mappedpath.covermeshes:
+                cpathmesh.skip = False
             for prevcore in mappedpath.prevcores:
                 underscore = prevcore.index("_")
-                originalfile = "{}/{}.dot".format(eoi,prevcore[:underscore])
+                originalfile = "{}/{}.dot".format(eoi, prevcore[:underscore])
                 highnodeid = prevcore[underscore+1:]
                 origaph = None
                 for meshedcore in meshedcores:
@@ -3144,45 +3129,99 @@ def highlightnodes(eoi, nodelabels=None, causalgraphs=None, ignorelist=[],
                     if eventnode.nodeid == highnodeid:
                         highnode = eventnode
                         break
+                # Compute cover meshes if they are not present in meshed core.
+                if len(origaph.covermeshes) == 0:
+                    origaph.build_nointro()
                 # Add missing event nodes and gather meshes to add.
                 meshes_to_add = []
                 for mesh in origaph.meshes:
                     sources, targets = mesh.get_events()
                     if highnode in sources:
                         meshes_to_add.append(mesh)
-                # Add the meshes to mergedpath.
-                for mesh_to_add in meshes_to_add:
-                    for i in range(len(mappedpath.meshes)):
-                        pathmesh = mappedpath.meshes[i]
-                        if analogous_meshes(mesh_to_add, pathmesh,
-                                            enforcerank=False):
-                            if pathmesh not in seen_meshes:
-                                seen_meshes.append(pathmesh)
-                                pathmesh.occurrence = mesh_to_add.occurrence
-                                pathmesh.weight = mesh_to_add.occurrence
-                                pathmesh.color = "black"
-                                for midedge in pathmesh.midedges:
-                                    midedge.color = "black"
-                                for midnode in pathmesh.midnodes:
-                                    midnode.bordercolor = "black"
-                                    if midnode.midtype == "enabling":
-                                        midnode.fillcolor = "black"
-                            else:
-                                pathmesh.occurrence += mesh_to_add.occurrence
-                                pathmesh.weight += mesh_to_add.occurrence
-                            break
+                covermeshes_to_add = []
+                for cmesh in origaph.covermeshes:
+                    sources, targets = cmesh.get_events()
+                    if highnode in sources:
+                        covermeshes_to_add.append(cmesh)
+                midid, meshid = draw_outgoing(meshes_to_add,
+                                              mappedpath.meshes,
+                                              midid, meshid, transdist)
+                midid, meshid = draw_outgoing(covermeshes_to_add,
+                                              mappedpath.covermeshes,
+                                              midid, meshid, transdist)
         for i in range(len(mappedpaths)):
-            mappedpaths[i].get_maxrank()
+            #mappedpaths[i].get_maxrank()
             mappedpaths[i].filename = "highlight-{}.dot".format(i+1)
         dir_path = "{}/{}".format(eoi, nodelabel)
+        #for mappedpath in [mappedpaths[5]]:
         for mappedpath in mappedpaths:
             mappedpath.build_dot_file(showintro, addedgelabels, showedgelabels,
-                                      edgeid, edgeocc, edgeprob, weightedges,
-                                      color)
+                                      edgeid, edgeocc, edgeprob, weightedges)
             output_path = "{}/{}".format(dir_path, mappedpath.filename)
             outfile = open(output_path, "w")
             outfile.write(mappedpath.dot_file)
             outfile.close()
+
+
+def draw_outgoing(meshes_to_add, mappedmeshes, midid, meshid, transdist):
+    """ Add the outgoing meshes of highlighted node."""
+
+    for mesh_to_add in meshes_to_add:
+        analog_meshes = []
+        for pathmesh in mappedmeshes:
+            if pathmesh.skip == False:
+                if analogous_meshes(mesh_to_add, pathmesh,
+                                    enforcerank=False):
+                    analog_meshes.append(pathmesh)
+        if len(analog_meshes) < 1:
+            raise ValueError("Mesh not found.")
+        elif len(analog_meshes) == 1:
+            if analog_meshes[0].color == "grey80":
+                # Paint it black.
+                paint_mesh_black(analog_meshes[0])
+                analog_meshes[0].occurrence = mesh_to_add.occurrence
+            elif analog_meshes[0].color == "black":
+                analog_meshes[0].occurrence += mesh_to_add.occurrence
+            else: # Mesh already used to represent path.
+                # Add a copy of that mesh with skip = False
+                # and with occurrence = mesh_to_add.occurrence.
+                # The copy is translated by transdist.
+                dupl_mesh = duplicate_mesh(analog_meshes[0], midid, meshid)
+                dupl_mesh.skip = False
+                midid += len(analog_meshes[0].midnodes)
+                meshid += 1
+                translate_mesh(dupl_mesh, 1, transdist)
+                paint_mesh_black(dupl_mesh)
+                mappedmeshes.append(dupl_mesh)
+                analog_meshes[0].skip = True
+        elif len(analog_meshes) > 1:
+            # Add a copy of the last of those meshes with skip = False
+            # and with occurrence = mesh_to_add.occurrence.
+            # The copy is translated by transdist.
+            dupl_mesh = duplicate_mesh(analog_meshes[-1], midid, meshid)
+            dupl_mesh.skip = False
+            midid += len(analog_meshes[-1].midnodes)
+            meshid += 1
+            translate_mesh(dupl_mesh, 1, transdist)
+            paint_mesh_black(dupl_mesh)
+            mappedmeshes.append(dupl_mesh)
+            for analog_mesh in analog_meshes:
+                analog_mesh.skip = True
+
+
+    return midid, meshid
+
+
+def paint_mesh_black(mesh):
+    """ Set all colors to black in a mesh. """
+
+    mesh.color = "black"
+    for midedge in mesh.midedges:
+        midedge.color = "black"
+    for midnode in mesh.midnodes:
+        midnode.bordercolor = "black"
+        if midnode.midtype == "enabling":
+            midnode.fillcolor = "black"
 
 
 def extractpaths(eoi, nodelabel, meshedcores):
@@ -3198,9 +3237,6 @@ def extractpaths(eoi, nodelabel, meshedcores):
             if eventnode.label == nodelabel:
                 event_instances.append(eventnode)
         for event_instance in event_instances:
-            for event_instance2 in event_instances:
-                event_instance2.highlighted = False
-            event_instance.highlighted = True
             extracted_path = CausalGraph(eoi=eoi, meshedgraph=True)
             extracted_path.occurrence = meshedcore.occurrence
             slash = meshedcore.filename.rfind("/")
@@ -3246,6 +3282,13 @@ def extractpaths(eoi, nodelabel, meshedcores):
                 for target in targets:
                     if target not in extracted_path.eventnodes:
                         extracted_path.eventnodes.append(target)
+            ## Highlight event instance without highlighting instances
+            ## of the same evetn type within a given path.
+            #instancecopy = EventNode(event_instance.nodeid,
+            #    event_instance.label, event_instance.rank,
+            #    event_instance.occurrence, event_instance.prob,
+            #    event_instance.intro, event_instance.first,
+            #    highlighted=True, pos=event_instance.pos)
             extracted_path.get_maxrank()
             extracted_paths.append(extracted_path)
 
