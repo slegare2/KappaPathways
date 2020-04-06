@@ -77,8 +77,9 @@ class CausalEdge(object):
 
     def __init__(self, source, target, occurrence=1, prob=1.0,
                  relationtype="precedence", color="black", underlying=False,
-                 reverse=False, defaultwidth=False, labelcarrier=True,
-                 indicator=False, meshid=None, pos=None, labelpos=None):
+                 reverse=False, labelcarrier=True, indicator=False,
+                 meshid=None, pos=None, labelpos=None, overridewidth=None,
+                 overridelabel=None):
         """ Initialize class CausalEdge. """
 
         self.source = source
@@ -90,12 +91,13 @@ class CausalEdge(object):
         self.color = color
         self.underlying = underlying
         self.reverse = reverse
-        self.defaultwidth = defaultwidth
         self.labelcarrier = labelcarrier
         self.indicator = indicator
         self.meshid = meshid
         self.pos = pos
         self.labelpos = labelpos
+        self.overridewidth = overridewidth
+        self.overridelabel = overridelabel
         self.check_types()
 
 
@@ -140,7 +142,7 @@ class MidNode(object):
 
     def __init__(self, nodeid, rank=None, midtype="enabling", ghost=False,
                  logic="and", fillcolor="black", bordercolor="black",
-                 pos=None):
+                 pos=None, overridewidth=None):
         """ Initialize class MidNode. """
 
         self.nodeid = nodeid
@@ -152,6 +154,7 @@ class MidNode(object):
         self.fillcolor = fillcolor
         self.bordercolor = bordercolor
         self.pos = pos
+        self.overridewidth = overridewidth
         if self.midtype == "involvement":
             self.fillcolor = "white"
         self.check_types()
@@ -409,6 +412,36 @@ class Mesh(object):
                 for midedge in self.midedges:
                     if midedge.source == self.midnodes[i]:
                         midedge.indicator = True
+
+
+    def assign_label_carrier(self):
+        """
+        Choose which midedge will carry the label in meshes that contain more
+        than one midedge. Take the first midedge that has an enabling as source,
+        or the first involvement if there is no enabling.
+        """
+
+        if len(self.midedges) > 1:
+            for midedge in self.midedges:
+                midedge.labelcarrier = False
+            contains_enablings = False
+            for midnode in self.midnodes:
+                if midnode.midtype == "enabling":
+                    contains_enablings = True
+                    break
+            if contains_enablings == True:
+                for midedge in self.midedges:
+                    if isinstance(midedge.source, MidNode):
+                        if midedge.source.midtype == "enabling":
+                            midedge.labelcarrier = True
+                            break
+            elif contains_enablings == False:
+                for midedge in self.midedges:
+                    if isinstance(midedge.source, MidNode):
+                        midedge.labelcarrier = True
+                        break
+        elif len(self.midedges) == 1:
+            self.midedges[0].labelcarrier = True
 
 
     def __repr__(self):
@@ -1554,36 +1587,6 @@ class CausalGraph(object):
                 midedge.prob = covermesh.prob
 
 
-    def assign_label_carrier(self):
-        """
-        Choose which midedge will carry the label in meshes that contain more
-        than one midedge. Take the first midedge that has an enabling as source,
-        or the first involvement if there is no enabling.
-        """
-
-        for meshlist in [self.meshes, self.covermeshes]:
-            for mesh in meshlist:
-                if len(mesh.midedges) > 1:
-                    for midedge in mesh.midedges:
-                        midedge.labelcarrier = False
-                    contains_enablings = False
-                    for midnode in mesh.midnodes:
-                        if midnode.midtype == "enabling":
-                            contains_enablings = True
-                            break
-                    if contains_enablings == True:
-                        for midedge in mesh.midedges:
-                            if isinstance(midedge.source, MidNode):
-                                if midedge.source.midtype == "enabling":
-                                    midedge.labelcarrier = True
-                                    break
-                    elif contains_enablings == False:
-                        for midedge in mesh.midedges:
-                            if isinstance(midedge.source, MidNode):
-                                midedge.labelcarrier = True
-                                break
-
-
     def compute_visuals(self, showintro=True, color=True):
         """
         Compute visuals like color and label carriers.
@@ -1604,7 +1607,10 @@ class CausalGraph(object):
         if color == True:
             self.color_meshes(showintro)
         # Assign which edges will carry labels.
-        self.assign_label_carrier()
+        for mesh in self.meshes:
+            mesh.assign_label_carrier()
+        for covermesh in self.covermeshes:
+            covermesh.assign_label_carrier()
 
 
     def build_dot_file(self, showintro=True, addedgelabels=True,
@@ -1629,6 +1635,7 @@ class CausalGraph(object):
         #dot_str += '  ranksep=0.5 ;\n'
         #dot_str += '  nodesep=0.2 ;\n' # Default nodesep is 0.25
         dot_str += '  splines=true ;\n'
+        dot_str += '  outputorder=nodesfirst ;\n'
         dot_str += '  node [pin=true] ;\n'
         #dot_str += '  edge [fontsize=18] ;\n'
         # Compute some statistics to assign edge and intermediary node width.
@@ -1817,7 +1824,12 @@ class CausalGraph(object):
         mid_str += ', color={}'.format(midnode.bordercolor)
         mid_str += ', fillcolor={}'.format(midnode.fillcolor)
         mid_str += ', midtype={}'.format(midnode.midtype)
-        mid_str += ', width={:.4f}, height={:.4f}'.format(pensize, pensize)
+        if midnode.overridewidth == None:
+            mid_str += ', width={:.4f}'.format(pensize)
+            mid_str += ', height={:.4f}'.format(pensize)
+        else:
+            mid_str += ', width={:.4f}'.format(midnode.overridewidth)
+            mid_str += ', height={:.4f}'.format(midnode.overridewidth)
         if midnode.pos != None:
             mid_str += ', pos={}'.format(midnode.pos)
 
@@ -1842,35 +1854,40 @@ class CausalGraph(object):
             mid_str = ('"{}" -> "{}" '.format(midedge.target.nodeid,
                                               midedge.source.nodeid))
         mid_str += '[meshid={}'.format(mesh.meshid)
-        if midedge.defaultwidth == True:
-            mid_str += ', penwidth={}'.format(medpenwidth)
-        else:
+        if midedge.overridewidth == None:
             mid_str += ', penwidth={}'.format(pensize)
+        else:
+            mid_str += ', penwidth={}'.format(midedge.overridewidth)
         mid_str += ', color={}'.format(midedge.color)
         if addedgelabels == True:
-            if midedge.labelcarrier == True:
-                label_str = ""
-                if edgeid == True:
-                    label_str += "  #{}".format(mesh.meshid)
-                    if edgeocc == True or edgeprob == True:
-                        label_str += "\\n"
-                if edgeocc == True:
-                    label_str += "  {}".format(mesh.occurrence)
-                    if edgeprob == True:
-                       label_str += " ("
-                if edgeprob == True:
-                    if edgeocc == False:
-                        label_str += "  "
-                    label_str += "{:.3f}".format(mesh.prob)
+            if midedge.overridelabel == None:
+                if midedge.labelcarrier == True:
+                    label_str = ""
+                    if edgeid == True:
+                        label_str += "  #{}".format(mesh.meshid)
+                        if edgeocc == True or edgeprob == True:
+                            label_str += "\\n"
                     if edgeocc == True:
-                        label_str += ")"
-                mid_str += ', label="{}"'.format(label_str)
+                        label_str += "  {}".format(mesh.occurrence)
+                        if edgeprob == True:
+                           label_str += " ("
+                    if edgeprob == True:
+                        if edgeocc == False:
+                            label_str += "  "
+                        label_str += "{:.3f}".format(mesh.prob)
+                        if edgeocc == True:
+                            label_str += ")"
+                    mid_str += ', label="{}"'.format(label_str)
+                    if midedge.labelpos != None:
+                        mid_str += ', lp={}'.format(midedge.labelpos)
+                if showedgelabels == True:
+                    mid_str += ', fontcolor={}'.format(midedge.color)
+                elif showedgelabels == False:
+                    mid_str += ', fontcolor=transparent'
+            else:
+                mid_str += ', label="{}"'.format(midedge.overridelabel)
                 if midedge.labelpos != None:
                     mid_str += ', lp={}'.format(midedge.labelpos)
-            if showedgelabels == True:
-                mid_str += ', fontcolor={}'.format(midedge.color)
-            elif showedgelabels == False:
-                mid_str += ', fontcolor=transparent'
         if midedge.indicator == True:
             if isinstance(midedge.source, EventNode):
                 mid_str += ", dir=none"
@@ -2865,8 +2882,10 @@ def mapmesh(coremeshes, mapmeshes, add_list, current_rank, midid, meshid,
                if mapmeshes[mindex].count == 0:
                    # Change color and pensize of mapped core mesh.
                    set_core_colors(mapmeshes[mindex], coremesh, maxr)
+                   for midnode in mapmeshes[mindex].midnodes:
+                       midnode.overridewidth = 0.144 # math.sqrt(3)/12
                    for midedge in mapmeshes[mindex].midedges:
-                       midedge.defaultwidth = True
+                       midedge.overridewidth = 3
                        midedge.labelcarrier = False
                elif mapmeshes[mindex].count > 0:
                    # Duplicate mesh.
@@ -2875,8 +2894,10 @@ def mapmesh(coremeshes, mapmeshes, add_list, current_rank, midid, meshid,
                    midid += len(mapmeshes[mindex].midnodes)
                    meshid += 1
                    set_core_colors(dupl_mesh, coremesh, maxr)
+                   for midnode in dupl_mesh.midnodes:
+                       midnode.overridewidth = 0.144 # math.sqrt(3)/12
                    for midedge in dupl_mesh.midedges:
-                       midedge.defaultwidth = True
+                       midedge.overridewidth = 3
                    use_count = mapmeshes[mindex].count
                    translate_mesh(dupl_mesh, use_count, transdist)
                    add_list.append(dupl_mesh)
@@ -3107,14 +3128,14 @@ def highlightnodes(eoi, nodelabels=None, causalgraphs=None, template=None,
                 if eventnode.label == nodelabel:
                     eventnode.highlighted = True
             # Get event nodes and meshes from prevcores.
-            #seen_meshes = []
-            #meshes_to_top = []
             midid = mappedpath.find_max_midid(cover=True)+1
             meshid = mappedpath.find_max_meshid(cover=True)+1
             for pathmesh in mappedpath.meshes:
                 pathmesh.skip = False
+                pathmesh.outgoing = False
             for cpathmesh in mappedpath.covermeshes:
                 cpathmesh.skip = False
+                cpathmesh.outgoing = False
             for prevcore in mappedpath.prevcores:
                 underscore = prevcore.index("_")
                 originalfile = "{}/{}.dot".format(eoi, prevcore[:underscore])
@@ -3149,8 +3170,28 @@ def highlightnodes(eoi, nodelabels=None, causalgraphs=None, template=None,
                 midid, meshid = draw_outgoing(covermeshes_to_add,
                                               mappedpath.covermeshes,
                                               midid, meshid, transdist)
+            # Compute outgoing probability (sum should be equals to 1).
+            # Also compute average to assign edge width.
+            totout = 0
+            out_occs = []
+            for pathmesh in mappedpath.meshes:
+                if pathmesh.outgoing == True:
+                    if pathmesh.underlying == False:
+                        totout += pathmesh.occurrence
+                        out_occs.append(pathmesh.occurrence)
+            for cpathmesh in mappedpath.covermeshes:
+                if cpathmesh.outgoing == True:
+                    totout += cpathmesh.occurrence
+                    out_occs.append(cpathmesh.occurrence)
+            aveout = statistics.mean(out_occs)
+            # Set edge width and labels for outgoing edges.
+            for pathmesh in mappedpath.meshes:
+                if pathmesh.outgoing == True:
+                    outgoing_mesh(pathmesh, totout, aveout)
+            for cpathmesh in mappedpath.covermeshes:
+                if cpathmesh.outgoing == True:
+                    outgoing_mesh(cpathmesh, totout, aveout)
         for i in range(len(mappedpaths)):
-            #mappedpaths[i].get_maxrank()
             mappedpaths[i].filename = "highlight-{}.dot".format(i+1)
         dir_path = "{}/{}".format(eoi, nodelabel)
         #for mappedpath in [mappedpaths[5]]:
@@ -3161,6 +3202,30 @@ def highlightnodes(eoi, nodelabels=None, causalgraphs=None, template=None,
             outfile = open(output_path, "w")
             outfile.write(mappedpath.dot_file)
             outfile.close()
+
+
+def outgoing_mesh(mesh, totout, aveout):
+    """ Set edge width and labels of outgoing meshes. """
+
+    mesh.prob = mesh.occurrence/totout
+    minpenwidth = 1
+    medpenwidth = 3
+    maxpenwidth = 6.5
+    ratio = mesh.occurrence/aveout
+    pensize = math.log(ratio, 2) + medpenwidth
+    if pensize < minpenwidth:
+        pensize = minpenwidth
+    if pensize > maxpenwidth:
+        pensize = maxpenwidth
+    midnodesize = math.sqrt(pensize)/12
+    for midnode in mesh.midnodes:
+        midnode.overridewidth = midnodesize
+    for midedge in mesh.midedges:
+        midedge.overridewidth = pensize
+    mesh.assign_label_carrier()
+    for midedge in mesh.midedges:
+        if midedge.labelcarrier == True:
+            midedge.overridelabel = " {:.3f}".format(mesh.prob) 
 
 
 def draw_outgoing(meshes_to_add, mappedmeshes, midid, meshid, transdist):
@@ -3177,9 +3242,9 @@ def draw_outgoing(meshes_to_add, mappedmeshes, midid, meshid, transdist):
             raise ValueError("Mesh not found.")
         elif len(analog_meshes) == 1:
             if analog_meshes[0].color == "grey80":
-                # Paint it black.
                 paint_mesh_black(analog_meshes[0])
                 analog_meshes[0].occurrence = mesh_to_add.occurrence
+                analog_meshes[0].outgoing = True
             elif analog_meshes[0].color == "black":
                 analog_meshes[0].occurrence += mesh_to_add.occurrence
             else: # Mesh already used to represent path.
@@ -3188,6 +3253,7 @@ def draw_outgoing(meshes_to_add, mappedmeshes, midid, meshid, transdist):
                 # The copy is translated by transdist.
                 dupl_mesh = duplicate_mesh(analog_meshes[0], midid, meshid)
                 dupl_mesh.skip = False
+                dupl_mesh.outgoing = True
                 midid += len(analog_meshes[0].midnodes)
                 meshid += 1
                 translate_mesh(dupl_mesh, 1, transdist)
@@ -3200,6 +3266,7 @@ def draw_outgoing(meshes_to_add, mappedmeshes, midid, meshid, transdist):
             # The copy is translated by transdist.
             dupl_mesh = duplicate_mesh(analog_meshes[-1], midid, meshid)
             dupl_mesh.skip = False
+            dupl_mesh.outgoing = True
             midid += len(analog_meshes[-1].midnodes)
             meshid += 1
             translate_mesh(dupl_mesh, 1, transdist)
@@ -3207,7 +3274,6 @@ def draw_outgoing(meshes_to_add, mappedmeshes, midid, meshid, transdist):
             mappedmeshes.append(dupl_mesh)
             for analog_mesh in analog_meshes:
                 analog_mesh.skip = True
-
 
     return midid, meshid
 
