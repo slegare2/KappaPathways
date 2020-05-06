@@ -15,6 +15,7 @@ import statistics
 import random
 import copy
 import textwrap
+import time
 
 
 class EventNode(object):
@@ -2084,12 +2085,71 @@ def run_kaflow(eoi, trace_path, kaflowpath, precedenceonly):
 
 # ---------------- End of Causal Cores Generation Section  --------------------
 
+# ........................ Siphon Filling Section .............................
+
+def fillsiphon(eoi, kappamodel, kastorpath):
+    """
+    Add spurious init event to break causal dependences using KaStor's
+    fill_siphon function.
+    """
+
+    # Check time.
+    time_start = time.perf_counter()
+    # Open original trace file.
+    period = kappamodel.index(".")
+    modelprefix = kappamodel[:period]
+    tracefile = open("{}/{}-eoi.json".format(eoi, modelprefix))
+    sim = json.load(tracefile)
+
+    causal_core_files = get_dot_files(eoi, "causalcore")
+    for causal_core_file in causal_core_files:
+        # Create trace from causal core.
+        core_path = "{}/{}".format(eoi, causal_core_file)
+        corefile = open(core_path, "r").readlines()
+        dash = causal_core_file.index("-")
+        period = causal_core_file.index(".")
+        filenumber = causal_core_file[dash+1:period]
+        trace_path = "{}/causalcore-{}.json".format(eoi, filenumber)
+        tracefile = open(trace_path, 'w')
+        # Find the index of the events that are part of the causal core.
+        event_indexes = []
+        for line in corefile:
+            if "style=filled" in line:
+                tokens = line.split()
+                event_index = int(tokens[0])
+                event_indexes.append(event_index)
+        # Build core trace with only events from the causal core.
+        trace = sim["trace"]
+        new_trace = []
+        for i in range(len(trace)):
+            if i in event_indexes:
+                new_trace.append(trace[i])
+        new_sim = sim.copy()
+        new_sim["trace"] = new_trace
+        # Write core trace to file.
+        print("\nWriting temporary core trace {}".format(trace_path))
+        json.dump(new_sim, tracefile)
+        tracefile.close()
+        # Get story with fill siphon from core trace using KaStor.
+        subprocess.run(("{}".format(kastorpath), "--none", "{}".format(trace_path)))
+        os.rename("cflow_none_0.dot", "{}/siphon-{}.dot".format(eoi, filenumber))
+        os.remove("cflow_none_Summary.dat")
+        os.remove(trace_path)
+    # Clean up and check calculation time.
+    os.remove("compression_status.txt")
+    os.remove("profiling.html")
+    time_stop = time.perf_counter()
+    time_diff = time_stop - time_start
+    print("\nCalculation time : {:.2f}s\n".format(time_diff))
+
+# ..................... End of Siphon Filling Section .........................
+
 # ==================== Causal Cores Merging Section ===========================
 
-def mergecores(eoi, causalgraphs=None, showintro=True, addedgelabels=False,
-               showedgelabels=False, edgeid=True, edgeocc=False, edgeprob=True,
-               weightedges=False, color=True, writedot=True, rmprev=False,
-               msg=True):
+def mergecores(eoi, causalgraphs=None, siphon=False, showintro=True,
+               addedgelabels=False, showedgelabels=False, edgeid=True,
+               edgeocc=False, edgeprob=True, weightedges=False, color=True,
+               writedot=True, rmprev=False, msg=True):
     """
     Merge equivalent causal cores and count occurrence.
     Write the final cores as meshed graphs.
@@ -2097,7 +2157,10 @@ def mergecores(eoi, causalgraphs=None, showintro=True, addedgelabels=False,
 
     # Reading section.
     if causalgraphs == None:
-        causal_core_files = get_dot_files(eoi, "causalcore")
+        if siphon == False:
+            causal_core_files = get_dot_files(eoi, "causalcore")
+        elif siphon == True:
+            causal_core_files = get_dot_files(eoi, "siphon")
         causal_cores = []
         for core_file in causal_core_files:
             core_path = "{}/{}".format(eoi, core_file)
