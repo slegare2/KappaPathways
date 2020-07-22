@@ -79,12 +79,13 @@ class StateNode(object):
     are changed by an event.
     """
 
-    def __init__(self, nodeid, label, rank=None, weight=1, rel_wei=1.0,
+    def __init__(self, nodeid, state, label, rank=None, weight=1, rel_wei=1.0,
                  occurrence=1, rel_occ=1.0, intro=False, first=False,
                  highlighted=False, pos=None, eventid=None):
         """ Initialize class StateNode. """
 
         self.nodeid = nodeid
+        self.state = state
         self.label = label
         self.rank = rank
         self.weight = weight # Taken from the stories.
@@ -2491,47 +2492,59 @@ def showedits(eoi, kappamodel, showintro=True, addedgelabels=False,
     steps = sim["trace"]
     # Write stories with state edits.
     for story in stories:
+        # Get actions for each event node.
         for node in story.eventnodes:
             node.states = []
-            # Get actions for each event node.
             step = steps[int(node.nodeid)]
+            bnd_num = 1
+            if step[0] == 1: # Rule
+                actions = step[2][1]
+                tmp_states = []
+                for action in actions:
+                    state, bnd_num = state_from_action(signatures, action,
+                                                       bnd_num)
+                    tmp_states.append(state)
+                node.states = tmp_states
             if step[0] == 3: # Init
                 actions = step[1]
-            else:
-                actions = None
-            # Write actions as Kappa expressions.
-            if step[0] == 1: # Rule
-                #print(node.nodeid, node.label)
-                actions = step[2][1]
-                bnd_num = 1
+                tmp_states = []
                 for action in actions:
-                    if action[0] == 1: # Mod_internal
-                        ag_n = action[1][0][1]
-                        agid_n = action[1][0][0]
-                        site_n = action[1][1]
-                        val_n = action[2]
-                        entry = signatures[ag_n]
-                        agent = entry["name"]
-                        site = entry["decl"][site_n]["name"]
-                        value = entry["decl"][site_n]["decl"][0][val_n]["name"]
-                        state = [{"agent":agent, "agentid": agid_n,
-                                  "site":site, "bond":None, "value":value}]
-                    if action[0] == 2: # Bind
-                        state = []
-                        for ag in [action[1], action[2]]:
-                            ag_n = ag[0][1]
-                            agid_n = ag[0][0]
-                            site_n = ag[1]
-                            entry = signatures[ag_n]
-                            agent = entry["name"]
-                            site = entry["decl"][site_n]["name"]
-                            state.append({"agent":agent, "agentid": agid_n,
-                                          "site":site, "bond":bnd_num,
-                                          "value":None})
-                        bnd_num += 1
-                    #print(action)
-                    #print(state)
-                node.states.append(state)
+                    state, bnd_num = state_from_action(signatures, action,
+                                                       bnd_num)
+                    # Check if last state is the same Bind_to as a previous
+                    # one but reversed.
+                    add_state = True
+                    if action[0] == 3:
+                        ag1 = state[0]["agent"]
+                        ag2 = state[1]["agent"]
+                        id1 = state[0]["agentid"]
+                        id2 = state[1]["agentid"]
+                        for prev_state in tmp_states:
+                            if prev_state[0]["action"] == 3:
+                                pa1 = prev_state[0]["agent"]
+                                pa2 = prev_state[1]["agent"]
+                                pi1 = prev_state[0]["agentid"]
+                                pi2 = prev_state[1]["agentid"]
+                                if pa1 == ag2 and pi1 == id2:
+                                    if pa2 == ag1 and pi2 == id1:
+                                        add_state = False
+                    if add_state == True:
+                        tmp_states.append(state)
+                # Remove creations if the agents are present in other actions.
+                for tmp_state in tmp_states:
+                    keep_state = True
+                    if tmp_state[0]["action"] == 0:
+                        ag1 = state[0]["agent"]
+                        id1 = state[0]["agentid"]
+                        for tmp_state2 in tmp_states:
+                            if tmp_state2[0]["action"] != 0:
+                                for elem in tmp_state2:
+                                    ag2 = elem["agent"]
+                                    id2 = elem["agentid"]
+                                    if ag1 == ag2 and id1 == id2:
+                                        keep_state = False
+                    if keep_state == True:    
+                        node.states.append(tmp_state)
         # Add a StateNode for each state of EventNodes.
         state_id = 1
         for node in story.eventnodes:
@@ -2540,24 +2553,82 @@ def showedits(eoi, kappamodel, showintro=True, addedgelabels=False,
                 rank = node.rank + 0.5
                 state_str = ""
                 for i in range(len(state)):
-                    state_str += "{}".format(state[i]["agent"])
-                    state_str += ":{}".format(state[i]["agentid"])
-                    state_str += "({}".format(state[i]["site"])
-                    if state[i]["bond"] != None:
-                        state_str += "[{}]".format(state[i]["bond"])
-                    if state[i]["value"] != None:
-                        state_str += "{{{}}}".format(state[i]["value"])
-                    state_str += ")"
+                    agent_str = write_kappa_expression(state[i], "num")
+                #    state_str += "{}".format(state[i]["agent"])
+                #    state_str += ":{}".format(state[i]["agentid"])
+                #    state_str += "({}".format(state[i]["site"])
+                #    if state[i]["bond"] != None and state[i]["bond"] != ".":
+                #        state_str += "[{}]".format(state[i]["bond"]["num"])
+                #    if state[i]["value"] != None:
+                #        state_str += "{{{}}}".format(state[i]["value"])
+                #    state_str += ")"
+                    state_str += agent_str
                     if i < len(state)-1:
                         state_str += ", "
                 label = state_str
-                new_state_node = StateNode(node_id, label, rank)
+                new_state_node = StateNode(node_id, state, label, rank)
                 story.statenodes.append(new_state_node)
-                new_edge = CausalEdge(node, new_state_node, weight=0)
+                new_edge = CausalEdge(node, new_state_node)
                 story.causaledges.append(new_edge)
                 story.hyperedges.append(HyperEdge([new_edge]))
                 state_id += 1
-
+        # Get tests for each event node.
+        for node in story.eventnodes:
+            node.tests = []
+            step = steps[int(node.nodeid)]
+            bnd_num = 1
+            tests = None
+            if step[0] == 1: # Rule
+                tests_tmp = step[2][0]
+                tests = []
+                for sublist in tests_tmp:
+                    for test in sublist:
+                        tests.append(test)
+            if step[0] == 4: # Obs
+                tests = step[1][0]
+            tmp_states = []
+            if tests != None:
+                for test in tests:
+                    state, bnd_num = state_from_test(signatures, test,
+                                                     bnd_num)
+                    print("xxx", state)
+                    if state[0]["test"] != 0:
+                        tmp_states.append(state)
+                node.tests = tmp_states
+        # Add edges showing for which events each state node is required.
+        for statenode in story.statenodes:
+            for eventnode in story.eventnodes:
+                editused = False
+                for eventtest in eventnode.tests:
+                    are_same = compare_state_test(statenode.state, eventtest, statenode.label, eventnode.label)
+                    if are_same == True:
+                        editused = True
+                        break
+                if editused == True:
+                    new_edge = CausalEdge(statenode, eventnode)
+                    story.causaledges.append(new_edge)
+                    story.hyperedges.append(HyperEdge([new_edge]))
+        # Remove all edges between two event nodes.
+        edges_to_remove = []
+        for i in range(len(story.causaledges)):
+            edge = story.causaledges[i]
+            eventsrc = isinstance(edge.source, EventNode)
+            eventtrg = isinstance(edge.target, EventNode)
+            if eventsrc == True and eventtrg == True:
+                edges_to_remove.insert(0, i)
+        for i in edges_to_remove:
+            del(story.causaledges[i])
+        for hyperedge in story.hyperedges:
+            edges_to_remove = []
+            for i in range(len(hyperedge.edgelist)):
+                edge = hyperedge.edgelist[i]
+                eventsrc = isinstance(edge.source, EventNode)
+                eventtrg = isinstance(edge.target, EventNode)
+                if eventsrc == True and eventtrg == True:
+                    edges_to_remove.insert(0, i)
+            for i in edges_to_remove:
+                del(hyperedge.edgelist[i])
+    # Write stories with edited states.
     for i in range(len(stories)):
         stories[i].filename = "edits-{}.dot".format(i+1)
     for story in stories:
@@ -2567,6 +2638,258 @@ def showedits(eoi, kappamodel, showintro=True, addedgelabels=False,
         outfile = open(output_path, "w")
         outfile.write(story.dot_file)
         outfile.close()
+
+
+#def write_kappa_expression(state, bond="num"):
+#    """
+#    Write a state as a string using Kappa language.
+#    The value of bond can be either 'num' or 'partner'.
+#    """
+#
+#    state_str = ""
+#    for i in range(len(state)):
+#        state_str += "{}".format(state[i]["agent"])
+#        state_str += ":{}".format(state[i]["agentid"])
+#        state_str += "({}".format(state[i]["site"])
+#        if state[i]["bond"] != None and state[i]["bond"] != ".":
+#            if bond == "num":
+#                state_str += "[{}]".format(state[i]["bond"]["num"])
+#            elif bond == "partner":
+#                partner = state[i]["bond"]["partner"]
+#                state_str += "[{}.{}:{}]".format(partner["site"],
+#                                                 partner["agent"],
+#                                                 partner["agentid"])
+#        if state[i]["value"] != None:
+#            state_str += "{{{}}}".format(state[i]["value"])
+#        state_str += ")"
+#        if i < len(state)-1:
+#            state_str += ", "
+#
+#    return state_str
+
+def write_kappa_expression(agent, bond="num"):
+    """
+    Write an agent as a string using Kappa language.
+    The value of bond can be either 'num' or 'partner'.
+    """
+
+    agent_str = ""
+    agent_str += "{}".format(agent["agent"])
+    agent_str += ":{}".format(agent["agentid"])
+    agent_str += "({}".format(agent["site"])
+    if agent["bond"] != None:
+        if agent["bond"] == ".":
+            agent_str += "[.]"
+        else:
+            if bond == "num":
+                agent_str += "[{}]".format(agent["bond"]["num"])
+            elif bond == "partner":
+                partner = agent["bond"]["partner"]
+                agent_str += "[{}.{}:{}]".format(partner["site"],
+                                                 partner["agent"],
+                                                 partner["agentid"])
+    if agent["value"] != None:
+        agent_str += "{{{}}}".format(agent["value"])
+    agent_str += ")"
+
+    return agent_str
+
+
+def compare_state_test(state, test, lab1, lab2):
+    """ Determine if a state and test represent the same species. """
+
+#--> [{'agent': 'Rec', 'agentid': 3313, 'site': 'g', 'bond': {'num': 1, 'partner': {'agent': 'Syk', 'agentid': 4093, 'site': 'tSH2'}}, 'value': None, 'action': 2},
+#     {'agent': 'Syk', 'agentid': 4093, 'site': 'tSH2', 'bond': {'num': 1, 'partner': {'agent': 'Rec', 'agentid': 3313, 'site': 'g'}}, 'value': None, 'action': 2}]
+#
+#==> [{'agent': 'Syk', 'agentid': 4093, 'site': 'tSH2', 'bond': {'num': 5, 'partner': {'agent': 'Rec', 'agentid': 3313, 'site': 'g'}}, 'value': None, 'test': 5},
+#     {'agent': 'Rec', 'agentid': 3313, 'site': 'g', 'bond': {'num': 5, 'partner': {'agent': 'Syk', 'agentid': 4093, 'site': 'tSH2'}}, 'value': None, 'test': 5}]
+
+    #are_same = False
+    #if lab1 == "Rec:3313(g[1]), Syk:4093(tSH2[1])" and lab2 == "Lyn-U phosphorylates Syk-l":
+    #    print("-->", state)
+    #    print("==>", test)
+    list1 = state.copy()
+    list2 = test.copy()
+    found1 = []
+    found2 = []
+    for i in range(len(list1)):
+        agent1_str = write_kappa_expression(list1[i], bond="partner")
+        for agent2 in list2:
+            agent2_str = write_kappa_expression(agent2, bond="partner")
+            if agent1_str == agent2_str:
+                found1.insert(0, i)
+                break
+    for i in range(len(list2)):
+        agent2_str = write_kappa_expression(list2[i], bond="partner")
+        for agent1 in list1:
+            agent1_str = write_kappa_expression(agent1, bond="partner")
+            if agent2_str == agent1_str:
+                found2.insert(0, i)
+                break
+    for i in found1:
+        del(list1[i])
+    for j in found2:
+        del(list2[j])
+    if len(list1) == 0 and len(list2) == 0:
+        are_same = True
+    else:
+        are_same = False
+
+    return are_same
+
+
+# same_objects
+#    list1 = nodelist1.copy()
+#    list2 = nodelist2.copy()
+#    found1 = []
+#    found2 = []
+#    for i in range(len(list1)):
+#        for node2 in list2:
+#            if list1[i].label == node2.label:
+#                if enforcerank == False:
+#                    found1.insert(0, i)
+#                    break
+#                elif enforcerank == True:
+#                    if list1[i].rank == node2.rank:
+#                        found1.insert(0, i)
+#                        break
+#    for j in range(len(list2)):
+#        for node1 in list1:
+#            if list2[j].label == node1.label:
+#                if enforcerank == False:
+#                    found2.insert(0, j)
+#                    break
+#                elif enforcerank == True:
+#                    if list2[j].rank == node1.rank:
+#                        found2.insert(0, j)
+#                        break
+#    for i in found1:
+#        del(list1[i])
+#    for j in found2:
+#        del(list2[j])
+#    if len(list1) == 0 and len(list2) == 0:
+#        are_equi = True
+#    else:
+#        are_equi = False
+
+def state_from_action(signatures, action, bnd_num):
+    """ Find the resulting state of an action from the trace file. """
+
+    state = []
+    if action[0] == 0: # Create (I only look at the agent, not the sites).
+        ag_n = action[1][1]
+        agid_n = action[1][0]
+        entry = signatures[ag_n]
+        agent = entry["name"]
+        state.append({"agent":agent, "agentid": agid_n, "site":None,
+                      "bond":None, "value":None, "action":0})
+    if action[0] == 1: # Mod_internal
+        ag_n = action[1][0][1]
+        agid_n = action[1][0][0]
+        site_n = action[1][1]
+        val_n = action[2]
+        entry = signatures[ag_n]
+        agent = entry["name"]
+        site = entry["decl"][site_n]["name"]
+        value = entry["decl"][site_n]["decl"][0][val_n]["name"]
+        state.append({"agent":agent, "agentid": agid_n, "site":site,
+                      "bond":None, "value":value, "action":1})
+    if action[0] == 2 or action[0] == 3: # Bind or Bind_to
+        ag1_n = action[1][0][1]
+        agid1_n = action[1][0][0]
+        site1_n = action[1][1]
+        entry1 = signatures[ag1_n]
+        agent1 = entry1["name"]
+        site1 = entry1["decl"][site1_n]["name"]
+        ag2_n = action[2][0][1]
+        agid2_n = action[2][0][0]
+        site2_n = action[2][1]
+        entry2 = signatures[ag2_n]
+        agent2 = entry2["name"]
+        site2 = entry2["decl"][site2_n]["name"]
+        partner1 = {"agent":agent1, "agentid": agid1_n, "site":site1}
+        partner2 = {"agent":agent2, "agentid": agid2_n, "site":site2}
+        state.append({"agent":agent1, "agentid": agid1_n, "site":site1,
+                      "bond":{"num": bnd_num, "partner":partner2},
+                      "value":None, "action":action[0]})
+        state.append({"agent":agent2, "agentid": agid2_n, "site":site2,
+                      "bond":{"num": bnd_num, "partner":partner1},
+                      "value":None, "action":action[0]})
+        bnd_num += 1
+    if action[0] == 4: # Free
+        ag_n = action[1][0][1]
+        agid_n = action[1][0][0]
+        site_n = action[1][1]
+        entry = signatures[ag_n]
+        agent = entry["name"]
+        site = entry["decl"][site_n]["name"]
+        state.append({"agent":agent, "agentid": agid_n, "site":site,
+                      "bond":".", "value":None, "action":4})
+    #if action[0] == 5: # Remove (I still do not have any example).
+
+    return state, bnd_num
+
+
+def state_from_test(signatures, test, bnd_num):
+    """ Find the required state of a test from the trace file. """
+
+    state = []
+    if test[0] == 0: # Is_Here
+        ag_n = test[1][1]
+        agid_n = test[1][0]
+        entry = signatures[ag_n]
+        agent = entry["name"]
+        state.append({"agent":agent, "agentid": agid_n, "site":None,
+                      "bond":None, "value":None, "test":0})
+    if test[0] == 1: # Has_Internal
+        ag_n = test[1][0][1]
+        agid_n = test[1][0][0]
+        site_n = test[1][1]
+        val_n = test[2]
+        entry = signatures[ag_n]
+        agent = entry["name"]
+        site = entry["decl"][site_n]["name"]
+        value = entry["decl"][site_n]["decl"][0][val_n]["name"]
+        state.append({"agent":agent, "agentid": agid_n, "site":site,
+                      "bond":None, "value":value, "test":1})
+    if test[0] == 2: # Is_Free
+        ag_n = test[1][0][1]
+        agid_n = test[1][0][0]
+        site_n = test[1][1]
+        entry = signatures[ag_n]
+        agent = entry["name"]
+        site = entry["decl"][site_n]["name"]
+        state.append({"agent":agent, "agentid": agid_n, "site":site,
+                      "bond":".", "value":None, "test":2})
+    #if test[0] == 3: # Is_Bound (No example yet).
+    #if test[0] == 4: # Has_Binding_type (No example yet).
+    if test[0] == 5: # Is_Bound_to
+        ag1_n = test[1][0][1]
+        agid1_n = test[1][0][0]
+        site1_n = test[1][1]
+        entry1 = signatures[ag1_n]
+        agent1 = entry1["name"]
+        site1 = entry1["decl"][site1_n]["name"]
+        ag2_n = test[2][0][1]
+        agid2_n = test[2][0][0]
+        site2_n = test[2][1]
+        entry2 = signatures[ag2_n]
+        agent2 = entry2["name"]
+        site2 = entry2["decl"][site2_n]["name"]
+        partner1 = {"agent":agent1, "agentid": agid1_n, "site":site1}
+        partner2 = {"agent":agent2, "agentid": agid2_n, "site":site2}
+        state.append({"agent":agent1, "agentid": agid1_n, "site":site1,
+                      "bond":{"num": bnd_num, "partner":partner2},
+                      "value":None, "test":test[0]})
+        state.append({"agent":agent2, "agentid": agid2_n, "site":site2,
+                      "bond":{"num": bnd_num, "partner":partner1},
+                      "value":None, "test":test[0]})
+        bnd_num += 1
+        print("---", test)
+        print("===", state)
+
+    return state, bnd_num
+
 
 # ==================== Causal Cores Merging Section ===========================
 
