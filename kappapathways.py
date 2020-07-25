@@ -1946,8 +1946,8 @@ class CausalGraph(object):
                         if i == 0:
                             node_str += " {} ".format(node_lines[i])
                         else:
-                            node_str += "\\n {} ".format(node_lines[i])
-                    dot_str += ('{} [label="{}"'
+                            node_str += "<br/> {} ".format(node_lines[i])
+                    dot_str += ('{} [label=<{}>'
                                 .format(node.nodeid, node_str))
                     dot_str += ', shape={}, style=filled'.format(node_shape)
                     if node.highlighted == True:
@@ -1973,8 +1973,8 @@ class CausalGraph(object):
                         if i == 0:
                             node_str += " {} ".format(node_lines[i])
                         else:
-                            node_str += "\\n {} ".format(node_lines[i])
-                    dot_str += ('{} [label="{}"'
+                            node_str += "<br/> {} ".format(node_lines[i])
+                    dot_str += ('{} [label=<{}>'
                                 .format(node.nodeid, node_str))
                     dot_str += ', shape={}, style=filled'.format(node_shape)
                     if node.highlighted == True:
@@ -2604,8 +2604,8 @@ def showedits(eoi, kappamodel, showintro=True, addedgelabels=False,
                 rank = node.rank + 0.5
                 state_str = ""
                 for i in range(len(state)):
-                    agent_str = write_kappa_expression(state[i], "num")
-                    state_str += agent_str
+                    site_str = write_kappa_expression(state[i], "num")
+                    state_str += site_str
                     if i < len(state)-1:
                         state_str += ", "
                 label = state_str
@@ -2737,20 +2737,20 @@ def showedits(eoi, kappamodel, showintro=True, addedgelabels=False,
             # Keep only the first value encountered for each state node
             # path while going up.
             seen_sites = []
-            for agent in statenode.state:
-                agent_str = write_kappa_expression(agent, "num", True)
-                seen_sites.append(agent_str)
+            for site in statenode.state:
+                site_str = write_kappa_expression(site, "num", True)
+                seen_sites.append(site_str)
             for path in state_paths:
                 for node in path:
                     # All agents of a state node must be unseen before to
                     # keep the node.
                     keep_node = True
-                    for agent in node.state:
-                        agent_str = write_kappa_expression(agent, "num", True)
-                        if agent_str in seen_sites:
+                    for site in node.state:
+                        site_str = write_kappa_expression(site, "num", True)
+                        if site_str in seen_sites:
                             keep_node = False
                         else:
-                            seen_sites.append(agent_str)
+                            seen_sites.append(site_str)
                     if keep_node == True and node not in cumul_nodes:
                         cumul_nodes.append(node)
             # Check which of the cumul nodes are relevant for the future of the
@@ -2775,18 +2775,23 @@ def showedits(eoi, kappamodel, showintro=True, addedgelabels=False,
                     relevant_nodes.append(cumul_node)
             # Build current state node context from the state of
             # all the relevant_nodes.
-            print("---", statenode.label)
-            for n in relevant_nodes:
-                print(n.label)
+            statenode.context = []
+            for relevant_node in relevant_nodes:
+                statenode.context.append(relevant_node.state)
+            #print("---", statenode.label) 
+            #for c in statenode.context:
+            #    print(c)
+            print(statenode.label)
+            lbl = write_context_expression(statenode.state, statenode.context)
+            statenode.label = lbl
             
 
             # Follow edges up to get all cumulative states
             # ... but also other state nodes downstream of the immediate upstream event node
             
-            # Then
         
 
-    # Write
+    # Write stories with context on state nodes.
     for i in range(len(stories)):
         stories[i].filename = "context-{}.dot".format(i+1)
     for story in stories:
@@ -2798,38 +2803,95 @@ def showedits(eoi, kappamodel, showintro=True, addedgelabels=False,
         outfile.close()
 
 
-def write_kappa_expression(agent, bond="num", hidevalue=False):
+def write_context_expression(edits, context):
+    """
+    Write a Kappa language string with the edit in bold font and context in
+    normal font. The string is made to be read as html to allow special fonts.
+    """
+
+    # Group sites that concern the same agent together.
+    agent_map = []
+    all_agents = []
+    for site in edits:
+        site["type"] = "edit"
+        if site["agent"] not in agent_map:
+            agent_map.append(site["agent"])
+            all_agents.append({"agent": site["agent"], "sites": [site],
+                               "nbonds": 0})
+        else:
+            agent_index = agent_map.index(site["agent"])
+            all_agents[agent_index]["sites"].append(site)
+    for state in context:
+        for site in state:
+            site["type"] = "context"
+            if site["agent"] not in agent_map:
+                agent_map.append(site["agent"])
+                all_agents.append({"agent": site["agent"], "sites": [site],
+                                   "nbonds": 0})
+            else:
+                agent_index = agent_map.index(site["agent"])
+                all_agents[agent_index]["sites"].append(site)
+    for ag in all_agents:
+        print(ag["agent"])
+        for s in ag["sites"]:
+            print(s)
+    # Sort agents.
+    # Put agents containing the edited sites first.
+    # If there are 2 agents (bond), put the one with the least amount of
+    # bonds first.
+    # If they both have the same amount of bonds, choose one at random.
+    edited_agents = []
+    for agent in all_agents:
+        for site in agent:
+            if site["type"] == "edit":
+                edited_agents.append(agent)
+                break
+    # Count the number of bonds of each agent.
+    
+    
+
+    # Sort sites within agents.
+
+    # Write string with sites in the order determined by the previous sorting.
+    context_str = ""
+    
+    
+
+    return context_str
+
+
+def write_kappa_expression(site, bond="num", hidevalue=False):
     """
     Write an agent as a string using Kappa language.
     The value of bond can be either 'num' or 'partner'.
     """
 
-    agent_str = ""
-    agent_str += "{}".format(agent["agent"])
-    agent_str += ":{}".format(agent["agentid"])
-    agent_str += "({}".format(agent["site"])
+    site_str = ""
+    site_str += "{}".format(site["agent"])
+    site_str += ":{}".format(site["agentid"])
+    site_str += "({}".format(site["site"])
     if hidevalue == False:
-        if agent["bond"] != None:
-            if agent["bond"] == ".":
-                agent_str += "[.]"
+        if site["bond"] != None:
+            if site["bond"] == ".":
+                site_str += "[.]"
             else:
                 if bond == "num":
-                    agent_str += "[{}]".format(agent["bond"]["num"])
+                    site_str += "[{}]".format(site["bond"]["num"])
                 elif bond == "partner":
-                    partner = agent["bond"]["partner"]
-                    agent_str += "[{}.{}:{}]".format(partner["site"],
+                    partner = site["bond"]["partner"]
+                    site_str += "[{}.{}:{}]".format(partner["site"],
                                                      partner["agent"],
                                                      partner["agentid"])
-        if agent["value"] != None:
-            agent_str += "{{{}}}".format(agent["value"])
+        if site["value"] != None:
+            site_str += "{{{}}}".format(site["value"])
     elif hidevalue == True:
-        if agent["bond"] != None:
-            agent_str += "[]"
-        if agent["value"] != None:
-            agent_str += "{}"
-    agent_str += ")"
+        if site["bond"] != None:
+            site_str += "[]"
+        if site["value"] != None:
+            site_str += "{}"
+    site_str += ")"
 
-    return agent_str
+    return site_str
 
 
 def compare_state_test(state, test):
@@ -2840,17 +2902,17 @@ def compare_state_test(state, test):
     found1 = []
     found2 = []
     for i in range(len(list1)):
-        agent1_str = write_kappa_expression(list1[i], bond="partner")
-        for agent2 in list2:
-            agent2_str = write_kappa_expression(agent2, bond="partner")
-            if agent1_str == agent2_str:
+        site1_str = write_kappa_expression(list1[i], bond="partner")
+        for site2 in list2:
+            site2_str = write_kappa_expression(site2, bond="partner")
+            if site1_str == site2_str:
                 found1.insert(0, i)
                 break
     for i in range(len(list2)):
-        agent2_str = write_kappa_expression(list2[i], bond="partner")
-        for agent1 in list1:
-            agent1_str = write_kappa_expression(agent1, bond="partner")
-            if agent2_str == agent1_str:
+        site2_str = write_kappa_expression(list2[i], bond="partner")
+        for site1 in list1:
+            site1_str = write_kappa_expression(site1, bond="partner")
+            if site2_str == site1_str:
                 found2.insert(0, i)
                 break
     for i in found1:
