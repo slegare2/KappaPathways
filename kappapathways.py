@@ -81,7 +81,7 @@ class StateNode(object):
 
     def __init__(self, nodeid, state, label, rank=None, weight=1, rel_wei=1.0,
                  occurrence=1, rel_occ=1.0, intro=False, first=False,
-                 highlighted=False, pos=None, eventid=None):
+                 highlighted=False, pos=None, eventid=None, context=[]):
         """ Initialize class StateNode. """
 
         self.nodeid = nodeid
@@ -96,6 +96,7 @@ class StateNode(object):
         self.first = first
         self.highlighted = highlighted
         self.pos = pos
+        self.context = context
         self.check_types()
 
 
@@ -2519,10 +2520,10 @@ def tweakstories(eoi, showintro=True, addedgelabels=False,
 #    run_kaflow(eoi, trace_path, kaflowpath, precedenceonly=False)
 #    fillsiphon(eoi, kappamodel, kastorpath)
 
-def showedits(eoi, kappamodel, showintro=True, addedgelabels=False,
-              showedgelabels=False, edgeid=True, edgeocc=False,
-              edgeuse=False, statstype="abs", writedot=True,
-              weightedges=True):
+def showcontext(eoi, kappamodel, showintro=True, addedgelabels=False,
+                showedgelabels=False, edgeid=True, edgeocc=False,
+                edgeuse=False, statstype="abs", writedot=True,
+                weightedges=True):
     """ Add dual nodes showing the states edited by every event. """
 
     # Reading section.
@@ -2640,7 +2641,7 @@ def showedits(eoi, kappamodel, showintro=True, addedgelabels=False,
             for eventnode in story.eventnodes:
                 editused = False
                 for eventtest in eventnode.tests:
-                    are_same = compare_state_test(statenode.state, eventtest)
+                    are_same = compare_states(statenode.state, eventtest)
                     if are_same == True:
                         editused = True
                         break
@@ -2712,10 +2713,10 @@ def showedits(eoi, kappamodel, showintro=True, addedgelabels=False,
         outfile.write(story.dot_file)
         outfile.close()
 
-    # Then write context (Later put in a separate function)
+    # Then write context (Later put in a separate function?)
     """ Get the cumulative relevant context for each state node. """
 
-    for story in [stories[0]]:
+    for story in stories:
         story.hyperedges = []
         rule_outputs = []
         for edge in story.causaledges:
@@ -2778,18 +2779,18 @@ def showedits(eoi, kappamodel, showintro=True, addedgelabels=False,
             statenode.context = []
             for relevant_node in relevant_nodes:
                 statenode.context.append(relevant_node.state)
-            #print("---", statenode.label) 
-            #for c in statenode.context:
-            #    print(c)
-            print(statenode.label)
             lbl = write_context_expression(statenode.state, statenode.context)
             statenode.label = lbl
-            
-
-            # Follow edges up to get all cumulative states
-            # ... but also other state nodes downstream of the immediate upstream event node
-            
-        
+        # Weight edges to align rule outputs 
+        for edge in story.causaledges:
+            if edge.secondary == True:
+                edge.weight = 0
+            elif edge.secondary == False:
+                if edge.source in rule_outputs or edge.target in rule_outputs:
+                    edge.weight = 1
+                else:
+                    edge.weight = 0
+        story.create_hyperedges()
 
     # Write stories with context on state nodes.
     for i in range(len(stories)):
@@ -2801,6 +2802,113 @@ def showedits(eoi, kappamodel, showintro=True, addedgelabels=False,
         outfile = open(output_path, "w")
         outfile.write(story.dot_file)
         outfile.close()
+
+    # Distinguish events that are applications of a same rule but
+    # in a different context.
+    rule_names = []
+    res_states = []
+    for story in stories:
+        for node in story.eventnodes:
+            output_states = get_output_of_node(story, node)
+            ## Get output state nodes.
+            #output_nodes = []
+            #for edge in story.causaledges:
+            #    if edge.source == node:
+            #        if isinstance(edge.target, StateNode):
+            #            output_nodes.append(edge.target)
+            ## Get edited state + context sites from each output node.
+            #output_states = []
+            #for statenode in output_nodes:
+            #    output_states.append(statenode.state)
+            #    for context_state in statenode.context:
+            #        output_states.append(context_state)
+            # Assign output sites to rule name.
+            if node.label not in rule_names:
+                rule_names.append(node.label)
+                res_states.append([{"output": output_states,
+                                    "occurrence": 1}])
+            else:
+                rule_index = rule_names.index(node.label)
+                output_found = False
+                for i in range(len(res_states[rule_index])):
+                    output = res_states[rule_index][i]
+                    # check if output["output"] is the same as the
+                    # current output_sites.
+                    are_same = compare_outputs(output["output"], output_states)
+                    if are_same == True:
+                        output_found = True
+                        res_states[rule_index][i]["occurrence"] += 1
+                if output_found == False:
+                   res_states[rule_index].append({"output": output_states,
+                                                  "occurrence": 1})
+    # Sort outputs by occurrence for each rule.
+    sorted_res_states = []
+    for rule_states in res_states:
+        sorted_states = sorted(rule_states, key=lambda x: x["occurrence"],
+                               reverse=True)
+        sorted_res_states.append(sorted_states)
+
+    # Find the common part between the different outputs of a same rule
+    # to remove if from the label.
+
+    # Assign new names to rules that occur in different context.
+    for story in stories:
+        for node in story.eventnodes:
+            if node.intro == False:
+                rule_index = rule_names.index(node.label)
+                if len(sorted_res_states[rule_index]) > 1:
+                    output_states = get_output_of_node(story, node)
+                    output_set = None
+                    for i in range(len(sorted_res_states[rule_index])):
+                        output = res_states[rule_index][i]
+                        are_same = compare_outputs(output["output"],
+                                                   output_states)
+                        if are_same:
+                            output_set = i
+                    if output_set != None:
+                        prime = ""
+                        for i in range(output_set):
+                            prime += "'"
+                        node.label = "{}{}".format(node.label, prime)
+                    else:
+                        raise ValueError("Output nodes not found for node {}, "
+                                         "label '{}'.".format(node.nodeid,
+                                         node.label))
+
+    # Writes stories with distinguished events.
+    for i in range(len(stories)):
+        stories[i].filename = "distinguish-{}.dot".format(i+1)
+    for story in stories:
+        story.build_dot_file(showintro, addedgelabels, showedgelabels,
+                             edgeid, edgeocc, edgeuse, statstype, weightedges)
+        output_path = "{}/{}".format(eoi, story.filename)
+        outfile = open(output_path, "w")
+        outfile.write(story.dot_file)
+        outfile.close()
+
+
+def get_output_of_node(story, node):
+    """
+    Get the output of a given event node. The output is a list of
+    contextualized states, which are themselves a list of sites.
+    Their is one contextualized state per target node (state node)
+    of a given event node.
+    """
+
+    # Get output state nodes.
+    output_nodes = []
+    for edge in story.causaledges:
+        if edge.source == node:
+            if isinstance(edge.target, StateNode):
+                output_nodes.append(edge.target)
+    # Get edited state + context sites from each output node.
+    output_states = []
+    for statenode in output_nodes:
+        output_states.append(statenode.state)
+        for context_state in statenode.context:
+            output_states.append(context_state)
+
+    return output_states
 
 
 def write_context_expression(edits, context):
@@ -2814,53 +2922,184 @@ def write_context_expression(edits, context):
     all_agents = []
     for site in edits:
         site["type"] = "edit"
-        if site["agent"] not in agent_map:
-            agent_map.append(site["agent"])
-            all_agents.append({"agent": site["agent"], "sites": [site],
+        fullid = "{}:{}".format(site["agent"], site["agentid"])
+        if fullid not in agent_map:
+            agent_map.append(fullid)
+            all_agents.append({"fullid": fullid, "sites": [site],
                                "nbonds": 0})
         else:
-            agent_index = agent_map.index(site["agent"])
+            agent_index = agent_map.index(fullid)
             all_agents[agent_index]["sites"].append(site)
     for state in context:
         for site in state:
             site["type"] = "context"
-            if site["agent"] not in agent_map:
-                agent_map.append(site["agent"])
-                all_agents.append({"agent": site["agent"], "sites": [site],
+            fullid = "{}:{}".format(site["agent"], site["agentid"])
+            if fullid not in agent_map:
+                agent_map.append(fullid)
+                all_agents.append({"fullid": fullid, "sites": [site],
                                    "nbonds": 0})
             else:
-                agent_index = agent_map.index(site["agent"])
+                agent_index = agent_map.index(fullid)
                 all_agents[agent_index]["sites"].append(site)
-    for ag in all_agents:
-        print(ag["agent"])
-        for s in ag["sites"]:
-            print(s)
-    # Sort agents.
-    # Put agents containing the edited sites first.
-    # If there are 2 agents (bond), put the one with the least amount of
-    # bonds first.
-    # If they both have the same amount of bonds, choose one at random.
-    edited_agents = []
+    # Sort agents by the number of bonds that they have.
     for agent in all_agents:
-        for site in agent:
+        nbonds = 0
+        for site in agent["sites"]:
+            if site["bond"] != None:
+                nbonds += 1
+        agent["nbonds"] = nbonds
+    sorted_agents = sorted(all_agents, key=lambda x: x["nbonds"])
+    # Put agents containing the edited sites first.
+    full_context = []
+    used_agents = []
+    for i in range(len(sorted_agents)):
+        agent = sorted_agents[i]
+        for site in agent["sites"]:
             if site["type"] == "edit":
-                edited_agents.append(agent)
+                full_context.append(agent)
+                used_agents.insert(0, i)
                 break
-    # Count the number of bonds of each agent.
-    
-    
-
-    # Sort sites within agents.
+    for i in used_agents:
+        del(sorted_agents[i])
+    # Iteratively add context agents to the left or right of the full_context
+    # list depending on whether they are bound to an agent that is on the
+    # first or second half of the current full_context list.
+    bond_found = True
+    while bond_found == True:
+        bond_found = False
+        half_index = int(len(full_context)/2)
+        for i in range(len(sorted_agents)):
+            remaining_agent = sorted_agents[i]
+            # Check if remaining agent has one site that is bound to an agent
+            # that is already in full_context.
+            for remaining_site in remaining_agent["sites"]:
+                if remaining_site["bond"] != None:
+                    partner = remaining_site["bond"]["partner"]
+                    partnerid = "{}:{}".format(partner["agent"],
+                                               partner["agentid"])
+                    for j in range(len(full_context)):
+                        existing_agent = full_context[j]
+                        if partnerid == existing_agent["fullid"]:
+                            # Add this remaining agent to full_context list.
+                            if j < half_index:
+                                full_context.insert(0, remaining_agent)
+                            elif j >= half_index:
+                                full_context.append(remaining_agent)
+                            bond_found = True
+                            break
+                if bond_found == True:
+                    break
+            if bond_found == True:
+                del(sorted_agents[i])
+                break
+    # Add remaining unbound agents.
+    for agent in sorted_agents:
+        full_context.append(agent)
+    #sorted_fullids = []
+    #for agent in full_context:
+    #    sorted_fullids.append(agent["fullid"])
+    #print(sorted_fullids)
+    # Reassign bond numbers.
+    for agent in full_context:
+        for site in agent["sites"]:
+            if site["bond"] != None:
+                site["bond"]["num"] = 0
+    bondid = 1
+    for agent1 in full_context:
+        for site1 in agent1["sites"]:
+            if site1["bond"] != None:
+                if site1["bond"]["num"] == 0:
+                    # Find partner.
+                    partner = site1["bond"]["partner"]
+                    partnerid = "{}:{}".format(partner["agent"],
+                                               partner["agentid"])
+                    for agent2 in full_context:
+                        if agent2["fullid"] == partnerid:
+                            for site2 in agent2["sites"]:
+                                if site2["site"] == partner["site"]:
+                                    site1["bond"]["num"] = bondid
+                                    site2["bond"]["num"] = bondid
+                                    bondid += 1
+                                    break
+    # Sort sites within agents. Put sites used for bindings on the left if
+    # they bind to an agent that appears before in the full_context list.
+    # Put sites that have only a value and no binding at the end.
+    for i in range(len(full_context)):
+        agent1 = full_context[i]
+        ordered_edits = []
+        ordered_context = []
+        for site1 in agent1["sites"]:
+            if site1["bond"] != None:
+                partner = site1["bond"]["partner"]
+                partnerid = "{}:{}".format(partner["agent"],
+                                           partner["agentid"])
+                for j in range(len(full_context)):
+                    agent2 = full_context[j]
+                    if agent2["fullid"] == partnerid:
+                        if j < i:
+                            if site1["type"] == "edit":
+                                ordered_edits.insert(0, site1)
+                            elif site1["type"] == "context":
+                                ordered_context.insert(0, site1)
+                        elif j >= i:
+                            if site1["type"] == "edit":
+                                ordered_edits.append(site1)
+                            elif site1["type"] == "context":
+                                ordered_context.append(site1)
+                        break
+        for site1 in agent1["sites"]:
+            if site1["bond"] == None:
+                if site1["type"] == "edit":
+                    ordered_edits.append(site1)
+                elif site1["type"] == "context":
+                    ordered_context.append(site1)
+        agent1["sites"] = ordered_edits + ordered_context
 
     # Write string with sites in the order determined by the previous sorting.
     context_str = ""
-    
-    
+    first_agent = True
+    for agent in full_context:
+         # Find if agent contains edits.
+         contains_edits = False
+         for site in agent["sites"]:
+             if site["type"] == "edit":
+                 contains_edits = True
+                 break
+         # Add comma.
+         if first_agent == False:
+             context_str += ", "
+         else:
+             first_agent = False
+         # Write agent.
+         if contains_edits == True:
+             context_str += "<B>"
+         context_str += "{}".format(agent["fullid"])
+         if contains_edits == True:
+             context_str += "</B>"
+         # Write sites.
+         context_str += "("
+         first_site = True
+         for site in agent["sites"]:
+             # Add space.
+             if first_site == False:
+                 context_str += "&nbsp;"
+             else:
+                 first_site = False
+             if site["type"] == "edit":
+                 context_str += "<B>"
+             context_str += site["site"]
+             if site["bond"] != None:
+                 context_str += "[{}]".format(site["bond"]["num"])
+             if site["value"] != None:
+                 context_str += "{{{}}}".format(site["value"])
+             if site["type"] == "edit":
+                 context_str += "</B>"
+         context_str += ")"
 
     return context_str
 
 
-def write_kappa_expression(site, bond="num", hidevalue=False):
+def write_kappa_expression(site, bond="num", hidevalue=False, hideid=False):
     """
     Write an agent as a string using Kappa language.
     The value of bond can be either 'num' or 'partner'.
@@ -2868,7 +3107,8 @@ def write_kappa_expression(site, bond="num", hidevalue=False):
 
     site_str = ""
     site_str += "{}".format(site["agent"])
-    site_str += ":{}".format(site["agentid"])
+    if hideid == False:
+        site_str += ":{}".format(site["agentid"])
     site_str += "({}".format(site["site"])
     if hidevalue == False:
         if site["bond"] != None:
@@ -2879,9 +3119,11 @@ def write_kappa_expression(site, bond="num", hidevalue=False):
                     site_str += "[{}]".format(site["bond"]["num"])
                 elif bond == "partner":
                     partner = site["bond"]["partner"]
-                    site_str += "[{}.{}:{}]".format(partner["site"],
-                                                     partner["agent"],
-                                                     partner["agentid"])
+                    site_str += "[{}.{}".format(partner["site"],
+                                                partner["agent"])
+                    if hideid == False:
+                        site_str += "{}".format(partner["agentid"])
+                    site_str += "]"
         if site["value"] != None:
             site_str += "{{{}}}".format(site["value"])
     elif hidevalue == True:
@@ -2894,26 +3136,34 @@ def write_kappa_expression(site, bond="num", hidevalue=False):
     return site_str
 
 
-def compare_state_test(state, test):
-    """ Determine if a state and test represent the same species. """
+def compare_states(state1, state2, ignorevalue=False, ignoreid=False):
+    """ Determine if two states (two lists of sites) are the same. """
 
-    list1 = state.copy()
-    list2 = test.copy()
+    list1 = state1.copy()
+    list2 = state2.copy()
     found1 = []
     found2 = []
     for i in range(len(list1)):
-        site1_str = write_kappa_expression(list1[i], bond="partner")
+        site1_str = write_kappa_expression(list1[i], bond="partner",
+                                           hidevalue=ignorevalue,
+                                           hideid=ignoreid)
         for site2 in list2:
-            site2_str = write_kappa_expression(site2, bond="partner")
+            site2_str = write_kappa_expression(site2, bond="partner",
+                                               hidevalue=ignorevalue,
+                                               hideid=ignoreid)
             if site1_str == site2_str:
                 found1.insert(0, i)
                 break
-    for i in range(len(list2)):
-        site2_str = write_kappa_expression(list2[i], bond="partner")
+    for j in range(len(list2)):
+        site2_str = write_kappa_expression(list2[j], bond="partner",
+                                           hidevalue=ignorevalue,
+                                           hideid=ignoreid)
         for site1 in list1:
-            site1_str = write_kappa_expression(site1, bond="partner")
+            site1_str = write_kappa_expression(site1, bond="partner",
+                                               hidevalue=ignorevalue,
+                                               hideid=ignoreid)
             if site2_str == site1_str:
-                found2.insert(0, i)
+                found2.insert(0, j)
                 break
     for i in found1:
         del(list1[i])
@@ -2925,6 +3175,74 @@ def compare_state_test(state, test):
         are_same = False
 
     return are_same
+
+
+def compare_outputs(output1, output2):
+    """ Determine if two outputs (two lists of states) are the same. """
+
+    list1 = output1.copy()
+    list2 = output2.copy()
+    found1 = []
+    found2 = []
+    for i in range(len(list1)):
+        state1 = list1[i]
+        for state2 in list2:
+            same_states = compare_states(state1, state2, ignorevalue=False,
+                                         ignoreid=True)
+            if same_states:
+                found1.insert(0, i)
+                break
+    for j in range(len(list2)):
+        state2 = list2[j]
+        for state1 in list1:
+            same_states = compare_states(state2, state1, ignorevalue=False,
+                                         ignoreid=True)
+            if same_states:
+                found2.insert(0, j)
+                break
+    for i in found1:
+        del(list1[i])
+    for j in found2:
+        del(list2[j])
+    if len(list1) == 0 and len(list2) == 0:
+        are_same = True
+    else:
+        are_same = False
+
+    return are_same
+
+
+#def compare_state_test(state, test):
+#    """ Determine if a state and test represent the same species. """
+#
+#    list1 = state.copy()
+#    list2 = test.copy()
+#    found1 = []
+#    found2 = []
+#    for i in range(len(list1)):
+#        site1_str = write_kappa_expression(list1[i], bond="partner")
+#        for site2 in list2:
+#            site2_str = write_kappa_expression(site2, bond="partner")
+#            if site1_str == site2_str:
+#                found1.insert(0, i)
+#                break
+#    for j in range(len(list2)):
+#        site2_str = write_kappa_expression(list2[j], bond="partner")
+#        for site1 in list1:
+#            site1_str = write_kappa_expression(site1, bond="partner")
+#            if site2_str == site1_str:
+#                found2.insert(0, j)
+#                break
+#    for i in found1:
+#        del(list1[i])
+#    for j in found2:
+#        del(list2[j])
+#    if len(list1) == 0 and len(list2) == 0:
+#        are_same = True
+#    else:
+#        are_same = False
+#
+#    return are_same
 
 
 def state_from_action(signatures, action, bnd_num):
@@ -2981,6 +3299,8 @@ def state_from_action(signatures, action, bnd_num):
         state.append({"agent":agent, "agentid": agid_n, "site":site,
                       "bond":".", "value":None, "action":4})
     #if action[0] == 5: # Remove (I still do not have any example).
+    for site in state:
+        site["type"] = "edit"
 
     return state, bnd_num
 
