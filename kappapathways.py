@@ -41,6 +41,7 @@ class EventNode(object):
         self.highlighted = highlighted
         self.pos = pos
         self.check_types()
+        self.edits = []
 
 
     def check_types(self):
@@ -79,13 +80,13 @@ class StateNode(object):
     are changed by an event.
     """
 
-    def __init__(self, nodeid, state, label, rank=None, weight=1, rel_wei=1.0,
+    def __init__(self, nodeid, edit, label, rank=None, weight=1, rel_wei=1.0,
                  occurrence=1, rel_occ=1.0, intro=False, first=False,
                  highlighted=False, pos=None, eventid=None, context=[]):
         """ Initialize class StateNode. """
 
         self.nodeid = nodeid
-        self.state = state
+        self.edit = edit
         self.label = label
         self.rank = rank
         self.weight = weight # Taken from the stories.
@@ -2507,18 +2508,19 @@ def tweakstories(eoi, showintro=True, addedgelabels=False,
         outfile.write(story.dot_file)
         outfile.close()
 
-#def getcustomstories(eoi, kappamodel, kasimpath, kaflowpath, kastorpath,
-#                     simtime=1000, simseed=None):
-#    """
-#    Build custom stories using a combination of causal cores from KaFlow and
-#    compressed stories from KaStor.
-#    """
-#
-#    new_model = add_eoi(eoi, kappamodel)
-#    trace_path = run_kasim(new_model, kasimpath, simtime, simseed)
-#    run_kaflow(eoi, trace_path, kaflowpath, precedenceonly=True)
-#    run_kaflow(eoi, trace_path, kaflowpath, precedenceonly=False)
-#    fillsiphon(eoi, kappamodel, kastorpath)
+# Get StateNodes:
+# A state is a list of sites.
+# A site is a dict with agent id, site name, binding and internal value, etc.
+# Sites also have a type, which can be edit or context.
+# EventNodes contain a list of states, each state coming from one action
+# from the trace.
+# All sites of every states of an EventNode are of type edit.
+# Each state of an EventNode gives rise to one StateNode.
+# Each StateNode contains one state, which is a list of sites, some of which
+# are of type edit and some of type context.
+# The context sites of a StateNode are given by the cumulative relevant
+# context of the story.
+
 
 def showcontext(eoi, kappamodel, showintro=True, addedgelabels=False,
                 showedgelabels=False, edgeid=True, edgeocc=False,
@@ -2545,80 +2547,78 @@ def showcontext(eoi, kappamodel, showintro=True, addedgelabels=False,
         # Reset hyperedges.
         story.hyperedges = []
         # Get actions for each event node.
-        for node in story.eventnodes:
-            node.states = []
-            step = steps[int(node.nodeid)]
+        for eventnode in story.eventnodes:
+            step = steps[int(eventnode.nodeid)]
             bnd_num = 1
+            editlist = []
             if step[0] == 1: # Rule
                 actions = step[2][1]
-                tmp_states = []
                 for action in actions:
-                    state, bnd_num = state_from_action(signatures, action,
-                                                       bnd_num)
-                    tmp_states.append(state)
-                node.states = tmp_states
+                    edit, bnd_num = state_from_action(signatures, action,
+                                                      bnd_num)
+                    editlist.append(edit)
+                eventnode.edits = editlist
             if step[0] == 3: # Init
                 actions = step[1]
-                tmp_states = []
                 for action in actions:
-                    state, bnd_num = state_from_action(signatures, action,
+                    edit, bnd_num = state_from_action(signatures, action,
                                                        bnd_num)
                     # Check if last state is the same Bind_to as a previous
                     # one but reversed.
-                    add_state = True
+                    add_edit = True
                     if action[0] == 3:
-                        ag1 = state[0]["agent"]
-                        ag2 = state[1]["agent"]
-                        id1 = state[0]["agentid"]
-                        id2 = state[1]["agentid"]
-                        for prev_state in tmp_states:
-                            if prev_state[0]["action"] == 3:
-                                pa1 = prev_state[0]["agent"]
-                                pa2 = prev_state[1]["agent"]
-                                pi1 = prev_state[0]["agentid"]
-                                pi2 = prev_state[1]["agentid"]
+                        ag1 = edit[0]["agent"]
+                        ag2 = edit[1]["agent"]
+                        id1 = edit[0]["agentid"]
+                        id2 = edit[1]["agentid"]
+                        for prev_edit in editlist:
+                            if prev_edit[0]["action"] == 3:
+                                pa1 = prev_edit[0]["agent"]
+                                pa2 = prev_edit[1]["agent"]
+                                pi1 = prev_edit[0]["agentid"]
+                                pi2 = prev_edit[1]["agentid"]
                                 if pa1 == ag2 and pi1 == id2:
                                     if pa2 == ag1 and pi2 == id1:
-                                        add_state = False
-                    if add_state == True:
-                        tmp_states.append(state)
+                                        add_edit = False
+                    if add_edit == True:
+                        editlist.append(edit)
                 # Remove creations if the agents are present in other actions.
-                for tmp_state in tmp_states:
-                    keep_state = True
-                    if tmp_state[0]["action"] == 0:
-                        ag1 = state[0]["agent"]
-                        id1 = state[0]["agentid"]
-                        for tmp_state2 in tmp_states:
-                            if tmp_state2[0]["action"] != 0:
-                                for elem in tmp_state2:
+                for edit in editlist:
+                    keep_edit = True
+                    if edit[0]["action"] == 0:
+                        ag1 = edit[0]["agent"]
+                        id1 = edit[0]["agentid"]
+                        for edit2 in editlist:
+                            if edit2[0]["action"] != 0:
+                                for elem in edit2:
                                     ag2 = elem["agent"]
                                     id2 = elem["agentid"]
                                     if ag1 == ag2 and id1 == id2:
-                                        keep_state = False
-                    if keep_state == True:    
-                        node.states.append(tmp_state)
+                                        keep_edit = False
+                    if keep_edit == True:    
+                        eventnode.edits.append(edit)
         # Add a StateNode for each state of EventNodes.
         state_id = 1
-        for node in story.eventnodes:
-            for state in node.states:
+        for eventnode in story.eventnodes:
+            for edit in eventnode.edits:
                 node_id = "state{}".format(state_id)
-                rank = node.rank + 0.5
-                state_str = ""
-                for i in range(len(state)):
-                    site_str = write_kappa_expression(state[i], "num")
-                    state_str += site_str
-                    if i < len(state)-1:
-                        state_str += ", "
-                label = state_str
-                new_state_node = StateNode(node_id, state, label, rank)
+                rank = eventnode.rank + 0.5
+                edit_str = ""
+                for i in range(len(edit)):
+                    site_str = write_kappa_expression(edit[i], "num")
+                    edit_str += site_str
+                    if i < len(edit)-1:
+                        edit_str += ", "
+                label = edit_str
+                new_state_node = StateNode(node_id, edit, label, rank)
                 story.statenodes.append(new_state_node)
-                new_edge = CausalEdge(node, new_state_node)
+                new_edge = CausalEdge(eventnode, new_state_node)
                 story.causaledges.append(new_edge)
                 state_id += 1
         # Get tests for each event node.
-        for node in story.eventnodes:
-            node.tests = []
-            step = steps[int(node.nodeid)]
+        for eventnode in story.eventnodes:
+            eventnode.tests = []
+            step = steps[int(eventnode.nodeid)]
             bnd_num = 1
             tests = None
             if step[0] == 1: # Rule
@@ -2635,13 +2635,13 @@ def showcontext(eoi, kappamodel, showintro=True, addedgelabels=False,
                     state, bnd_num = state_from_test(signatures, test, bnd_num)
                     if state[0]["test"] != 0:
                         tmp_states.append(state)
-                node.tests = tmp_states
+                eventnode.tests = tmp_states
         # Add edges between state nodes and the event nodes that require them.
         for statenode in story.statenodes:
             for eventnode in story.eventnodes:
                 editused = False
                 for eventtest in eventnode.tests:
-                    are_same = compare_states(statenode.state, eventtest)
+                    are_same = compare_states(statenode.edit, eventtest)
                     if are_same == True:
                         editused = True
                         break
@@ -2713,7 +2713,7 @@ def showcontext(eoi, kappamodel, showintro=True, addedgelabels=False,
         outfile.write(story.dot_file)
         outfile.close()
 
-    # Then write context (Later put in a separate function?)
+    # Then write state (context + edit).
     """ Get the cumulative relevant context for each state node. """
 
     for story in stories:
@@ -2738,7 +2738,7 @@ def showcontext(eoi, kappamodel, showintro=True, addedgelabels=False,
             # Keep only the first value encountered for each state node
             # path while going up.
             seen_sites = []
-            for site in statenode.state:
+            for site in statenode.edit:
                 site_str = write_kappa_expression(site, "num", True)
                 seen_sites.append(site_str)
             for path in state_paths:
@@ -2746,7 +2746,7 @@ def showcontext(eoi, kappamodel, showintro=True, addedgelabels=False,
                     # All agents of a state node must be unseen before to
                     # keep the node.
                     keep_node = True
-                    for site in node.state:
+                    for site in node.edit:
                         site_str = write_kappa_expression(site, "num", True)
                         if site_str in seen_sites:
                             keep_node = False
@@ -2754,6 +2754,14 @@ def showcontext(eoi, kappamodel, showintro=True, addedgelabels=False,
                             seen_sites.append(site_str)
                     if keep_node == True and node not in cumul_nodes:
                         cumul_nodes.append(node)
+            # Also add all the state nodes which have the same event as source.
+            for edge in story.causaledges:
+                if edge.target == statenode:
+                    source_event = edge.source
+            for edge in story.causaledges:
+                if edge.source == source_event:
+                    if edge.target != statenode:
+                        cumul_nodes.append(edge.target)
             # Check which of the cumul nodes are relevant for the future of the
             # current state node.
             relevant_nodes = []
@@ -2776,10 +2784,23 @@ def showcontext(eoi, kappamodel, showintro=True, addedgelabels=False,
                     relevant_nodes.append(cumul_node)
             # Build current state node context from the state of
             # all the relevant_nodes.
-            statenode.context = []
+            # ----
+            # This part was wrong. The state (edit+context) of a statenode
+            # should not be given as a list of states but as a single lsit
+            # of sites.
+            #statenode.context = []
+            #for relevant_node in relevant_nodes:
+            #    statenode.context.append(relevant_node.state)
+            #lbl = write_context_expression(statenode.state, statenode.context)
+            #statenode.label = lbl
+            # Instead do:
+            statenode.state = statenode.edit.copy()
             for relevant_node in relevant_nodes:
-                statenode.context.append(relevant_node.state)
-            lbl = write_context_expression(statenode.state, statenode.context)
+                for site in relevant_node.edit:
+                    context_site = site.copy()
+                    context_site["type"] = "context"
+                    statenode.state.append(context_site)
+            lbl = write_context_expression(statenode.state)
             statenode.label = lbl
         # Weight edges to align rule outputs 
         for edge in story.causaledges:
@@ -2808,8 +2829,11 @@ def showcontext(eoi, kappamodel, showintro=True, addedgelabels=False,
     rule_names = []
     res_states = []
     for story in stories:
-        for node in story.eventnodes:
-            output_states = get_output_of_node(story, node)
+        for eventnode in story.eventnodes:
+            # eventnode.output is a list of states, one per target state node.
+            ## This is different from how it was before, simpler
+            eventnode.output = get_output_of_node(story, eventnode)
+            #output_states = get_output_of_node(story, node)
             ## Get output state nodes.
             #output_nodes = []
             #for edge in story.causaledges:
@@ -2850,6 +2874,13 @@ def showcontext(eoi, kappamodel, showintro=True, addedgelabels=False,
 
     # Find the common part between the different outputs of a same rule
     # to remove if from the label.
+    for i in range(len(sorted_res_states)):
+        outputs = sorted_res_states[i]
+        print(rule_names[i])
+        for output in outputs:
+            print(output)
+            print("---")
+        print("===")
 
     # Assign new names to rules that occur in different context.
     for story in stories:
@@ -2860,7 +2891,7 @@ def showcontext(eoi, kappamodel, showintro=True, addedgelabels=False,
                     output_states = get_output_of_node(story, node)
                     output_set = None
                     for i in range(len(sorted_res_states[rule_index])):
-                        output = res_states[rule_index][i]
+                        output = sorted_res_states[rule_index][i]
                         are_same = compare_outputs(output["output"],
                                                    output_states)
                         if are_same:
@@ -2911,7 +2942,8 @@ def get_output_of_node(story, node):
     return output_states
 
 
-def write_context_expression(edits, context):
+#def write_context_expression(edits, context):
+def write_context_expression(state):
     """
     Write a Kappa language string with the edit in bold font and context in
     normal font. The string is made to be read as html to allow special fonts.
@@ -2920,8 +2952,28 @@ def write_context_expression(edits, context):
     # Group sites that concern the same agent together.
     agent_map = []
     all_agents = []
-    for site in edits:
-        site["type"] = "edit"
+    #for site in edits:
+    #    site["type"] = "edit"
+    #    fullid = "{}:{}".format(site["agent"], site["agentid"])
+    #    if fullid not in agent_map:
+    #        agent_map.append(fullid)
+    #        all_agents.append({"fullid": fullid, "sites": [site],
+    #                           "nbonds": 0})
+    #    else:
+    #        agent_index = agent_map.index(fullid)
+    #        all_agents[agent_index]["sites"].append(site)
+    #for state in context:
+    #    for site in state:
+    #        site["type"] = "context"
+    #        fullid = "{}:{}".format(site["agent"], site["agentid"])
+    #        if fullid not in agent_map:
+    #            agent_map.append(fullid)
+    #            all_agents.append({"fullid": fullid, "sites": [site],
+    #                               "nbonds": 0})
+    #        else:
+    #            agent_index = agent_map.index(fullid)
+    #            all_agents[agent_index]["sites"].append(site)
+    for site in state:
         fullid = "{}:{}".format(site["agent"], site["agentid"])
         if fullid not in agent_map:
             agent_map.append(fullid)
@@ -2930,17 +2982,6 @@ def write_context_expression(edits, context):
         else:
             agent_index = agent_map.index(fullid)
             all_agents[agent_index]["sites"].append(site)
-    for state in context:
-        for site in state:
-            site["type"] = "context"
-            fullid = "{}:{}".format(site["agent"], site["agentid"])
-            if fullid not in agent_map:
-                agent_map.append(fullid)
-                all_agents.append({"fullid": fullid, "sites": [site],
-                                   "nbonds": 0})
-            else:
-                agent_index = agent_map.index(fullid)
-                all_agents[agent_index]["sites"].append(site)
     # Sort agents by the number of bonds that they have.
     for agent in all_agents:
         nbonds = 0
