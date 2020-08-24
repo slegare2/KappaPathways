@@ -51,9 +51,9 @@ class EventNode(object):
             raise TypeError("nodeid should be a string.")
         if not isinstance(self.label, str):
             raise TypeError("label should be a string.")
-        if self.rank != None:
-            if not isinstance(self.rank, int):
-                raise TypeError("rank should be an integer.")
+        #if self.rank != None:
+        #    if not isinstance(self.rank, int):
+        #        raise TypeError("rank should be an integer.")
         if self.occurrence != None:
             if not isinstance(self.occurrence, int):
                 raise TypeError("occurrence should be an integer.")
@@ -80,13 +80,13 @@ class StateNode(object):
     are changed by an event.
     """
 
-    def __init__(self, nodeid, edit, label, rank=None, weight=1, rel_wei=1.0,
+    def __init__(self, nodeid, label, rank=None, weight=1, rel_wei=1.0,
                  occurrence=1, rel_occ=1.0, intro=False, first=False,
-                 highlighted=False, pos=None, eventid=None, context=[]):
+                 highlighted=False, pos=None, eventid=None, edit=None,
+                 context=[]):
         """ Initialize class StateNode. """
 
         self.nodeid = nodeid
-        self.edit = edit
         self.label = label
         self.rank = rank
         self.weight = weight # Taken from the stories.
@@ -97,6 +97,7 @@ class StateNode(object):
         self.first = first
         self.highlighted = highlighted
         self.pos = pos
+        self.edit = edit
         self.context = context
         self.check_types()
 
@@ -597,7 +598,7 @@ class CausalGraph(object):
     """ Data structure for causal graphs. """
 
     def __init__(self, filename=None, eoi=None, meshedgraph=False,
-                 nodestype="event", showintro=True, precedenceonly=False,
+                 processed=False, showintro=True, precedenceonly=False,
                  rankposdict=None):
         """ Initialize class CausalGraph. """
 
@@ -605,7 +606,7 @@ class CausalGraph(object):
         self.filename = filename
         self.eoi = eoi
         self.meshedgraph = meshedgraph
-        self.nodestype = nodestype # event or species
+        self.processed = processed
         self.showintro = showintro
         self.precedenceonly = precedenceonly
         self.rankposdict = rankposdict
@@ -633,10 +634,12 @@ class CausalGraph(object):
             self.read_dot(self.filename)
 
 
+    #def read_dualstory(self, dotpath):
+    #    """ Read nodes and edges from input dual story. """
+
+
     def read_dot(self, dotpath):
-        """
-        Read nodes and edges from input causal graph.
-        """
+        """ Read nodes and edges from input causal graph. """
 
         rank = None
         self.label_mapping = {}
@@ -648,10 +651,12 @@ class CausalGraph(object):
                 self.precedenceonly = False
             if 'meshedgraph="True"' in line:
                 self.meshedgraph = True
-            if "nodestype=" in line:
-                type_index = line.index("nodestype")
-                quote = line.rfind('"')
-                self.nodestype = line[type_index+11:quote]
+            #if "nodestype=" in line:
+            #    type_index = line.index("nodestype")
+            #    quote = line.rfind('"')
+            #    self.nodestype = line[type_index+11:quote]
+            if 'processed="True"' in line:
+                self.processed = True
             if 'showintro="False"' in line:
                 self.showintro = False
             if "eoi=" in line:
@@ -669,19 +674,28 @@ class CausalGraph(object):
             if "maxrank=" in line:
                 maxrank_index = line.index("maxrank")
                 quote = line.rfind('"')
-                self.maxrank = int(line[maxrank_index+9:quote])
+                maxr_str = line[maxrank_index+9:quote]
+                if "." in maxr_str:
+                    self.maxrank = float(line[maxrank_index+9:quote])
+                else:
+                    self.maxrank = int(line[maxrank_index+9:quote])
             if "rank = same" in line:
                 open_quote = line.index('"')
                 close_quote = line[open_quote+1:].index('"')+open_quote+1
-                medrank = float(line[open_quote+1:close_quote])
-                rank = int(medrank)
+                rank_str = line[open_quote+1:close_quote]
+                if "." in rank_str:
+                    rank = float(rank_str)
+                else:
+                    rank = int(rank_str)
+                #medrank = float(line[open_quote+1:close_quote])
+                #rank = int(medrank)
             if line[0] == "}":
                 rank = None
             # Read nodes.
             if "label=" in line and "Occurrence" not in line:
                 if "->" not in line and "rank = same" not in line:
                     if line[0:2] == "//":
-                       read_line = line[2:]
+                       dead_line = line[2:]
                     else:
                        read_line = line
                     tokens = read_line.split()
@@ -692,10 +706,14 @@ class CausalGraph(object):
                     #    node_id = "node{}".format(ori_id)
                     #else:
                     node_id = ori_id
-                    label_start = read_line.index("label=")+7
-                    label_end = read_line[label_start:].index('"')+label_start
-                    label_str = read_line[label_start:label_end].strip()
+                    lbl_start = read_line.index("label=")+7
+                    if ">" in read_line:
+                        lbl_end = read_line[lbl_start:].rfind('>')+lbl_start
+                    else:
+                        lbl_end = read_line[lbl_start:].index('"')+lbl_start
+                    label_str = read_line[lbl_start:lbl_end].strip()
                     label = label_str.replace("\\n ", "")
+                    label = label.replace(" <br/>", "")
                     if "intro=True" in read_line:
                         is_intro = True
                     else:
@@ -722,11 +740,18 @@ class CausalGraph(object):
                         elif 'cover="True"' in line:
                             self.covermidnodes.append(new_midnode)
                     else:
-                        self.eventnodes.append(EventNode(node_id, label,
-                                                         rank,
-                                                         intro=is_intro,
-                                                         first=is_first))
-                        self.label_mapping[node_id] = label
+                        if "state" in node_id:
+                            self.statenodes.append(StateNode(node_id, label,
+                                                             rank,
+                                                             intro=is_intro,
+                                                             first=is_first))
+                            self.label_mapping[node_id] = label
+                        else:
+                            self.eventnodes.append(EventNode(node_id, label,
+                                                             rank,
+                                                             intro=is_intro,
+                                                             first=is_first))
+                            self.label_mapping[node_id] = label
         # Read edges.
         tmp_edges = []
         tmp_midedges = []
@@ -753,11 +778,16 @@ class CausalGraph(object):
                 #    target_id = "node{}".format(target_id)
                 source = None
                 target = None
-                for node in self.eventnodes:
-                    if node.nodeid == source_id:
-                        source = node
-                    if node.nodeid == target_id:
-                        target = node
+                for eventnode in self.eventnodes:
+                    if eventnode.nodeid == source_id:
+                        source = eventnode
+                    if eventnode.nodeid == target_id:
+                        target = eventnode
+                for statenode in self.statenodes:
+                    if statenode.nodeid == source_id:
+                        source = statenode
+                    if statenode.nodeid == target_id:
+                        target = statenode
                 #for node in self.midnodes:
                 #    if node.nodeid == source_id:
                 #        source = node
@@ -836,29 +866,42 @@ class CausalGraph(object):
         of meshes from the intermediary nodes and edges.
         """
 
-        if self.meshedgraph == False:
-            self.create_hyperedges()
-            #self.find_edgegroups()
-            #self.create_meshes(self.edgegroups, 1)
-            for node in self.eventnodes:
-                if "Intro" in node.label:
-                    node.intro = True
-                    node.label = node.label[6:]
-                    if node.label == "Lig, Lig":
-                        node.label = "Lig"
+        for node in self.eventnodes:
+            if "Intro" in node.label:
+                node.intro = True
+                node.label = node.label[6:]
+                if node.label == "Lig, Lig":
+                    node.label = "Lig"
+        self.create_hyperedges()
+        if self.processed == False:
             self.find_first_rules()
             self.rank_sequentially()
             self.rm_superfluous_causal_edges()
             self.align_vertical()
-        elif self.meshedgraph == True:
-           self.find_midnodegroups(cover=False)
-           self.find_midnodegroups(cover=True)
-           self.read_meshes(cover=False)
-           self.read_meshes(cover=True)
-           sorted_meshes = sorted(self.meshes, key=lambda x: x.meshid)
-           sorted_covermeshes = sorted(self.covermeshes, key=lambda x: x.meshid)
-           self.meshes = sorted_meshes
-           self.covermeshes = sorted_covermeshes
+
+        #if self.meshedgraph == False:
+        #    self.create_hyperedges()
+        #    #self.find_edgegroups()
+        #    #self.create_meshes(self.edgegroups, 1)
+        #    for node in self.eventnodes:
+        #        if "Intro" in node.label:
+        #            node.intro = True
+        #            node.label = node.label[6:]
+        #            if node.label == "Lig, Lig":
+        #                node.label = "Lig"
+        #    self.find_first_rules()
+        #    self.rank_sequentially()
+        #    self.rm_superfluous_causal_edges()
+        #    self.align_vertical()
+        #elif self.meshedgraph == True:
+        #   self.find_midnodegroups(cover=False)
+        #   self.find_midnodegroups(cover=True)
+        #   self.read_meshes(cover=False)
+        #   self.read_meshes(cover=True)
+        #   sorted_meshes = sorted(self.meshes, key=lambda x: x.meshid)
+        #   sorted_covermeshes = sorted(self.covermeshes, key=lambda x: x.meshid)
+        #   self.meshes = sorted_meshes
+        #   self.covermeshes = sorted_covermeshes
         if self.eoi == None:
             self.get_maxrank()
             for node in self.nodes:
@@ -869,6 +912,7 @@ class CausalGraph(object):
     def create_hyperedges(self):
         """ Create hyperedges by grouping edges with the same target. """
 
+        self.hyperedges = []
         for edge in self.causaledges:
             edge_found = False
             for hyperedge in self.hyperedges:
@@ -1879,7 +1923,8 @@ class CausalGraph(object):
         dot_str = 'digraph G{\n'
         dot_str += '  precedenceonly="{}" ;\n'.format(self.precedenceonly)
         dot_str += '  meshedgraph="{}" ;\n'.format(self.meshedgraph)
-        dot_str += '  nodestype="{}" ;\n'.format(self.nodestype)
+        #dot_str += '  nodestype="{}" ;\n'.format(self.nodestype)
+        dot_str += '  processed="{}" ;\n'.format(self.processed)
         if self.eoi != None:
             dot_str += '  eoi="{}" ;\n'.format(self.eoi)
         if self.occurrence != None:
@@ -1908,12 +1953,12 @@ class CausalGraph(object):
         average_weight = statistics.mean(all_weights)
         # Draw nodes.
         midranks = 1
-        for int_rank in range((self.maxrank+1)*(midranks+1)):
+        for int_rank in range(int((self.maxrank+1)*(midranks+1))):
             current_rank = int_rank/(midranks+1)
             rank_str = "{}".format(current_rank)
             if showintro == False and current_rank < 1:
                 dot_str += "//"
-            if current_rank%1 == 0:
+            if current_rank%1 == 0 and current_rank <= self.maxrank:
                 rank_str = str(int(current_rank))
                 dot_str += ('{{ rank = same ; "{}" ['
                             'shape=plaintext'.format(rank_str))
@@ -1942,8 +1987,8 @@ class CausalGraph(object):
                     if node.label == self.eoi:
                         node_shape = 'ellipse'
                         node_color = 'indianred2'
-                    if self.nodestype == 'species':
-                        node_shape = 'ellipse'
+                    #if self.nodestype == 'species':
+                    #    node_shape = 'ellipse'
                     if showintro == False and node.intro == True:
                         dot_str += '//'
                     node_lines = textwrap.wrap(node.label, 20,
@@ -2042,7 +2087,7 @@ class CausalGraph(object):
         #                    average_use, minpenwidth, medpenwidth, maxpenwidth)
         #                dot_str += ', cover="True"] ;\n'
         # Draw invisible ranking edges.
-        for int_rank in range(self.maxrank*(midranks+1)):
+        for int_rank in range(int(self.maxrank*(midranks+1))):
             rank = int_rank/(midranks+1)
             if showintro == False and rank < 1:
                 dot_str += '//'
@@ -2503,6 +2548,7 @@ def tweakstories(eoi, showintro=True, addedgelabels=False,
     # Tweak each story.
     for i in range(len(stories)):
         stories[i].filename = "story-{}.dot".format(i+1)
+        stories[i].processed = True
     for story in stories:
         #story.compute_relstats()
         #story.compute_visuals(showintro, color=False)
@@ -2512,6 +2558,8 @@ def tweakstories(eoi, showintro=True, addedgelabels=False,
         outfile = open(output_path, "w")
         outfile.write(story.dot_file)
         outfile.close()
+
+# ;;;;;;;;;;;;;;;;;;;;;;;;;;;; Context Section ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 # Get StateNodes:
 # A state is a list of sites.
@@ -2549,11 +2597,14 @@ def tweakstories(eoi, showintro=True, addedgelabels=False,
 # partner = {"agentname": ,"agentid": ,"sitename":}
 
 
-def showcontext(eoi, kappamodel, showintro=True, addedgelabels=False,
-                showedgelabels=False, edgeid=True, edgeocc=False,
-                edgeuse=False, statstype="abs", writedot=True,
-                weightedges=True):
-    """ Add dual nodes showing the states edited by every event. """
+def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
+                   showedgelabels=False, edgeid=True, edgeocc=False,
+                   edgeprob=False, statstype="abs", writedot=True,
+                   weightedges=True):
+    """
+    Add state nodes showing what was edited by rules along with
+    the relevant context.
+    """
 
     # Reading section.
     story_files = get_dot_files("{}".format(eoi), "story")
@@ -2646,7 +2697,7 @@ def showcontext(eoi, kappamodel, showintro=True, addedgelabels=False,
                     if i < len(edit)-1:
                         edit_str += ", "
                 label = edit_str
-                new_state_node = StateNode(node_id, edit, label, rank)
+                new_state_node = StateNode(node_id, label, rank, edit=edit)
                 story.statenodes.append(new_state_node)
                 new_edge = CausalEdge(eventnode, new_state_node)
                 story.causaledges.append(new_edge)
@@ -2738,20 +2789,16 @@ def showcontext(eoi, kappamodel, showintro=True, addedgelabels=False,
         for j in edges_to_remove:
             del(story.causaledges[j])
         story.create_hyperedges()
-    # Write stories with edited states.
-    for i in range(len(stories)):
-        stories[i].filename = "edits-{}.dot".format(i+1)
-        #for statenode  in story.statenodes:
-        #    if statenode.nodeid == "state1":
-        #        print(statenode.edit)
-        #        print("IUGUYG")
-    for story in stories:
-        story.build_dot_file(showintro, addedgelabels, showedgelabels,
-                             edgeid, edgeocc, edgeuse, statstype, weightedges)
-        output_path = "{}/{}".format(eoi, story.filename)
-        outfile = open(output_path, "w")
-        outfile.write(story.dot_file)
-        outfile.close()
+    ## Write stories with edited states.
+    #for i in range(len(stories)):
+    #    stories[i].filename = "edits-{}.dot".format(i+1)
+    #for story in stories:
+    #    story.build_dot_file(showintro, addedgelabels, showedgelabels,
+    #                         edgeid, edgeocc, edgeprob, statstype, weightedges)
+    #    output_path = "{}/tmp/{}".format(eoi, story.filename)
+    #    outfile = open(output_path, "w")
+    #    outfile.write(story.dot_file)
+    #    outfile.close()
 
     # Then write state (context + edit).
     """ Get the cumulative relevant context for each state node. """
@@ -2778,7 +2825,6 @@ def showcontext(eoi, kappamodel, showintro=True, addedgelabels=False,
             # Keep only the first value encountered for each site encountered
             # while following path up.
             seen_sites = []
-            #print("==>", statenode.label)
             for agent in statenode.edit:
                 if agent["sites"] != None:
                     for site in agent["sites"]:
@@ -2816,9 +2862,6 @@ def showcontext(eoi, kappamodel, showintro=True, addedgelabels=False,
                 if edge.source == source_event:
                     if edge.target != statenode:
                         cumul_nodes.append(edge.target)
-            #for cu in cumul_nodes:
-            #    print(cu.edit)
-            #    print("----")
             # Check which of the cumul nodes are relevant for the future of the
             # current state node.
             relevant_nodes = []
@@ -2841,16 +2884,6 @@ def showcontext(eoi, kappamodel, showintro=True, addedgelabels=False,
                     relevant_nodes.append(cumul_node)
             # Build current state node context from the state of
             # all the relevant_nodes.
-            # ----
-            # This part was wrong. The state (edit+context) of a statenode
-            # should not be given as a list of states but as a single lsit
-            # of sites.
-            #statenode.context = []
-            #for relevant_node in relevant_nodes:
-            #    statenode.context.append(relevant_node.state)
-            #lbl = write_context_expression(statenode.state, statenode.context)
-            #statenode.label = lbl
-            # Instead do:
             full_state = copy.deepcopy(statenode.edit)
             for relevant_node in relevant_nodes:
                 for agent in relevant_node.edit:
@@ -2875,16 +2908,16 @@ def showcontext(eoi, kappamodel, showintro=True, addedgelabels=False,
                     edge.weight = 0
         story.create_hyperedges()
 
-    # Write stories with context on state nodes.
-    for i in range(len(stories)):
-        stories[i].filename = "context-{}.dot".format(i+1)
-    for story in stories:
-        story.build_dot_file(showintro, addedgelabels, showedgelabels,
-                             edgeid, edgeocc, edgeuse, statstype, weightedges)
-        output_path = "{}/{}".format(eoi, story.filename)
-        outfile = open(output_path, "w")
-        outfile.write(story.dot_file)
-        outfile.close()
+    ## Write stories with context on state nodes.
+    #for i in range(len(stories)):
+    #    stories[i].filename = "state-{}.dot".format(i+1)
+    #for story in stories:
+    #    story.build_dot_file(showintro, addedgelabels, showedgelabels,
+    #                         edgeid, edgeocc, edgeprob, statstype, weightedges)
+    #    output_path = "{}/tmp/{}".format(eoi, story.filename)
+    #    outfile = open(output_path, "w")
+    #    outfile.write(story.dot_file)
+    #    outfile.close()
 
     # Distinguish events that are applications of a same rule but
     # in a different context.
@@ -2893,21 +2926,7 @@ def showcontext(eoi, kappamodel, showintro=True, addedgelabels=False,
     for story in stories:
         for eventnode in story.eventnodes:
             # eventnode.output is a list of states, one per target state node.
-            ## This is different from how it was before, simpler
             eventnode.output = get_output_of_node(story, eventnode)
-            #output_states = get_output_of_node(story, node)
-            ## Get output state nodes.
-            #output_nodes = []
-            #for edge in story.causaledges:
-            #    if edge.source == node:
-            #        if isinstance(edge.target, StateNode):
-            #            output_nodes.append(edge.target)
-            ## Get edited state + context sites from each output node.
-            #output_states = []
-            #for statenode in output_nodes:
-            #    output_states.append(statenode.state)
-            #    for context_state in statenode.context:
-            #        output_states.append(context_state)
             # Assign output sites to rule name.
             if eventnode.label not in rule_names:
                 rule_names.append(eventnode.label)
@@ -2934,11 +2953,7 @@ def showcontext(eoi, kappamodel, showintro=True, addedgelabels=False,
         sorted_states = sorted(rule_states, key=lambda x: x["occurrence"],
                                reverse=True)
         sorted_res_states.append(sorted_states)
-    #for i in range(len(rule_names)):
-    #    print(rule_names[i])
-    #    for o in sorted_res_states[i]:
-    #        print(o["occurrence"])
-    # Assign new names to rules that occur in different context.
+    # Assign new labels to rules that occur in different context.
     for story in stories:
         for eventnode in story.eventnodes:
             if eventnode.intro == False:
@@ -2953,7 +2968,7 @@ def showcontext(eoi, kappamodel, showintro=True, addedgelabels=False,
                         if are_same:
                             output_set = i
                     if output_set != None:
-                        prime = ""
+                        prime = " "
                         for i in range(output_set):
                             prime += "'"
                         eventnode.label = "{}{}".format(eventnode.label, prime)
@@ -2962,23 +2977,12 @@ def showcontext(eoi, kappamodel, showintro=True, addedgelabels=False,
                                          "label '{}'.".format(eventnode.nodeid,
                                          eventnode.label))
 
-    # Writes stories with distinguished events.
-    for i in range(len(stories)):
-        stories[i].filename = "distinguish-{}.dot".format(i+1)
-    for story in stories:
-        story.build_dot_file(showintro, addedgelabels, showedgelabels,
-                             edgeid, edgeocc, edgeuse, statstype, weightedges)
-        output_path = "{}/{}".format(eoi, story.filename)
-        outfile = open(output_path, "w")
-        outfile.write(story.dot_file)
-        outfile.close()
-
-    # Simplify state node labels by removing the part that is common to all
-    # state labels with a same edit.
-
-    # 1) Gather lists of all nodes with the same edit.
-    edit_set = []
-    same_edit_nodes = []
+    # Ensure that all state nodes which have the same state have the same
+    # label across all stories (since the order in which the agents are
+    # written on the label is arbitrary and may depend on the order with
+    # which the context elements were gathered along the story).
+    possible_states = []
+    standard_labels = []
     for story in stories:
         rule_outputs = []
         for edge in story.causaledges:
@@ -2987,30 +2991,130 @@ def showcontext(eoi, kappamodel, showintro=True, addedgelabels=False,
                     if isinstance(edge.target, StateNode):
                         rule_outputs.append(edge.target)
         for statenode in rule_outputs:
-            edit_found = False
-            for i in range(len(edit_set)):
-                are_same = compare_states(statenode.edit, edit_set[i],
+            state_index = None
+            for i in range(len(possible_states)):
+                are_same = compare_states(statenode.state, possible_states[i],
                                           ignorevalue=False, ignoreid=True)
                 if are_same == True:
-                    edit_found = True
-                    same_edit_nodes[i].append(statenode)
+                    state_index = i
                     break
-            if edit_found == False:
-                edit_set.append(statenode.edit)
-                same_edit_nodes.append([statenode])
-    # 2) Each group of nodes with a same edit, remove the part that is
-    #    common among the state of each node, if any.
-    for group_of_nodes in same_edit_nodes:
-        
-
+            # Define standard label the first time that a state is found.
+            if state_index == None:
+                possible_states.append(statenode.state)
+                standard_label = write_context_expression(statenode.state)
+                standard_labels.append(standard_label)
+                statenode.label = standard_label
+            # Otherwise assign the already chosen standard label.
+            else:
+                statenode.label = standard_labels[i]       
 
     # Writes stories with distinguished events.
     for i in range(len(stories)):
-        stories[i].filename = "simplified-{}.dot".format(i+1)
+        stories[i].filename = "context-{}.dot".format(i+1)
     for story in stories:
         story.build_dot_file(showintro, addedgelabels, showedgelabels,
-                             edgeid, edgeocc, edgeuse, statstype, weightedges)
-        output_path = "{}/{}".format(eoi, story.filename)
+                             edgeid, edgeocc, edgeprob, statstype, weightedges)
+        output_path = "{}/tmp/{}".format(eoi, story.filename)
+        outfile = open(output_path, "w")
+        outfile.write(story.dot_file)
+        outfile.close()
+
+    ## Simplify state node labels by removing the part that is common to all
+    ## state labels with a same edit.
+    #### Postpone that ###
+
+    ## 1) Gather lists of all nodes with the same edit.
+    #edit_set = []
+    #same_edit_nodes = []
+    #for story in stories:
+    #    rule_outputs = []
+    #    for edge in story.causaledges:
+    #        if isinstance(edge.source, EventNode):
+    #            if edge.source.intro == False:
+    #                if isinstance(edge.target, StateNode):
+    #                    rule_outputs.append(edge.target)
+    #    for statenode in rule_outputs:
+    #        edit_found = False
+    #        for i in range(len(edit_set)):
+    #            are_same = compare_states(statenode.edit, edit_set[i],
+    #                                      ignorevalue=False, ignoreid=True)
+    #            if are_same == True:
+    #                edit_found = True
+    #                same_edit_nodes[i].append(statenode)
+    #                break
+    #        if edit_found == False:
+    #            edit_set.append(statenode.edit)
+    #            same_edit_nodes.append([statenode])
+    ## 2) Each group of nodes with a same edit, remove the part that is
+    ##    common among the state of each node, if any.
+    #for group_of_nodes in same_edit_nodes:
+    # 
+    ## Writes stories with distinguished events.
+    #for i in range(len(stories)):
+    #    stories[i].filename = "simplified-{}.dot".format(i+1)
+    #for story in stories:
+    #    story.build_dot_file(showintro, addedgelabels, showedgelabels,
+    #                         edgeid, edgeocc, edgeprob, statstype, weightedges)
+    #    output_path = "{}/{}".format(eoi, story.filename)
+    #    outfile = open(output_path, "w")
+    #    outfile.write(story.dot_file)
+    #    outfile.close()
+
+    # Remove intro edits and secondary edges.
+    for story in stories:
+        # Remove secondary edges.
+        secondary_to_remove = []
+        for i in range(len(story.causaledges)):
+            edge = story.causaledges[i]
+            if edge.secondary == True:
+                secondary_to_remove.insert(0,i)
+        for i in secondary_to_remove:
+            del(story.causaledges[i])
+        # Remove intro edits.
+        nodes_to_remove = []
+        edges_to_remove = []
+        for j in range(len(story.causaledges)):
+            edge1 = story.causaledges[j]
+            if isinstance(edge1.source, EventNode):
+                if edge1.source.intro == True:
+                    edges_to_remove.append(j)
+                    introedit = edge1.target
+                    for k in range(len(story.statenodes)):
+                       if story.statenodes[k] == introedit:
+                           nodes_to_remove.insert(0, k) 
+                    for l in range(len(story.causaledges)):
+                        edge2 = story.causaledges[l]
+                        if edge2.source == introedit:
+                            edges_to_remove.append(l)
+                            if edge1.source.rank == 0:
+                                w = 1
+                            else:
+                                w = 0
+                            new_edge = CausalEdge(edge1.source, edge2.target,
+                                                  weight=w)
+                            story.causaledges.append(new_edge)
+        sorted_to_remove = sorted(edges_to_remove, reverse=True)
+        for k in nodes_to_remove:
+            del(story.statenodes[k])
+        for j in sorted_to_remove:
+            del(story.causaledges[j])
+        # Lower the rank of al non-intro nodes by 0.5.
+        for eventnode in story.eventnodes:
+            if eventnode.intro == False:
+                eventnode.rank = eventnode.rank - 0.5
+        for statenode in story.statenodes:
+            statenode.rank = statenode.rank - 0.5
+        story.get_maxrank()
+        story.create_hyperedges()
+
+    # Writes stories with state nodes.
+    for i in range(len(stories)):
+        stories[i].filename = "dualstory-{}.dot".format(i+1)
+        stories[i].processed = True
+    for story in stories:
+        story.build_dot_file(showintro, addedgelabels, showedgelabels,
+                             edgeid, edgeocc, edgeprob, statstype, weightedges)
+        output_path = "{}/tmp/{}".format(eoi, story.filename)
         outfile = open(output_path, "w")
         outfile.write(story.dot_file)
         outfile.close()
@@ -3705,6 +3809,84 @@ def compare_outputs(output1, output2):
 #        outfile.write(story.dot_file)
 #        outfile.close()
 
+# ;;;;;;;;;;;;;;;;;;;;;;;; End of Context Section ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+# ^^^^^^^^^^^^^^^^^^^^^^ Dual Story Merging Section ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+def mergedualstories(eoi, causalgraphs=None, siphon=False, showintro=True,
+                     addedgelabels=False, showedgelabels=False, edgeid=True,
+                     edgeocc=False, edgeprob=False, statstype="abs",
+                     weightedges=False, color=True, writedot=True, rmprev=False,
+                     msg=True):
+    """
+    Merge analogous dual stories and count occurrence.
+    """
+
+    # Reading section.
+    if causalgraphs == None:
+        story_files = get_dot_files("{}/tmp".format(eoi), "dualstory")
+        stories = []
+        for story_file in story_files:
+            story_path = "{}/tmp/{}".format(eoi, story_file)
+            stories.append(CausalGraph(story_path, eoi))
+    else:
+       stories = causalgraphs
+       story_files = None
+    # Doing the work.
+    merged_stories = []
+    while len(stories) > 0:
+
+        current_story = stories[0]
+        analogous_list = [0]
+        for i in range(1, len(stories)):
+            same_core, equi_hyperedges = analogous_graphs(current_story,
+                                                          stories[i])
+            if same_core == True:
+                analogous_list.insert(0, i)
+                current_story.occurrence += stories[i].occurrence
+                for j in range(len(current_story.hyperedges)):
+                    equi_index = equi_hyperedges[j]
+                    weight = stories[i].hyperedges[equi_index].weight
+                    current_story.hyperedges[j].weight += weight
+        # Find the original dual stories which are at the origin of each
+        # unique story.
+        original_stories = []
+        for index in analogous_list:
+            file_name = stories[index].filename
+            dash = file_name.rfind("-")
+            period = file_name.rfind(".")
+            #if "_node" in file_name:
+            #    underscore = file_name.index("_node")
+            #    previd = file_name[:period]
+            #else:
+            previd = file_name[dash+1:period]
+            prevcores.append(previd)
+        current_story.prevcores = prevcores
+        merged_stories.append(current_story)
+        for i in analogous_list:
+            del(stories[i])
+        #for i in range(len(analogous_list)-1, -1, -1):
+        #    index = analogous_list[i]
+        #    del(stories[index])
+
+    sorted_stories = sorted(merged_stories, key=lambda x: x.occurrence,
+                            reverse=True)   
+    # Write merged dual stories.
+    for i in range(len(stories)):
+        stories[i].filename = "uniquestory-{}.dot".format(i+1)
+    for story in stories:
+        #story.compute_relstats()
+        #story.compute_visuals(showintro, color)
+        story.build_dot_file(showintro, addedgelabels, showedgelabels,
+                             edgeid, edgeocc, edgeprob, statstype, weightedges)
+        output_path = "{}/{}".format(eoi, story.filename)
+        outfile = open(output_path, "w")
+        outfile.write(story.dot_file)
+        outfile.close()
+
+
+# ^^^^^^^^^^^^^^^^^^^ End of Dual Story Merging Section ^^^^^^^^^^^^^^^^^^^^^^^
+
 # ==================== Causal Cores Merging Section ===========================
 
 def mergecores(eoi, causalgraphs=None, siphon=False, showintro=True,
@@ -3713,7 +3895,7 @@ def mergecores(eoi, causalgraphs=None, siphon=False, showintro=True,
                weightedges=False, color=True, writedot=True, rmprev=False,
                msg=True):
     """
-    Merge equivalent causal cores and count occurrence.
+    Merge analogous causal cores and count occurrence.
     Write the final cores as meshed graphs.
     """
 
@@ -3819,23 +4001,24 @@ def get_dot_files(eoi, prefix=None):
 
 def analogous_graphs(graph1, graph2):
     """
-    Analogous causal graphs have analogous meshes. That is, all their meshes
-    are between nodes with same labels at same ranks.
+    Analogous causal graphs have analogous hyperedges. That is, all their
+    hyperedges are between nodes with same labels at same ranks.
     """
 
-    equi_meshes = []
+    equi_hyperedges = []
     if graph1.maxrank == graph2.maxrank:
-        graph2_indexes = list(range(len(graph2.meshes)))
+        graph2_indexes = list(range(len(graph2.hyperedges)))
         all_edges_found = True
-        for mesh1 in graph1.meshes:
+        for hyperedge1 in graph1.hyperedges:
             for i in graph2_indexes:
-                mesh2 = graph2.meshes[i]
-                are_equi = analogous_meshes(mesh1, mesh2, enforcerank=True)
-                if are_equi == True:
-                    equi_meshes.append(i)
+                hyperedge2 = graph2.hyperedges[i]
+                are_analog = analogous_hyperedges(hyperedge1, hyperedge2,
+                                                  enforcerank=True)
+                if are_analog == True:
+                    equi_hyperedges.append(i)
                     graph2_indexes.remove(i)
                     break
-            if are_equi == False:
+            if are_analog == False:
                 all_edges_found = False
                 break
         # All the edges from graph2 should have been used
@@ -3850,12 +4033,12 @@ def analogous_graphs(graph1, graph2):
     else:
         equi_graphs = False
 
-    return equi_graphs, equi_meshes
+    return equi_graphs, equi_hyperedges
 
 
-def analogous_meshes(mesh1, mesh2, enforcerank=True):
+def analogous_hyperedges(hyperedge1, hyperedge2, enforcerank=True):
     """
-    Find whether two meshes connect to event nodes with same labels
+    Find whether two hyperedges connect to nodes with same labels
     with analogous midedges.
     Optionally, nodes may be also required to be at same ranks.
     """
@@ -3935,51 +4118,169 @@ def analogous_nodes(nodelist1, nodelist2, enforcerank=True):
     return are_equi
 
 
-def analogous_midedges(neighbors1, neighbors2, enforcerank=True):
-    """
-    Find whether two lists of midedges (described as their respective
-    neighbors) connect to event nodes with same labels.
-    Optionally, nodes may be also required to be at same ranks.
-    (This is comparable to the function "equivalent_midedges" used in
-    method "equivalent_meshes".)
-    """
+#def analogous_graphs(graph1, graph2):
+#    """
+#    Analogous causal graphs have analogous meshes. That is, all their meshes
+#    are between nodes with same labels at same ranks.
+#    """
+#
+#    equi_meshes = []
+#    if graph1.maxrank == graph2.maxrank:
+#        graph2_indexes = list(range(len(graph2.meshes)))
+#        all_edges_found = True
+#        for mesh1 in graph1.meshes:
+#            for i in graph2_indexes:
+#                mesh2 = graph2.meshes[i]
+#                are_equi = analogous_meshes(mesh1, mesh2, enforcerank=True)
+#                if are_equi == True:
+#                    equi_meshes.append(i)
+#                    graph2_indexes.remove(i)
+#                    break
+#            if are_equi == False:
+#                all_edges_found = False
+#                break
+#        # All the edges from graph2 should have been used
+#        # at this point for both graphs to be equivalent.
+#        if all_edges_found == True:
+#            if len(graph2_indexes) > 0:
+#                equi_graphs = False
+#            else:
+#                equi_graphs = True
+#        else:
+#            equi_graphs = False
+#    else:
+#        equi_graphs = False
+#
+#    return equi_graphs, equi_meshes
 
-    list1 = neighbors1.copy()
-    list2 = neighbors2.copy()
-    found1 = []
-    found2 = []
-    for i in range(len(list1)):
-        s1 = list1[i]["srcs"]
-        t1 = list1[i]["trgs"]
-        for j in range(len(list2)):
-            s2 = list2[j]["srcs"]
-            t2 = list2[j]["trgs"]
-            if list1[i]["reltype"] == list2[j]["reltype"]:
-                if analogous_nodes(s1, s2, enforcerank):
-                    if analogous_nodes(t1, t2, enforcerank):
-                        found1.insert(0, i)
-                        break
-    for j in range(len(list2)):
-        s2 = list2[j]["srcs"]
-        t2 = list2[j]["trgs"]
-        for i in range(len(list1)):
-            s1 = list1[i]["srcs"]
-            t1 = list1[i]["trgs"]
-            if list2[j]["reltype"] == list1[i]["reltype"]:
-                if analogous_nodes(s2, s1, enforcerank):
-                    if analogous_nodes(t2, t1, enforcerank):
-                        found2.insert(0, j)
-                        break
-    for i in found1:
-        del(list1[i])
-    for j in found2:
-        del(list2[j])
-    if len(list1) == 0 and len(list2) == 0:
-        are_equi = True
-    else:
-        are_equi = False
 
-    return are_equi
+#def analogous_meshes(mesh1, mesh2, enforcerank=True):
+#    """
+#    Find whether two meshes connect to event nodes with same labels
+#    with analogous midedges.
+#    Optionally, nodes may be also required to be at same ranks.
+#    """
+#
+#    nn1 = len(mesh1.midnodes)
+#    nn2 = len(mesh2.midnodes)
+#    ne1 = len(mesh1.midedges)
+#    ne2 = len(mesh2.midedges)
+#    if nn1 == nn2 and ne1 == ne2:
+#        are_equi = True
+#    else:
+#        are_equi = False
+#    if are_equi == True:
+#        sources1, targets1 = mesh1.get_events()
+#        sources2, targets2 = mesh2.get_events()
+#        equi_sources = analogous_nodes(sources1, sources2, enforcerank)
+#        equi_targets = analogous_nodes(targets1, targets2, enforcerank)
+#        if equi_sources == True and equi_targets == True:
+#            are_equi = True
+#        else:
+#            are_equi = False
+#    if are_equi == True:
+#        neighbors1 = mesh1.extend_midedges()
+#        neighbors2 = mesh2.extend_midedges()
+#        equi_midedges = analogous_midedges(neighbors1, neighbors2,
+#                                           enforcerank)
+#        if equi_midedges == True:
+#            are_equi = True
+#        else:
+#            are_equi = False
+#
+#    return are_equi
+#
+#
+#def analogous_nodes(nodelist1, nodelist2, enforcerank=True):
+#    """
+#    Find whether two lists of nodes contain nodes with
+#    same labels.
+#    Optionally, nodes may be also required to be at same ranks.
+#    (This is comparable to the function "same_objects" used in
+#    method "equivalent_meshes".)
+#    """
+#
+#    list1 = nodelist1.copy()
+#    list2 = nodelist2.copy()
+#    found1 = []
+#    found2 = []
+#    for i in range(len(list1)):
+#        for node2 in list2:
+#            if list1[i].label == node2.label:
+#                if enforcerank == False:
+#                    found1.insert(0, i)
+#                    break
+#                elif enforcerank == True:
+#                    if list1[i].rank == node2.rank:
+#                        found1.insert(0, i)
+#                        break
+#    for j in range(len(list2)):
+#        for node1 in list1:
+#            if list2[j].label == node1.label:
+#                if enforcerank == False:
+#                    found2.insert(0, j)
+#                    break
+#                elif enforcerank == True:
+#                    if list2[j].rank == node1.rank:
+#                        found2.insert(0, j)
+#                        break
+#    for i in found1:
+#        del(list1[i])
+#    for j in found2:
+#        del(list2[j])
+#    if len(list1) == 0 and len(list2) == 0:
+#        are_equi = True
+#    else:
+#        are_equi = False
+#
+#    return are_equi
+#
+#
+#def analogous_midedges(neighbors1, neighbors2, enforcerank=True):
+#    """
+#    Find whether two lists of midedges (described as their respective
+#    neighbors) connect to event nodes with same labels.
+#    Optionally, nodes may be also required to be at same ranks.
+#    (This is comparable to the function "equivalent_midedges" used in
+#    method "equivalent_meshes".)
+#    """
+#
+#    list1 = neighbors1.copy()
+#    list2 = neighbors2.copy()
+#    found1 = []
+#    found2 = []
+#    for i in range(len(list1)):
+#        s1 = list1[i]["srcs"]
+#        t1 = list1[i]["trgs"]
+#        for j in range(len(list2)):
+#            s2 = list2[j]["srcs"]
+#            t2 = list2[j]["trgs"]
+#            if list1[i]["reltype"] == list2[j]["reltype"]:
+#                if analogous_nodes(s1, s2, enforcerank):
+#                    if analogous_nodes(t1, t2, enforcerank):
+#                        found1.insert(0, i)
+#                        break
+#    for j in range(len(list2)):
+#        s2 = list2[j]["srcs"]
+#        t2 = list2[j]["trgs"]
+#        for i in range(len(list1)):
+#            s1 = list1[i]["srcs"]
+#            t1 = list1[i]["trgs"]
+#            if list2[j]["reltype"] == list1[i]["reltype"]:
+#                if analogous_nodes(s2, s1, enforcerank):
+#                    if analogous_nodes(t2, t1, enforcerank):
+#                        found2.insert(0, j)
+#                        break
+#    for i in found1:
+#        del(list1[i])
+#    for j in found2:
+#        del(list2[j])
+#    if len(list1) == 0 and len(list2) == 0:
+#        are_equi = True
+#    else:
+#        are_equi = False
+#
+#    return are_equi
 
 # ================ End of Causal Cores Merging Section ========================
 
@@ -4582,7 +4883,7 @@ def mapmesh(coremeshes, mapmeshes, add_list, current_rank, midid, meshid,
 
     for coremesh in coremeshes:
        if coremesh.rank == current_rank:
-           # Find analoguous mesh in mapped core template.
+           # Find analogous mesh in mapped core template.
            analog_meshes = []
            for i in range(len(mapmeshes)):
                mappedmesh = mapmeshes[i]
