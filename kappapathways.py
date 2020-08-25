@@ -138,16 +138,18 @@ class CausalEdge(object):
     can be causal or conflict.
     """
 
-    def __init__(self, source, target, weight=1, rel_wei=1.0, occurrence=None,
-                 rel_occ=None, relationtype="causal", color="black",
-                 secondary=False, underlying=False, reverse=False,
-                 labelcarrier=True, indicator=False, meshid=None, pos=None,
-                 labelpos=None, overridewidth=None, overridelabel=None):
+    def __init__(self, source, target, weight=1, layout_weight=1, rel_wei=1.0,
+                 occurrence=None, rel_occ=None, relationtype="causal",
+                 color="black", secondary=False, underlying=False,
+                 reverse=False, labelcarrier=True, indicator=False,
+                 meshid=None, pos=None, labelpos=None, overridewidth=None,
+                 overridelabel=None):
         """ Initialize class CausalEdge. """
 
         self.source = source
         self.target = target
-        self.weight = weight # Taken from the stories.
+        self.weight = weight # Appears as w in dot file
+        self.layout_weight = layout_weight # Appears as weight in dot file
         self.rel_wei = rel_wei # = weight / occurrence_of_EOI (num. of cores)
         self.occurrence = occurrence # Taken from the trace.
         self.rel_occ = rel_occ # = occurrence / occurrence_of_EOI
@@ -221,12 +223,18 @@ class HyperEdge(object):
         """ Check that all edges within the hyperedge have the same target. """
 
         self.target = self.edgelist[0].target
+        self.sources = []
+        all_weights = []
         for edge in self.edgelist:
             if edge.target != self.target:
                 raise ValueError("Hyperedge has more than one target.")
-        self.sources = []
-        for edge in self.edgelist:
             self.sources.append(edge.source)
+            #if edge.source.intro == False:
+            #    edge.weight = self.weight
+            all_weights.append(edge.weight)
+        self.weight = min(all_weights)
+        # I do not enforce equal weight among all subedges because I want
+        # to allow zero weight on edges with intro source for better layout.
         #self.weight = self.edgelist[0].weight
         #for edge in self.edgelist:
         #    if edge.weight != self.weight:
@@ -597,7 +605,7 @@ class HyperEdge(object):
 class CausalGraph(object):
     """ Data structure for causal graphs. """
 
-    def __init__(self, filename=None, eoi=None, meshedgraph=False,
+    def __init__(self, filename=None, eoi=None, hypergraph=False,
                  processed=False, showintro=True, precedenceonly=False,
                  rankposdict=None):
         """ Initialize class CausalGraph. """
@@ -605,7 +613,7 @@ class CausalGraph(object):
         # Header variables.
         self.filename = filename
         self.eoi = eoi
-        self.meshedgraph = meshedgraph
+        self.hypergraph = hypergraph
         self.processed = processed
         self.showintro = showintro
         self.precedenceonly = precedenceonly
@@ -649,8 +657,8 @@ class CausalGraph(object):
                 self.precedenceonly = True
             if 'precedenceonly="False"' in line:
                 self.precedenceonly = False
-            if 'meshedgraph="True"' in line:
-                self.meshedgraph = True
+            if 'hypergraph="True"' in line:
+                self.hypergraph = True
             #if "nodestype=" in line:
             #    type_index = line.index("nodestype")
             #    quote = line.rfind('"')
@@ -800,15 +808,17 @@ class CausalGraph(object):
                 #        target = node
                 meshid = get_field("meshid=", read_line, 1)
                 meshid = int(meshid)
-                weight = get_field("weight=", read_line, 1)
+                weight = get_field("w=", read_line, 1)
                 weight = int(weight)
+                layout_weight = get_field("weight=", read_line, 1)
+                layout_weight = int(layout_weight)
                 color = get_field("color=", read_line, "black")
                 if "label=" in line:
                     labelcarrier = True
                 else:
                     labelcarrier = False
                 if self.precedenceonly == False:
-                    if self.meshedgraph == False:
+                    if self.hypergraph == False:
                         if "style=dotted" in line:
                             edgetype = "conflict"
                             source_save = source
@@ -816,7 +826,7 @@ class CausalGraph(object):
                             target = source_save
                         else:
                             edgetype = "causal"
-                    elif self.meshedgraph == True:
+                    elif self.hypergraph == True:
                         if "style=dashed" in line:
                             edgetype = "conflict"
                         else:
@@ -1282,10 +1292,6 @@ class CausalGraph(object):
                 for edge in hyperedge.edgelist:
                     paths = self.follow_edges("down",
                                               edge.source, [edge.target])
-                    #print(edge)
-                    #print("-------")
-                    #print(paths)
-                    #print("=======")
                     if len(paths) == 1:
                         new_edgelist.append(edge)
                 if len(new_edgelist) > 0:
@@ -1296,10 +1302,14 @@ class CausalGraph(object):
 
     def align_vertical(self):
         """
-        Adjust edge weights such that the event nodes are aligned vertically.
+        Adjust edge layout weights such that the event nodes are aligned vertically.
         """
 
         for hyperedge in self.hyperedges:
+            hyperedge.layout_weight = hyperedge.weight
+            for edge in hyperedge.edgelist:
+                #edge.layout_weight = hyperedge.layout_weight
+                edge.layout_weight = edge.weight
             if len(hyperedge.edgelist) > 1:
                 nonintro_present = False
                 for edge in hyperedge.edgelist:
@@ -1309,7 +1319,7 @@ class CausalGraph(object):
                 if nonintro_present == True:
                     for edge in hyperedge.edgelist:
                         if edge.source.intro == True:
-                            edge.weight = 0
+                            edge.layout_weight = 0
 
 
     def follow_edges(self, direction, from_node, to_nodes=[]):
@@ -1922,7 +1932,7 @@ class CausalGraph(object):
         # Write info about graph.
         dot_str = 'digraph G{\n'
         dot_str += '  precedenceonly="{}" ;\n'.format(self.precedenceonly)
-        dot_str += '  meshedgraph="{}" ;\n'.format(self.meshedgraph)
+        dot_str += '  hypergraph="{}" ;\n'.format(self.hypergraph)
         #dot_str += '  nodestype="{}" ;\n'.format(self.nodestype)
         dot_str += '  processed="{}" ;\n'.format(self.processed)
         if self.eoi != None:
@@ -2121,10 +2131,32 @@ class CausalGraph(object):
         #            showedgelabels, edgeid, edgeocc, edgeuse, statstype,
         #            weightedges)
         #        dot_str += '] ;\n'
-        for hyperedge in self.hyperedges:
-            for edge in hyperedge.edgelist:
-                dot_str += self.write_edge(edge)
-                dot_str += '] ;\n'
+        if self.hypergraph == False:
+            for hyperedge in self.hyperedges:
+                for edge in hyperedge.edgelist:
+                    dot_str += self.write_edge(edge)
+                    dot_str += '] ;\n'
+        # Custom hyperedges.
+        elif self.hypergraph == True:
+            midid = 1
+            for hyperedge in self.hyperedges:
+                if len(hyperedge.edgelist) > 1:
+                    midid_str = "mid{}".format(midid)
+                    dot_str += self.write_midnode(midid_str)
+                    dot_str += '] ;\n'
+                    for edge in hyperedge.edgelist:
+                        dot_str += self.write_custom_edge(edge.source.nodeid, midid_str,
+                                                     edge.color, edge.weight,
+                                                     edge.layout_weight, False)
+                        dot_str += '] ;\n'
+                    dot_str += self.write_custom_edge(midid_str, hyperedge.target.nodeid,
+                                                 "black", hyperedge.weight,
+                                                 hyperedge.layout_weight)
+                    dot_str += '] ;\n'
+                    midid += 1
+                else:
+                    dot_str += self.write_edge(hyperedge.edgelist[0])
+                    dot_str += '] ;\n'
         # Draw cover edges if intro nodes are not shown.
         if showintro == False:
             for covermesh in self.covermeshes:
@@ -2140,36 +2172,49 @@ class CausalGraph(object):
         self.dot_file = dot_str
 
 
-    def write_midnode(self, mesh, midnode, average_use, minpenwidth,
-                      medpenwidth, maxpenwidth):
+    def write_midnode(self, midid):
         """ Write the line of a dot file for a single midnode."""
 
-        ratio = mesh.uses/average_use
-        pensize = math.log(ratio, 2) + medpenwidth
-        if pensize < minpenwidth:
-            pensize = minpenwidth
-        if pensize > maxpenwidth:
-            pensize = maxpenwidth
-        pensize = math.sqrt(pensize)/12
-        mid_str = '"{}" [label=""'.format(midnode.nodeid)
+        mid_str = '"{}" [label=""'.format(midid)
         mid_str += ', shape=circle'
-        if midnode.ghost == True:
-            mid_str += ', style=dotted'
-        else:
-            mid_str += ', style=filled'
-        mid_str += ', color={}'.format(midnode.bordercolor)
-        mid_str += ', fillcolor={}'.format(midnode.fillcolor)
-        mid_str += ', midtype={}'.format(midnode.midtype)
-        if midnode.overridewidth == None:
-            mid_str += ', width={:.4f}'.format(pensize)
-            mid_str += ', height={:.4f}'.format(pensize)
-        else:
-            mid_str += ', width={:.4f}'.format(midnode.overridewidth)
-            mid_str += ', height={:.4f}'.format(midnode.overridewidth)
-        if midnode.pos != None:
-            mid_str += ', pos={}'.format(midnode.pos)
+        mid_str += ', style=filled'
+        mid_str += ', fillcolor=black'
+        mid_str += ', width=0.1'
+        mid_str += ', height=0.1'
 
         return mid_str
+
+
+    #def write_midnode(self, mesh, midnode, average_use, minpenwidth,
+    #                  medpenwidth, maxpenwidth):
+    #    """ Write the line of a dot file for a single midnode."""
+
+    #    ratio = mesh.uses/average_use
+    #    pensize = math.log(ratio, 2) + medpenwidth
+    #    if pensize < minpenwidth:
+    #        pensize = minpenwidth
+    #    if pensize > maxpenwidth:
+    #        pensize = maxpenwidth
+    #    pensize = math.sqrt(pensize)/12
+    #    mid_str = '"{}" [label=""'.format(midnode.nodeid)
+    #    mid_str += ', shape=circle'
+    #    if midnode.ghost == True:
+    #        mid_str += ', style=dotted'
+    #    else:
+    #        mid_str += ', style=filled'
+    #    mid_str += ', color={}'.format(midnode.bordercolor)
+    #    mid_str += ', fillcolor={}'.format(midnode.fillcolor)
+    #    mid_str += ', midtype={}'.format(midnode.midtype)
+    #    if midnode.overridewidth == None:
+    #        mid_str += ', width={:.4f}'.format(pensize)
+    #        mid_str += ', height={:.4f}'.format(pensize)
+    #    else:
+    #        mid_str += ', width={:.4f}'.format(midnode.overridewidth)
+    #        mid_str += ', height={:.4f}'.format(midnode.overridewidth)
+    #    if midnode.pos != None:
+    #        mid_str += ', pos={}'.format(midnode.pos)
+
+    #    return mid_str
 
 
     def write_edge(self, edge):
@@ -2181,105 +2226,125 @@ class CausalGraph(object):
         if edge.relationtype == "conflict":
             edge_str += ", style=dashed"
         edge_str += ', color={}'.format(edge.color)
-        edge_str += ', weight={}'.format(edge.weight)
-        edge_str += ', penwidth=2'
+        edge_str += ', w={}'.format(edge.weight)
+        edge_str += ', weight={}'.format(edge.layout_weight)
+        #edge_str += ', penwidth=2'
+        edge_str += ', penwidth={}'.format(edge.weight)
 
         return edge_str
 
 
-    def write_midedge(self, mesh, midedge, average_use, minpenwidth,
-                      medpenwidth, maxpenwidth, addedgelabels, showedgelabels,
-                      edgeid, edgeocc, edgeuse, statstype, weightedges):
-        """ Write the line of a dot file for a single midedge. """
+    def write_custom_edge(self, source, target, color, weight, layout_weight, arrow=True):
+        """ Write the line of a dot file for a single edge. """
 
-        ratio = mesh.uses/average_use
-        pensize = math.log(ratio,2) + medpenwidth
-        if pensize < minpenwidth:
-            pensize = minpenwidth
-        if pensize > maxpenwidth:
-            pensize = maxpenwidth
-        if midedge.reverse == False:
-            mid_str = ('"{}" -> "{}" '.format(midedge.source.nodeid,
-                                              midedge.target.nodeid))
-        elif midedge.reverse == True:
-            mid_str = ('"{}" -> "{}" '.format(midedge.target.nodeid,
-                                              midedge.source.nodeid))
-        mid_str += '[meshid={}'.format(mesh.meshid)
-        if midedge.overridewidth == None:
-            mid_str += ', penwidth={}'.format(pensize)
-        else:
-            mid_str += ', penwidth={}'.format(midedge.overridewidth)
-        mid_str += ', color={}'.format(midedge.color)
-        if statstype == "abs":
-            occ_stat = "{}".format(mesh.occurrence)
-            use_stat = "{}".format(mesh.uses)
-        elif statstype == "rel":
-            occ_stat = "{:.2}".format(mesh.rel_occ)
-            use_stat = "{:.2}".format(mesh.usage)
-        elif statstype == "both":
-            occ_stat = "{}".format(mesh.occurrence)
-            occ_stat += " ({:.2})".format(mesh.rel_occ)
-            use_stat = "{}".format(mesh.uses)
-            use_stat += " ({:.2})".format(mesh.usage)
-        if addedgelabels == True:
-            if midedge.overridelabel == None:
-                if midedge.labelcarrier == True:
-                    label_str = ""
-                    if edgeid == True:
-                        label_str += "  #{}".format(mesh.meshid)
-                        if edgeocc == True or edgeuse == True:
-                            label_str += "\\n"
-                    if edgeocc == True:
-                        label_str += "  {}".format(occ_stat)
-                        if edgeuse == True:
-                           label_str += "\\n"
-                    if edgeuse == True:
-                        label_str += "  {}".format(use_stat)
-                    mid_str += ', label="{}"'.format(label_str)
-                    if midedge.labelpos != None:
-                        mid_str += ', lp={}'.format(midedge.labelpos)
-                if showedgelabels == True:
-                    mid_str += ', fontcolor={}'.format(midedge.color)
-                elif showedgelabels == False:
-                    mid_str += ', fontcolor=transparent'
-            else:
-                mid_str += ', label="{}"'.format(midedge.overridelabel)
-                if midedge.labelpos != None:
-                    mid_str += ', lp={}'.format(midedge.labelpos)
-        if midedge.indicator == True:
-            if isinstance(midedge.source, EventNode):
-                mid_str += ", dir=none"
-            else:
-                mid_str += ", dir=both"
-            if midedge.reverse == False:
-                if isinstance(midedge.target, MidNode):
-                    mid_str += ", arrowhead=none"
-                if isinstance(midedge.source, MidNode):
-                    #mid_str += ", arrowtail=icurve"
-                    mid_str += ", arrowtail=crow"
-                    #mid_str += ", arrowtail=inv"
-            elif midedge.reverse == True:
-                if isinstance(midedge.target, MidNode):
-                    mid_str += ", arrowtail=none"
-                if isinstance(midedge.source, MidNode):
-                    #mid_str += ", arrowhead=icurve"
-                    mid_str += ", arrowhead=crow"
-                    #mid_str += ", arrowhead=inv"
-        elif midedge.indicator == False:
-            if isinstance(midedge.target, MidNode):
-                mid_str += ", dir=none"
-        if midedge.reverse == True:
-            mid_str += ", rev=True"
-        if midedge.relationtype == "conflict":
-            mid_str += ", style=dotted"
-        mid_str += ', uses={}'.format(mesh.uses)
-        mid_str += ', usage={}'.format(mesh.usage)
-        if weightedges == True:
-            mid_str += ', weight={}'.format(mesh.weight)
-        if midedge.pos != None:
-            mid_str += ', pos={}'.format(midedge.pos)
+        edge_str = ('{} -> {} '.format(source, target))
+        edge_str += "[arrowhead=onormal"
+        if arrow == False:
+            edge_str += ', dir=none'
+        #if edge.relationtype == "conflict":
+        #    edge_str += ", style=dashed"
+        edge_str += ', color={}'.format(color)
+        edge_str += ', w={}'.format(weight)
+        edge_str += ', weight={}'.format(layout_weight)
+        #edge_str += ', penwidth=2'
+        edge_str += ', penwidth={}'.format(weight)
 
-        return mid_str
+        return edge_str
+
+
+#    def write_midedge(self, mesh, midedge, average_use, minpenwidth,
+#                      medpenwidth, maxpenwidth, addedgelabels, showedgelabels,
+#                      edgeid, edgeocc, edgeuse, statstype, weightedges):
+#        """ Write the line of a dot file for a single midedge. """
+#
+#        ratio = mesh.uses/average_use
+#        pensize = math.log(ratio,2) + medpenwidth
+#        if pensize < minpenwidth:
+#            pensize = minpenwidth
+#        if pensize > maxpenwidth:
+#            pensize = maxpenwidth
+#        if midedge.reverse == False:
+#            mid_str = ('"{}" -> "{}" '.format(midedge.source.nodeid,
+#                                              midedge.target.nodeid))
+#        elif midedge.reverse == True:
+#            mid_str = ('"{}" -> "{}" '.format(midedge.target.nodeid,
+#                                              midedge.source.nodeid))
+#        mid_str += '[meshid={}'.format(mesh.meshid)
+#        if midedge.overridewidth == None:
+#            mid_str += ', penwidth={}'.format(pensize)
+#        else:
+#            mid_str += ', penwidth={}'.format(midedge.overridewidth)
+#        mid_str += ', color={}'.format(midedge.color)
+#        if statstype == "abs":
+#            occ_stat = "{}".format(mesh.occurrence)
+#            use_stat = "{}".format(mesh.uses)
+#        elif statstype == "rel":
+#            occ_stat = "{:.2}".format(mesh.rel_occ)
+#            use_stat = "{:.2}".format(mesh.usage)
+#        elif statstype == "both":
+#            occ_stat = "{}".format(mesh.occurrence)
+#            occ_stat += " ({:.2})".format(mesh.rel_occ)
+#            use_stat = "{}".format(mesh.uses)
+#            use_stat += " ({:.2})".format(mesh.usage)
+#        if addedgelabels == True:
+#            if midedge.overridelabel == None:
+#                if midedge.labelcarrier == True:
+#                    label_str = ""
+#                    if edgeid == True:
+#                        label_str += "  #{}".format(mesh.meshid)
+#                        if edgeocc == True or edgeuse == True:
+#                            label_str += "\\n"
+#                    if edgeocc == True:
+#                        label_str += "  {}".format(occ_stat)
+#                        if edgeuse == True:
+#                           label_str += "\\n"
+#                    if edgeuse == True:
+#                        label_str += "  {}".format(use_stat)
+#                    mid_str += ', label="{}"'.format(label_str)
+#                    if midedge.labelpos != None:
+#                        mid_str += ', lp={}'.format(midedge.labelpos)
+#                if showedgelabels == True:
+#                    mid_str += ', fontcolor={}'.format(midedge.color)
+#                elif showedgelabels == False:
+#                    mid_str += ', fontcolor=transparent'
+#            else:
+#                mid_str += ', label="{}"'.format(midedge.overridelabel)
+#                if midedge.labelpos != None:
+#                    mid_str += ', lp={}'.format(midedge.labelpos)
+#        if midedge.indicator == True:
+#            if isinstance(midedge.source, EventNode):
+#                mid_str += ", dir=none"
+#            else:
+#                mid_str += ", dir=both"
+#            if midedge.reverse == False:
+#                if isinstance(midedge.target, MidNode):
+#                    mid_str += ", arrowhead=none"
+#                if isinstance(midedge.source, MidNode):
+#                    #mid_str += ", arrowtail=icurve"
+#                    mid_str += ", arrowtail=crow"
+#                    #mid_str += ", arrowtail=inv"
+#            elif midedge.reverse == True:
+#                if isinstance(midedge.target, MidNode):
+#                    mid_str += ", arrowtail=none"
+#                if isinstance(midedge.source, MidNode):
+#                    #mid_str += ", arrowhead=icurve"
+#                    mid_str += ", arrowhead=crow"
+#                    #mid_str += ", arrowhead=inv"
+#        elif midedge.indicator == False:
+#            if isinstance(midedge.target, MidNode):
+#                mid_str += ", dir=none"
+#        if midedge.reverse == True:
+#            mid_str += ", rev=True"
+#        if midedge.relationtype == "conflict":
+#            mid_str += ", style=dotted"
+#        mid_str += ', uses={}'.format(mesh.uses)
+#        mid_str += ', usage={}'.format(mesh.usage)
+#        if weightedges == True:
+#            mid_str += ', weight={}'.format(mesh.weight)
+#        if midedge.pos != None:
+#            mid_str += ', pos={}'.format(midedge.pos)
+#
+#        return mid_str
 
 
     def __repr__(self):
@@ -2897,16 +2962,17 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
             statenode.state = group_sites_by_agent(full_state) 
             lbl = write_context_expression(statenode.state)
             statenode.label = lbl
-        # Weight edges to align rule outputs 
-        for edge in story.causaledges:
-            if edge.secondary == True:
-                edge.weight = 0
-            elif edge.secondary == False:
-                if edge.source in rule_outputs or edge.target in rule_outputs:
-                    edge.weight = 1
-                else:
-                    edge.weight = 0
+        ## Weight edges to align rule outputs 
+        #for edge in story.causaledges:
+        #    if edge.secondary == True:
+        #        edge.weight = 0
+        #    elif edge.secondary == False:
+        #        if edge.source in rule_outputs or edge.target in rule_outputs:
+        #            edge.layout_weight = 1
+        #        else:
+        #            edge.layout_weight = 0
         story.create_hyperedges()
+        story.align_vertical()
 
     ## Write stories with context on state nodes.
     #for i in range(len(stories)):
@@ -3001,7 +3067,9 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
             # Define standard label the first time that a state is found.
             if state_index == None:
                 possible_states.append(statenode.state)
-                standard_label = write_context_expression(statenode.state)
+                standard_label = write_context_expression(statenode.state,
+                                                          hidevalue=False,
+                                                          hideid=True)
                 standard_labels.append(standard_label)
                 statenode.label = standard_label
             # Otherwise assign the already chosen standard label.
@@ -3086,12 +3154,7 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
                         edge2 = story.causaledges[l]
                         if edge2.source == introedit:
                             edges_to_remove.append(l)
-                            if edge1.source.rank == 0:
-                                w = 1
-                            else:
-                                w = 0
-                            new_edge = CausalEdge(edge1.source, edge2.target,
-                                                  weight=w)
+                            new_edge = CausalEdge(edge1.source, edge2.target)
                             story.causaledges.append(new_edge)
         sorted_to_remove = sorted(edges_to_remove, reverse=True)
         for k in nodes_to_remove:
@@ -3106,6 +3169,7 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
             statenode.rank = statenode.rank - 0.5
         story.get_maxrank()
         story.create_hyperedges()
+        story.align_vertical()
 
     # Writes stories with state nodes.
     for i in range(len(stories)):
@@ -3583,7 +3647,7 @@ def get_output_of_node(story, node):
     return output_states
 
 
-def write_context_expression(state):
+def write_context_expression(state, hidevalue=False, hideid=False):
     """
     Write a Kappa language string with the edit in bold font and context in
     normal font. The string is made to be read as html to allow special fonts.
@@ -3710,7 +3774,8 @@ def write_context_expression(state):
     # Write string with sites in the order determined by the previous sorting.
     context_str = ""
     for i in range(len(full_context)):
-        agent_str = write_kappa_agent(full_context[i], "num")
+        agent_str = write_kappa_agent(full_context[i], "num",
+                                      hidevalue, hideid)
         context_str += agent_str
         if i < len(full_context)-1:
             context_str += ", "
@@ -3819,7 +3884,8 @@ def mergedualstories(eoi, causalgraphs=None, siphon=False, showintro=True,
                      weightedges=False, color=True, writedot=True, rmprev=False,
                      msg=True):
     """
-    Merge analogous dual stories and count occurrence.
+    Merge equivalent dual stories into a unique dual story while counting
+    occurrence.
     """
 
     # Reading section.
@@ -3835,23 +3901,23 @@ def mergedualstories(eoi, causalgraphs=None, siphon=False, showintro=True,
     # Doing the work.
     merged_stories = []
     while len(stories) > 0:
-
         current_story = stories[0]
-        analogous_list = [0]
+        equivalent_list = [0]
         for i in range(1, len(stories)):
-            same_core, equi_hyperedges = analogous_graphs(current_story,
-                                                          stories[i])
-            if same_core == True:
-                analogous_list.insert(0, i)
+            same_story, ev, st, equi_edges = equivalent_graphs(current_story,
+                                                               stories[i],
+                                                               True, True)
+            if same_story == True:
+                equivalent_list.insert(0, i)
                 current_story.occurrence += stories[i].occurrence
                 for j in range(len(current_story.hyperedges)):
-                    equi_index = equi_hyperedges[j]
+                    equi_index = equi_edges[j]
                     weight = stories[i].hyperedges[equi_index].weight
                     current_story.hyperedges[j].weight += weight
-        # Find the original dual stories which are at the origin of each
-        # unique story.
+        # Find the original dual stories from which each unique
+        # story comes from.
         original_stories = []
-        for index in analogous_list:
+        for index in equivalent_list:
             file_name = stories[index].filename
             dash = file_name.rfind("-")
             period = file_name.rfind(".")
@@ -3860,21 +3926,26 @@ def mergedualstories(eoi, causalgraphs=None, siphon=False, showintro=True,
             #    previd = file_name[:period]
             #else:
             previd = file_name[dash+1:period]
-            prevcores.append(previd)
-        current_story.prevcores = prevcores
+            original_stories.append(previd)
+        current_story.prevcores = original_stories
         merged_stories.append(current_story)
-        for i in analogous_list:
+        for i in equivalent_list:
             del(stories[i])
         #for i in range(len(analogous_list)-1, -1, -1):
         #    index = analogous_list[i]
         #    del(stories[index])
-
     sorted_stories = sorted(merged_stories, key=lambda x: x.occurrence,
-                            reverse=True)   
+                            reverse=True)
+    # Propagate new hyperedge weights to their edge lists.
+    for story in sorted_stories:
+        for hyperedge in story.hyperedges:
+            for subedge in hyperedge.edgelist:
+                subedge.weight = hyperedge.weight
+        story.align_vertical()
     # Write merged dual stories.
-    for i in range(len(stories)):
-        stories[i].filename = "uniquestory-{}.dot".format(i+1)
-    for story in stories:
+    for i in range(len(sorted_stories)):
+        sorted_stories[i].filename = "unique-{}.dot".format(i+1)
+    for story in sorted_stories:
         #story.compute_relstats()
         #story.compute_visuals(showintro, color)
         story.build_dot_file(showintro, addedgelabels, showedgelabels,
@@ -3883,93 +3954,6 @@ def mergedualstories(eoi, causalgraphs=None, siphon=False, showintro=True,
         outfile = open(output_path, "w")
         outfile.write(story.dot_file)
         outfile.close()
-
-
-# ^^^^^^^^^^^^^^^^^^^ End of Dual Story Merging Section ^^^^^^^^^^^^^^^^^^^^^^^
-
-# ==================== Causal Cores Merging Section ===========================
-
-def mergecores(eoi, causalgraphs=None, siphon=False, showintro=True,
-               addedgelabels=False, showedgelabels=False, edgeid=True,
-               edgeocc=False, edgeuse=False, statstype="abs",
-               weightedges=False, color=True, writedot=True, rmprev=False,
-               msg=True):
-    """
-    Merge analogous causal cores and count occurrence.
-    Write the final cores as meshed graphs.
-    """
-
-    # Reading section.
-    if causalgraphs == None:
-        if siphon == False:
-            causal_core_files = get_dot_files(eoi, "causalcore")
-        elif siphon == True:
-            causal_core_files = get_dot_files(eoi, "siphon")
-        causal_cores = []
-        for core_file in causal_core_files:
-            core_path = "{}/{}".format(eoi, core_file)
-            causal_cores.append(CausalGraph(core_path, eoi))
-    else:
-       causal_cores = causalgraphs
-       causal_core_files = None
-    # Doing the work.
-    merged_cores = []
-    while len(causal_cores) > 0:
-        current_core = causal_cores[0]
-        analogous_list = [0]
-        for i in range(1, len(causal_cores)):
-            same_core, equi_meshes = analogous_graphs(current_core,
-                                                      causal_cores[i])
-            if same_core == True:
-                analogous_list.append(i)
-                current_core.occurrence += causal_cores[i].occurrence
-                for j in range(len(current_core.meshes)):
-                    equi_index = equi_meshes[j]
-                    uses = causal_cores[i].meshes[equi_index].uses
-                    current_core.meshes[j].uses += uses
-        prevcores = []
-        for index in analogous_list:
-            file_name = causal_cores[index].filename
-            dash = file_name.rfind("-")
-            period = file_name.rfind(".")
-            if "_node" in file_name:
-                underscore = file_name.index("_node")
-                previd = file_name[:period]
-            else:
-                previd = file_name[dash+1:period]
-            prevcores.append(previd)
-        current_core.prevcores = prevcores
-        merged_cores.append(current_core)
-        for i in range(len(analogous_list)-1, -1, -1):
-            index = analogous_list[i]
-            del(causal_cores[index])
-    sorted_cores = sorted(merged_cores, key=lambda x: x.occurrence,
-                          reverse=True)
-    for i in range(len(sorted_cores)):
-        sorted_cores[i].filename = "meshedcore-{}.dot".format(i+1)
-    for graph in sorted_cores:
-        graph.compute_relstats()
-        graph.compute_visuals(showintro, color)
-        graph.build_dot_file(showintro, addedgelabels, showedgelabels,
-                             edgeid, edgeocc, edgeuse, statstype, weightedges)
-    # Writing section.
-    if writedot == True:
-        for graph in sorted_cores:
-            output_path = "{}/{}".format(eoi, graph.filename)
-            outfile = open(output_path, "w")
-            outfile.write(graph.dot_file)
-            outfile.close()
-    if rmprev == True:
-        if causal_core_files == None:
-            causal_core_files = get_dot_files(eoi, "causalcore")
-        for core_file in causal_core_files:
-            file_path = "{}/{}".format(eoi, core_file)
-            os.remove(file_path)
-    if msg == True:
-        print("Merging equivalent causal cores, {} unique cores obtained."
-              .format(len(sorted_cores)))
-
-    return sorted_cores
 
 
 def get_dot_files(eoi, prefix=None):
@@ -3999,125 +3983,260 @@ def get_dot_files(eoi, prefix=None):
     return sorted_list
 
 
-def analogous_graphs(graph1, graph2):
+def equivalent_graphs(graph1, graph2, enforcerank=True,
+                      return_correspondances=False):
     """
-    Analogous causal graphs have analogous hyperedges. That is, all their
-    hyperedges are between nodes with same labels at same ranks.
+    Equivalent graphs have equivalent nodes (events and states) and equivalent
+    hyperedges.
     """
 
-    equi_hyperedges = []
-    if graph1.maxrank == graph2.maxrank:
-        graph2_indexes = list(range(len(graph2.hyperedges)))
-        all_edges_found = True
-        for hyperedge1 in graph1.hyperedges:
-            for i in graph2_indexes:
-                hyperedge2 = graph2.hyperedges[i]
-                are_analog = analogous_hyperedges(hyperedge1, hyperedge2,
-                                                  enforcerank=True)
-                if are_analog == True:
-                    equi_hyperedges.append(i)
-                    graph2_indexes.remove(i)
-                    break
-            if are_analog == False:
-                all_edges_found = False
+    corr_st, corr_ed = [], []
+    equi_events, corr_ev = equivalent_node_lists(graph1.eventnodes,
+                                                 graph2.eventnodes,
+                                                 enforcerank, True)
+    if equi_events == True:
+        equi_states, corr_st = equivalent_node_lists(graph1.statenodes,
+                                                     graph2.statenodes,
+                                                     enforcerank, True)
+    if equi_events == True and equi_states == True:
+        equi_edges, corr_ed = equivalent_hyperedge_lists(graph1.hyperedges,
+                                                         graph2.hyperedges,
+                                                         enforcerank, True)
+    if equi_events == True and equi_states == True and equi_edges == True:
+        are_equivalent = True
+    else:
+        are_equivalent = False
+
+    if return_correspondances == False:
+        return are_equivalent
+    elif return_correspondances == True:
+        return are_equivalent, corr_ev, corr_st, corr_ed
+
+
+def equivalent_hyperedge_lists(edgelist1, edgelist2, enforcerank=True,
+                               return_correspondances=False):
+    """
+    Find whether two lists contain equivalent hyperedges (connected to nodes
+    with same labels).
+    """
+
+    are_equivalent = True
+    correspondances = []
+    list2_indexes = list(range(len(edgelist2)))
+    for hyperedge1 in edgelist1:
+        for i in list2_indexes:
+            hyperedge2 = edgelist2[i]
+            equi_edges = equivalent_hyperedges(hyperedge1, hyperedge2,
+                                               enforcerank)
+            if equi_edges == True:
+                correspondances.append(i)
+                list2_indexes.remove(i)
                 break
-        # All the edges from graph2 should have been used
-        # at this point for both graphs to be equivalent.
-        if all_edges_found == True:
-            if len(graph2_indexes) > 0:
-                equi_graphs = False
-            else:
-                equi_graphs = True
-        else:
-            equi_graphs = False
+        # If the previous loop finished with the last hyperedge from list2
+        # still not being equivalent.
+        if equi_edges == False:
+            are_equivalent = False
+            break
+    if len(list2_indexes) > 0:
+        are_equivalent = False
+
+    if return_correspondances == False:
+        return are_equivalent
+    elif return_correspondances == True:
+        return are_equivalent, correspondances
+
+
+def equivalent_hyperedges(hyperedge1, hyperedge2, enforcerank=True,
+                          return_correspondances=False):
+
+    """
+    Find whether two hyperedges connect to nodes with the same labels and
+    optionally at same ranks.
+    """
+
+    equi_targets = equivalent_nodes(hyperedge1.target,
+                                    hyperedge2.target,
+                                    enforcerank)
+    equi_srcs, corr_srcs = equivalent_node_lists(hyperedge1.sources,
+                                                 hyperedge2.sources,
+                                                 enforcerank, True)
+    if equi_targets == True and equi_srcs == True:
+        are_equivalent = True
     else:
-        equi_graphs = False
+        are_equivalent = False
+        
+    if return_correspondances == False:
+        return are_equivalent
+    elif return_correspondances == True:
+        return are_equivalent, corr_srcs
+    
 
-    return equi_graphs, equi_hyperedges
 
-
-def analogous_hyperedges(hyperedge1, hyperedge2, enforcerank=True):
+def equivalent_node_lists(nodelist1, nodelist2, enforcerank=True,
+                          return_correspondances=False):
     """
-    Find whether two hyperedges connect to nodes with same labels
-    with analogous midedges.
-    Optionally, nodes may be also required to be at same ranks.
-    """
-
-    nn1 = len(mesh1.midnodes)
-    nn2 = len(mesh2.midnodes)
-    ne1 = len(mesh1.midedges)
-    ne2 = len(mesh2.midedges)
-    if nn1 == nn2 and ne1 == ne2:
-        are_equi = True
-    else:
-        are_equi = False
-    if are_equi == True:
-        sources1, targets1 = mesh1.get_events()
-        sources2, targets2 = mesh2.get_events()
-        equi_sources = analogous_nodes(sources1, sources2, enforcerank)
-        equi_targets = analogous_nodes(targets1, targets2, enforcerank)
-        if equi_sources == True and equi_targets == True:
-            are_equi = True
-        else:
-            are_equi = False
-    if are_equi == True:
-        neighbors1 = mesh1.extend_midedges()
-        neighbors2 = mesh2.extend_midedges()
-        equi_midedges = analogous_midedges(neighbors1, neighbors2,
-                                           enforcerank)
-        if equi_midedges == True:
-            are_equi = True
-        else:
-            are_equi = False
-
-    return are_equi
-
-
-def analogous_nodes(nodelist1, nodelist2, enforcerank=True):
-    """
-    Find whether two lists of nodes contain nodes with
-    same labels.
-    Optionally, nodes may be also required to be at same ranks.
-    (This is comparable to the function "same_objects" used in
-    method "equivalent_meshes".)
+    Find whether two lists contain nodes with same labels and are optionally
+    at the same ranks.
+    There may be many nodes with the same label in a given list. If so, the
+    number of dublicates must match between the two lists.
+    Can also return a correspondance list, which for each element of list1
+    gives the index of the corresponding element in list2.
     """
 
-    list1 = nodelist1.copy()
-    list2 = nodelist2.copy()
-    found1 = []
-    found2 = []
-    for i in range(len(list1)):
-        for node2 in list2:
-            if list1[i].label == node2.label:
-                if enforcerank == False:
-                    found1.insert(0, i)
-                    break
-                elif enforcerank == True:
-                    if list1[i].rank == node2.rank:
-                        found1.insert(0, i)
-                        break
-    for j in range(len(list2)):
-        for node1 in list1:
-            if list2[j].label == node1.label:
-                if enforcerank == False:
-                    found2.insert(0, j)
-                    break
-                elif enforcerank == True:
-                    if list2[j].rank == node1.rank:
-                        found2.insert(0, j)
-                        break
-    for i in found1:
-        del(list1[i])
-    for j in found2:
-        del(list2[j])
-    if len(list1) == 0 and len(list2) == 0:
-        are_equi = True
-    else:
-        are_equi = False
+    are_equivalent = True
+    correspondances = []
+    list2_indexes = list(range(len(nodelist2)))
+    for node1 in nodelist1:
+        for i in list2_indexes:
+            node2 = nodelist2[i]
+            equi_nodes = equivalent_nodes(node1, node2, enforcerank)
+            if equi_nodes == True:
+                correspondances.append(i)
+                list2_indexes.remove(i)
+                break
+        # If the previous loop finished with the last node from list2
+        # still not being equivalent.
+        if equi_nodes == False:
+            are_equivalent = False
+            break
+    if len(list2_indexes) > 0:
+        are_equivalent = False
 
-    return are_equi
+    if return_correspondances == False:
+        return are_equivalent
+    elif return_correspondances == True:
+        return are_equivalent, correspondances
 
 
+def equivalent_nodes(node1, node2, enforcerank=True):
+    """
+    Find whether two nodes have the same label and optionally are at the same
+    rank.
+    """
+
+    are_equivalent = False
+    if node1.label == node2.label:
+        are_equivalent = True
+    if enforcerank == True:
+        if node1.rank != node2.rank:
+            are_equivalent = False
+
+    return are_equivalent
+
+# ^^^^^^^^^^^^^^^^^^^ End of Dual Story Merging Section ^^^^^^^^^^^^^^^^^^^^^^^
+
+# ==================== Causal Cores Merging Section ===========================
+
+#def mergecores(eoi, causalgraphs=None, siphon=False, showintro=True,
+#               addedgelabels=False, showedgelabels=False, edgeid=True,
+#               edgeocc=False, edgeuse=False, statstype="abs",
+#               weightedges=False, color=True, writedot=True, rmprev=False,
+#               msg=True):
+#    """
+#    Merge analogous causal cores and count occurrence.
+#    Write the final cores as meshed graphs.
+#    """
+#
+#    # Reading section.
+#    if causalgraphs == None:
+#        if siphon == False:
+#            causal_core_files = get_dot_files(eoi, "causalcore")
+#        elif siphon == True:
+#            causal_core_files = get_dot_files(eoi, "siphon")
+#        causal_cores = []
+#        for core_file in causal_core_files:
+#            core_path = "{}/{}".format(eoi, core_file)
+#            causal_cores.append(CausalGraph(core_path, eoi))
+#    else:
+#       causal_cores = causalgraphs
+#       causal_core_files = None
+#    # Doing the work.
+#    merged_cores = []
+#    while len(causal_cores) > 0:
+#        current_core = causal_cores[0]
+#        analogous_list = [0]
+#        for i in range(1, len(causal_cores)):
+#            same_core, equi_meshes = analogous_graphs(current_core,
+#                                                      causal_cores[i])
+#            if same_core == True:
+#                analogous_list.append(i)
+#                current_core.occurrence += causal_cores[i].occurrence
+#                for j in range(len(current_core.meshes)):
+#                    equi_index = equi_meshes[j]
+#                    uses = causal_cores[i].meshes[equi_index].uses
+#                    current_core.meshes[j].uses += uses
+#        prevcores = []
+#        for index in analogous_list:
+#            file_name = causal_cores[index].filename
+#            dash = file_name.rfind("-")
+#            period = file_name.rfind(".")
+#            if "_node" in file_name:
+#                underscore = file_name.index("_node")
+#                previd = file_name[:period]
+#            else:
+#                previd = file_name[dash+1:period]
+#            prevcores.append(previd)
+#        current_core.prevcores = prevcores
+#        merged_cores.append(current_core)
+#        for i in range(len(analogous_list)-1, -1, -1):
+#            index = analogous_list[i]
+#            del(causal_cores[index])
+#    sorted_cores = sorted(merged_cores, key=lambda x: x.occurrence,
+#                          reverse=True)
+#    for i in range(len(sorted_cores)):
+#        sorted_cores[i].filename = "meshedcore-{}.dot".format(i+1)
+#    for graph in sorted_cores:
+#        graph.compute_relstats()
+#        graph.compute_visuals(showintro, color)
+#        graph.build_dot_file(showintro, addedgelabels, showedgelabels,
+#                             edgeid, edgeocc, edgeuse, statstype, weightedges)
+#    # Writing section.
+#    if writedot == True:
+#        for graph in sorted_cores:
+#            output_path = "{}/{}".format(eoi, graph.filename)
+#            outfile = open(output_path, "w")
+#            outfile.write(graph.dot_file)
+#            outfile.close()
+#    if rmprev == True:
+#        if causal_core_files == None:
+#            causal_core_files = get_dot_files(eoi, "causalcore")
+#        for core_file in causal_core_files:
+#            file_path = "{}/{}".format(eoi, core_file)
+#            os.remove(file_path)
+#    if msg == True:
+#        print("Merging equivalent causal cores, {} unique cores obtained."
+#              .format(len(sorted_cores)))
+#
+#    return sorted_cores
+
+
+#def get_dot_files(eoi, prefix=None):
+#    """ Get the number of the first and last stories. """
+#
+#    tmp_file_list = os.listdir("{}".format(eoi))
+#    file_list = []
+#    for file_name in tmp_file_list:
+#        if "dot" in file_name:
+#            if prefix == None:
+#                file_list.append(file_name)
+#            else:
+#                dash = file_name.rfind("-")
+#                if file_name[:dash] == prefix:
+#                    file_list.append(file_name)
+#    file_dicts = []
+#    for file_name in file_list:
+#        dash = file_name.rfind("-")
+#        period = file_name.rfind(".")
+#        number = int(file_name[dash+1:period])
+#        file_dicts.append({"file": file_name, "num": number})
+#    sorted_dicts = sorted(file_dicts, key=lambda x: x["num"])
+#    sorted_list = []
+#    for d in sorted_dicts:
+#        sorted_list.append(d["file"])
+#
+#    return sorted_list
+#
+#
 #def analogous_graphs(graph1, graph2):
 #    """
 #    Analogous causal graphs have analogous meshes. That is, all their meshes
@@ -4286,6 +4405,217 @@ def analogous_nodes(nodelist1, nodelist2, enforcerank=True):
 
 # .................. Event Paths Merging Section ..............................
 
+def foldstory(story):
+    """
+    Fold (quotient) a dual story based on the label of its nodes. Also
+    accumulate the weight of the hyperedges that overlap. 
+    """
+
+    # Merge event nodes.
+    pair_found = True
+    while pair_found == True:
+        pair_found = False
+        for i in range(len(story.eventnodes)):
+            for j in range(i+1, len(story.eventnodes)):
+                if story.eventnodes[i].label == story.eventnodes[j].label:
+                    # Merging two nodes effectively deletes a node.
+                    merge_nodes(i, j, story.eventnodes, story.hyperedges)
+                    pair_found = True
+                    break
+            if pair_found == True:
+                break
+    # Merge state nodes.
+    pair_found = True
+    while pair_found == True:
+        pair_found = False
+        for i in range(len(story.statenodes)):
+            for j in range(i+1, len(story.statenodes)):
+                if story.statenodes[i].label == story.statenodes[j].label:
+                    # Merging two nodes effectively deletes a node.
+                    merge_nodes(i, j, story.statenodes, story.hyperedges)
+                    pair_found = True
+                    break
+            if pair_found == True:
+                break
+    # Fuse subedges that are identical within hyperedges.
+    for hyperedge in story.hyperedges:
+        pair_found = True
+        while pair_found == True:
+            pair_found = False
+            for i in range(len(hyperedge.edgelist)):
+                edge1 = hyperedge.edgelist[i]
+                for j in range(i+1, len(hyperedge.edgelist)):
+                    edge2 = hyperedge.edgelist[j]
+                    if edge1.source.label == edge2.source.label:
+                        edge1.weight += edge2.weight
+                        del(hyperedge.edgelist[j])
+                        pair_found = True
+                        break
+                if pair_found == True:
+                    break
+        hyperedge.update()
+    # Fuse hyperedges that are identical.
+    pair_found = True
+    while pair_found == True:
+        pair_found = False
+        for i in range(len(story.hyperedges)):
+            for j in range(i+1, len(story.hyperedges)):
+                are_equi, corr = equivalent_hyperedges(story.hyperedges[i],
+                                                       story.hyperedges[j],
+                                                       False, True)
+                if are_equi == True:
+                    for k in range(len(story.hyperedges[i].edgelist)):
+                        main_edge = story.hyperedges[i].edgelist[k]
+                        other_edge = story.hyperedges[j].edgelist[corr[k]]
+                        main_edge.weight += other_edge.weight
+                    del(story.hyperedges[j])
+                    pair_found = True
+                    break
+            if pair_found == True:
+                break
+    for hyperedge in story.hyperedges:
+        hyperedge.update()
+
+
+def merge_nodes(index1, index2, nodelist, hyperedgelist):
+    """
+    Merge two nodes in a given story. In practice, remove the second node
+    and redirect its edges to the first node.
+    """
+
+    node1 = nodelist[index1]
+    node2 = nodelist[index2]
+    for hyperedge in hyperedgelist:
+        for subedge in hyperedge.edgelist:
+            if subedge.source == node2:
+                subedge.source = node1
+            if subedge.target == node2:
+                subedge.target = node1
+        if hyperedge.target == node2:
+            hyperedge.target = node1
+    del(nodelist[index2])
+
+
+def buildpathway(eoi, causalgraphs=None, siphon=False, ignorelist=[],
+                 showintro=False, addedgelabels=True, showedgelabels=True,
+                 edgeid=True, edgeocc=False, edgeprob=True, statstype="rel",
+                 weightedges=True, color=True, writedot=True, rmprev=False):
+    """ Build dual pathway by folding (quotienting) all the stories. """
+
+    # Reading section.
+    if causalgraphs == None:
+        story_files = get_dot_files("{}".format(eoi), "unique")
+        stories = []
+        for story_file in story_files:
+            story_path = "{}/{}".format(eoi, story_file)
+            stories.append(CausalGraph(story_path, eoi))
+    else:
+       stories = causalgraphs
+       story_files = None
+    pathway = stories[0]
+    foldstory(pathway)
+    for i in range(1, len(stories)):
+        pathway.occurrence += stories[i].occurrence
+        pathway.eventnodes += stories[i].eventnodes
+        pathway.statenodes += stories[i].statenodes
+        pathway.hyperedges += stories[i].hyperedges
+        foldstory(pathway)
+    pathway.align_vertical()
+    pathway.hypergraph = True
+    #pathway.rank_sequentially()
+
+    #compute_mesh_occurrence(eoi, pathway)
+    #pathway.compute_visuals(showintro, color)
+    #pathway.compute_relstats()
+    # Write dual pathway.
+    pathway.filename = "dualpathway.dot"
+    pathway.build_dot_file(showintro, addedgelabels, showedgelabels,
+                           edgeid, edgeocc, edgeprob, statstype,
+                           weightedges)
+    output_path = "{}/{}".format(eoi, pathway.filename)
+    outfile = open(output_path, "w")
+    outfile.write(pathway.dot_file)
+    outfile.close()
+
+
+def folddualstories(eoi, causalgraphs=None, siphon=False, ignorelist=[],
+                    showintro=False, addedgelabels=True, showedgelabels=True,
+                    edgeid=True, edgeocc=False, edgeprob=True, statstype="rel",
+                    weightedges=True, color=True, writedot=True, rmprev=False):
+    """ Fold (quotient) dual stories into one dual pathway. """
+
+    # Reading section.
+    if causalgraphs == None:
+        story_files = get_dot_files("{}".format(eoi), "unique")
+        stories = []
+        for story_file in story_files:
+            story_path = "{}/{}".format(eoi, story_file)
+            stories.append(CausalGraph(story_path, eoi))
+    else:
+       stories = causalgraphs
+       story_files = None
+    # Doing the work.
+    flush_ignored(stories, story_files, ignorelist)
+    dualpathway = CausalGraph(eoi=eoi, processed=True)
+    dualpathway.occurrence = 0
+    event_number = 1
+    state_number = 1
+    event_labels = []
+    state_labels = []
+    for story in stories:
+        dualpathway.occurrence += story.occurrence
+        # Add event nodes.
+        for eventnode in story.eventnodes:
+            if eventnode.label not in event_labels:
+                event_labels.append(eventnode.label)
+                n_id = "node{}".format(event_number)
+                new_event = EventNode(n_id, eventnode.label, eventnode.rank,
+                                      intro=eventnode.intro,
+                                      first=eventnode.first)
+                dualpathway.eventnodes.append(new_event)
+                event_number += 1
+        # Add states nodes.
+        for statenode in story.statenodes:
+            if statenode.label not in state_labels:
+                state_labels.append(statenode.label)
+                n_id = "state{}".format(state_number)
+                new_state = StateNode(n_id, statenode.label, statenode.rank,
+                                      intro=statenode.intro,
+                                      first=statenode.first)
+                dualpathway.statenodes.append(new_state)
+                state_number += 1
+        # Add hyperedges.
+        for hyperedge in story.hyperedges:
+            hyperedge_found = False
+            for pathwayhedge in dualpathway.hyperedges:
+                equi_edges = equivalent_hyperedges(hyperedge, pathwayhedge,
+                                                   enforcerank=False)
+                if equi_edges == True:
+                    hyperedge_found = True
+                    pathwayhedge.weight += hyperedge.weight
+                    break
+            if hyperedge_found == False:
+                new_hyperedge = HyperEdge(hyperedge.edgelist)
+                dualpathway.hyperedges.append(new_hyperedge)
+    # Propagate new hyperedge weights to their edge lists.
+    for hyperedge in dualpathway.hyperedges:
+        hyperedge.update()
+    # Rerank graph.
+    dualpathway.rank_sequentially()
+    #compute_mesh_occurrence(eoi, pathway)
+    #pathway.compute_visuals(showintro, color)
+    #pathway.compute_relstats()
+    # Write dual pathway.
+    dualpathway.filename = "dualpathway.dot"
+    dualpathway.build_dot_file(showintro, addedgelabels, showedgelabels,
+                               edgeid, edgeocc, edgeprob, statstype,
+                               weightedges)
+    output_path = "{}/{}".format(eoi, dualpathway.filename)
+    outfile = open(output_path, "w")
+    outfile.write(dualpathway.dot_file)
+    outfile.close()
+
+
 def foldcores(eoi, causalgraphs=None, siphon=False, ignorelist=[],
               showintro=False, addedgelabels=True, showedgelabels=True,
               edgeid=True, edgeocc=False, edgeuse=True, statstype="rel",
@@ -4297,7 +4627,7 @@ def foldcores(eoi, causalgraphs=None, siphon=False, ignorelist=[],
         # Using cores or eventpaths both work. But it can suffle the nodes
         # horizontally, yielding a different graph, but with same ranks for
         # all nodes.
-        core_files = get_dot_files(eoi, "meshedcore")
+        core_files = get_dot_files(eoi, "unique")
         meshedcores = []
         for core_file in core_files:
             core_path = "{}/{}".format(eoi, core_file)
