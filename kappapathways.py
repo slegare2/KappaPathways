@@ -1163,12 +1163,14 @@ class CausalGraph(object):
 
         # Initialize ranks.
         current_nodes = []
-        for node in self.eventnodes:
-            if node.first == True:
-                node.rank = 1
-                current_nodes.append(node)
+        for eventnode in self.eventnodes:
+            if eventnode.first == True:
+                eventnode.rank = 1
+                current_nodes.append(eventnode)
             else:
-                node.rank = None
+                eventnode.rank = None
+        for statenode in self.statenodes:
+            statenode.rank = None
         while len(current_nodes) > 0:
             # 1) Gather hyperedges that have a current_node in their sources.
             current_hyperedges = []
@@ -1189,7 +1191,7 @@ class CausalGraph(object):
             #    ranked in at least one edge group.
             for candidate_node in candidate_nodes:
                 incoming_hedges = []
-                for hyperedge in current_hyperedges:
+                for hyperedge in self.hyperedges:
                     if hyperedge.target == candidate_node:
                         incoming_hedges.append(hyperedge)
                 nsecured = 0
@@ -1211,7 +1213,7 @@ class CausalGraph(object):
                 if rulepos == "top" and nsecured > 0:
                     candidate_node.rank = min(possible_ranks)
                     current_nodes.append(candidate_node)
-                if rulepos == "bot" and nsecured == len(incoming_hedge):
+                if rulepos == "bot" and nsecured == len(incoming_hedges):
                     candidate_node.rank = max(possible_ranks)
                     current_nodes.append(candidate_node)                    
             # 4) Remove all current_nodes for which all outgoing hyperedges
@@ -1237,22 +1239,50 @@ class CausalGraph(object):
                 node.rank = 0
         # Optionally, push intro nodes down when possible.
         if intropos == "bot":
+            # Root nodes are first nodes with the longest path to the EOI.
+            for eventnode in self.eventnodes:
+                if eventnode.label == self.eoi:
+                    eoi_node = eventnode
+            path_lengths = []
+            for eventnode in self.eventnodes:
+                if eventnode.first == True:
+                    paths = self.follow_hyperedges("down", eventnode, [eoi_node])
+                    for path in paths:
+                        path_lengths.append(len(path))
+            longest_path = max(path_lengths)
+            root_nodes = []
+            for eventnode in self.eventnodes:
+                if eventnode.first == True:
+                    paths = self.follow_hyperedges("down", eventnode, [eoi_node])
+                    path_lengths = []
+                    for path in paths:
+                        path_lengths.append(len(path))
+                    if max(path_lengths) == longest_path:
+                        root_nodes.append(eventnode)
+            # Fix in place any node that has a path up to a root node.
+            fixed_nodes = []
+            for node in self.eventnodes+self.statenodes:
+               paths = self.follow_hyperedges("up", node, root_nodes)
+               if len(paths) > 0:
+                   fixed_nodes.append(node)
+            # Move down nodes that are not fixed when possible.
             gap_found = True
             while gap_found == True:
                 gap_found = False
-                for node in self.eventnodes:
-                    # Find the rank of all targets of that node
-                    # (excluding loop targets).
-                    target_ranks = []
-                    for hyperedge in self.hyperedges:
-                        if node in hyperedge.sources:
-                            if hyperedge.target.rank > node.rank:
-                                target_ranks.append(hyperedge.target.rank)
-                    if len(target_ranks) > 0:
-                        new_rank = min(target_ranks) - 1
-                        if new_rank > node.rank:
-                            node.rank = new_rank
-                            gap_found = True
+                for node in self.eventnodes+self.statenodes:
+                    if node not in fixed_nodes:
+                        # Find the rank of all targets of that node
+                        # (excluding loop targets).
+                        target_ranks = []
+                        for hyperedge in self.hyperedges:
+                            if node in hyperedge.sources:
+                                if hyperedge.target.rank > node.rank:
+                                    target_ranks.append(hyperedge.target.rank)
+                        if len(target_ranks) > 0:
+                            new_rank = min(target_ranks) - 1
+                            if new_rank > node.rank:
+                                node.rank = new_rank
+                                gap_found = True
         self.get_maxrank()
         #self.sequentialize_nodeids()
 
@@ -4403,7 +4433,143 @@ def equivalent_nodes(node1, node2, enforcerank=True):
 
 # ================ End of Causal Cores Merging Section ========================
 
-# .................. Event Paths Merging Section ..............................
+# ......................... Folding Section ...................................
+
+def buildpathway(eoi, causalgraphs=None, siphon=False, ignorelist=[],
+                 showintro=False, addedgelabels=True, showedgelabels=True,
+                 edgeid=True, edgeocc=False, edgeprob=True, statstype="rel",
+                 weightedges=True, color=True, writedot=True, rmprev=False):
+    """ Build dual pathway by folding (quotienting) all the stories. """
+
+    # Reading section.
+    if causalgraphs == None:
+        story_files = get_dot_files("{}".format(eoi), "unique")
+        stories = []
+        for story_file in story_files:
+            story_path = "{}/{}".format(eoi, story_file)
+            stories.append(CausalGraph(story_path, eoi))
+    else:
+       stories = causalgraphs
+       story_files = None
+    pathway = stories[0]
+    foldstory(pathway)
+    for i in range(1, len(stories)):
+        pathway.occurrence += stories[i].occurrence
+        pathway.eventnodes += stories[i].eventnodes
+        pathway.statenodes += stories[i].statenodes
+        pathway.hyperedges += stories[i].hyperedges
+        foldstory(pathway)
+    pathway.align_vertical()
+    pathway.hypergraph = True
+    #pathway.rank_sequentially(intropos="top", rulepos="top")
+    #pathway.rank_sequentially(intropos="top", rulepos="bot")
+    #pathway.rank_sequentially(intropos="bot", rulepos="top")
+    pathway.rank_sequentially(intropos="bot", rulepos="bot")
+
+    #compute_mesh_occurrence(eoi, pathway)
+    #pathway.compute_visuals(showintro, color)
+    #pathway.compute_relstats()
+    # Write dual pathway.
+    pathway.filename = "dualpathway.dot"
+    pathway.build_dot_file(showintro, addedgelabels, showedgelabels,
+                           edgeid, edgeocc, edgeprob, statstype,
+                           weightedges)
+    output_path = "{}/{}".format(eoi, pathway.filename)
+    outfile = open(output_path, "w")
+    outfile.write(pathway.dot_file)
+    outfile.close()
+
+    pathcopy = copy.deepcopy(pathway)
+    # Build event pathway.
+    hyperedges_to_remove = []
+    for hyperedge in pathcopy.hyperedges:
+        if isinstance(hyperedge.target, EventNode):
+            if hyperedge.target.label != pathcopy.eoi:
+                for i in range(len(pathcopy.hyperedges)):
+                    hyperedge2 = pathcopy.hyperedges[i]
+                    if hyperedge.target in hyperedge2.sources:
+                        new_target = hyperedge2.target
+                        hyperedges_to_remove.append(i)
+                        # I consider only one output state node per event node
+                        # at the moment. Will need to allow more.
+                        break
+                for subedge in hyperedge.edgelist:
+                    subedge.target = new_target
+                hyperedge.target = new_target
+    # Replace state nodes by event nodes.
+    for i in range(len(pathcopy.hyperedges))
+        hyperedge = pathcopy.hyperedges[i]
+        if i not in hyperedges_to_remove:
+            if isinstance(hyperedge.target, StateNode):
+                # Find the source event node.
+                for j in hyperedges_to_remove:
+                    if pathcopy.hyperedges[j].target == hyperedge.target:
+                        hyperedge.target
+
+    #sorted_hyperedges = sorted(hyperedges_to_remove, reverse=True)
+    #for i in sorted_hyperedges:
+    #    del(pathcopy.hyperedges[i])
+    #events_to_remove = []
+    #for j in range(len(pathcopy.eventnodes)):
+    #    if pathcopy.eventnodes[j].intro == False:
+    #        if pathcopy.eventnodes[j].label != pathcopy.eoi:
+    #            events_to_remove.insert(0, j)
+    #for j in events_to_remove:
+    #    del(pathcopy.eventnodes[j])
+    #for node in pathcopy.eventnodes + pathcopy.statenodes:
+    #    node.rank = math.ceil(node.rank/2)
+    pathcopy.get_maxrank()
+    pathcopy.filename = "eventpathway.dot"
+    pathcopy.build_dot_file(showintro, addedgelabels, showedgelabels,
+                           edgeid, edgeocc, edgeprob, statstype,
+                           weightedges)
+    output_path = "{}/{}".format(eoi, pathcopy.filename)
+    outfile = open(output_path, "w")
+    outfile.write(pathcopy.dot_file)
+    outfile.close()
+    
+
+    # Build state pathway.
+    hyperedges_to_remove = []
+    for hyperedge in pathway.hyperedges:
+        if isinstance(hyperedge.target, EventNode):
+            if hyperedge.target.label != pathway.eoi:
+                for i in range(len(pathway.hyperedges)):
+                    hyperedge2 = pathway.hyperedges[i]
+                    if hyperedge.target in hyperedge2.sources:
+                        new_target = hyperedge2.target
+                        hyperedges_to_remove.append(i)
+                        # I consider only one output state node per event node
+                        # at the moment. Will need to allow more.
+                        break
+                for subedge in hyperedge.edgelist:
+                    subedge.target = new_target
+                hyperedge.target = new_target
+    sorted_hyperedges = sorted(hyperedges_to_remove, reverse=True)
+    for i in sorted_hyperedges:
+        del(pathway.hyperedges[i])
+    events_to_remove = []
+    for j in range(len(pathway.eventnodes)):
+        if pathway.eventnodes[j].intro == False:
+            if pathway.eventnodes[j].label != pathway.eoi:
+                events_to_remove.insert(0, j)
+    for j in events_to_remove:
+        del(pathway.eventnodes[j])
+    for node in pathway.eventnodes + pathway.statenodes:
+        node.rank = math.ceil(node.rank/2)
+    pathway.get_maxrank()
+    pathway.filename = "statepathway.dot"
+    pathway.build_dot_file(showintro, addedgelabels, showedgelabels,
+                           edgeid, edgeocc, edgeprob, statstype,
+                           weightedges)
+    output_path = "{}/{}".format(eoi, pathway.filename)
+    outfile = open(output_path, "w")
+    outfile.write(pathway.dot_file)
+    outfile.close()
+        
+    
+
+
 
 def foldstory(story):
     """
@@ -4496,124 +4662,82 @@ def merge_nodes(index1, index2, nodelist, hyperedgelist):
     del(nodelist[index2])
 
 
-def buildpathway(eoi, causalgraphs=None, siphon=False, ignorelist=[],
-                 showintro=False, addedgelabels=True, showedgelabels=True,
-                 edgeid=True, edgeocc=False, edgeprob=True, statstype="rel",
-                 weightedges=True, color=True, writedot=True, rmprev=False):
-    """ Build dual pathway by folding (quotienting) all the stories. """
-
-    # Reading section.
-    if causalgraphs == None:
-        story_files = get_dot_files("{}".format(eoi), "unique")
-        stories = []
-        for story_file in story_files:
-            story_path = "{}/{}".format(eoi, story_file)
-            stories.append(CausalGraph(story_path, eoi))
-    else:
-       stories = causalgraphs
-       story_files = None
-    pathway = stories[0]
-    foldstory(pathway)
-    for i in range(1, len(stories)):
-        pathway.occurrence += stories[i].occurrence
-        pathway.eventnodes += stories[i].eventnodes
-        pathway.statenodes += stories[i].statenodes
-        pathway.hyperedges += stories[i].hyperedges
-        foldstory(pathway)
-    pathway.align_vertical()
-    pathway.hypergraph = True
-    #pathway.rank_sequentially()
-
-    #compute_mesh_occurrence(eoi, pathway)
-    #pathway.compute_visuals(showintro, color)
-    #pathway.compute_relstats()
-    # Write dual pathway.
-    pathway.filename = "dualpathway.dot"
-    pathway.build_dot_file(showintro, addedgelabels, showedgelabels,
-                           edgeid, edgeocc, edgeprob, statstype,
-                           weightedges)
-    output_path = "{}/{}".format(eoi, pathway.filename)
-    outfile = open(output_path, "w")
-    outfile.write(pathway.dot_file)
-    outfile.close()
-
-
-def folddualstories(eoi, causalgraphs=None, siphon=False, ignorelist=[],
-                    showintro=False, addedgelabels=True, showedgelabels=True,
-                    edgeid=True, edgeocc=False, edgeprob=True, statstype="rel",
-                    weightedges=True, color=True, writedot=True, rmprev=False):
-    """ Fold (quotient) dual stories into one dual pathway. """
-
-    # Reading section.
-    if causalgraphs == None:
-        story_files = get_dot_files("{}".format(eoi), "unique")
-        stories = []
-        for story_file in story_files:
-            story_path = "{}/{}".format(eoi, story_file)
-            stories.append(CausalGraph(story_path, eoi))
-    else:
-       stories = causalgraphs
-       story_files = None
-    # Doing the work.
-    flush_ignored(stories, story_files, ignorelist)
-    dualpathway = CausalGraph(eoi=eoi, processed=True)
-    dualpathway.occurrence = 0
-    event_number = 1
-    state_number = 1
-    event_labels = []
-    state_labels = []
-    for story in stories:
-        dualpathway.occurrence += story.occurrence
-        # Add event nodes.
-        for eventnode in story.eventnodes:
-            if eventnode.label not in event_labels:
-                event_labels.append(eventnode.label)
-                n_id = "node{}".format(event_number)
-                new_event = EventNode(n_id, eventnode.label, eventnode.rank,
-                                      intro=eventnode.intro,
-                                      first=eventnode.first)
-                dualpathway.eventnodes.append(new_event)
-                event_number += 1
-        # Add states nodes.
-        for statenode in story.statenodes:
-            if statenode.label not in state_labels:
-                state_labels.append(statenode.label)
-                n_id = "state{}".format(state_number)
-                new_state = StateNode(n_id, statenode.label, statenode.rank,
-                                      intro=statenode.intro,
-                                      first=statenode.first)
-                dualpathway.statenodes.append(new_state)
-                state_number += 1
-        # Add hyperedges.
-        for hyperedge in story.hyperedges:
-            hyperedge_found = False
-            for pathwayhedge in dualpathway.hyperedges:
-                equi_edges = equivalent_hyperedges(hyperedge, pathwayhedge,
-                                                   enforcerank=False)
-                if equi_edges == True:
-                    hyperedge_found = True
-                    pathwayhedge.weight += hyperedge.weight
-                    break
-            if hyperedge_found == False:
-                new_hyperedge = HyperEdge(hyperedge.edgelist)
-                dualpathway.hyperedges.append(new_hyperedge)
-    # Propagate new hyperedge weights to their edge lists.
-    for hyperedge in dualpathway.hyperedges:
-        hyperedge.update()
-    # Rerank graph.
-    dualpathway.rank_sequentially()
-    #compute_mesh_occurrence(eoi, pathway)
-    #pathway.compute_visuals(showintro, color)
-    #pathway.compute_relstats()
-    # Write dual pathway.
-    dualpathway.filename = "dualpathway.dot"
-    dualpathway.build_dot_file(showintro, addedgelabels, showedgelabels,
-                               edgeid, edgeocc, edgeprob, statstype,
-                               weightedges)
-    output_path = "{}/{}".format(eoi, dualpathway.filename)
-    outfile = open(output_path, "w")
-    outfile.write(dualpathway.dot_file)
-    outfile.close()
+#def folddualstories(eoi, causalgraphs=None, siphon=False, ignorelist=[],
+#                    showintro=False, addedgelabels=True, showedgelabels=True,
+#                    edgeid=True, edgeocc=False, edgeprob=True, statstype="rel",
+#                    weightedges=True, color=True, writedot=True, rmprev=False):
+#    """ Fold (quotient) dual stories into one dual pathway. """
+#
+#    # Reading section.
+#    if causalgraphs == None:
+#        story_files = get_dot_files("{}".format(eoi), "unique")
+#        stories = []
+#        for story_file in story_files:
+#            story_path = "{}/{}".format(eoi, story_file)
+#            stories.append(CausalGraph(story_path, eoi))
+#    else:
+#       stories = causalgraphs
+#       story_files = None
+#    # Doing the work.
+#    flush_ignored(stories, story_files, ignorelist)
+#    dualpathway = CausalGraph(eoi=eoi, processed=True)
+#    dualpathway.occurrence = 0
+#    event_number = 1
+#    state_number = 1
+#    event_labels = []
+#    state_labels = []
+#    for story in stories:
+#        dualpathway.occurrence += story.occurrence
+#        # Add event nodes.
+#        for eventnode in story.eventnodes:
+#            if eventnode.label not in event_labels:
+#                event_labels.append(eventnode.label)
+#                n_id = "node{}".format(event_number)
+#                new_event = EventNode(n_id, eventnode.label, eventnode.rank,
+#                                      intro=eventnode.intro,
+#                                      first=eventnode.first)
+#                dualpathway.eventnodes.append(new_event)
+#                event_number += 1
+#        # Add states nodes.
+#        for statenode in story.statenodes:
+#            if statenode.label not in state_labels:
+#                state_labels.append(statenode.label)
+#                n_id = "state{}".format(state_number)
+#                new_state = StateNode(n_id, statenode.label, statenode.rank,
+#                                      intro=statenode.intro,
+#                                      first=statenode.first)
+#                dualpathway.statenodes.append(new_state)
+#                state_number += 1
+#        # Add hyperedges.
+#        for hyperedge in story.hyperedges:
+#            hyperedge_found = False
+#            for pathwayhedge in dualpathway.hyperedges:
+#                equi_edges = equivalent_hyperedges(hyperedge, pathwayhedge,
+#                                                   enforcerank=False)
+#                if equi_edges == True:
+#                    hyperedge_found = True
+#                    pathwayhedge.weight += hyperedge.weight
+#                    break
+#            if hyperedge_found == False:
+#                new_hyperedge = HyperEdge(hyperedge.edgelist)
+#                dualpathway.hyperedges.append(new_hyperedge)
+#    # Propagate new hyperedge weights to their edge lists.
+#    for hyperedge in dualpathway.hyperedges:
+#        hyperedge.update()
+#    # Rerank graph.
+#    dualpathway.rank_sequentially()
+#    #compute_mesh_occurrence(eoi, pathway)
+#    #pathway.compute_visuals(showintro, color)
+#    #pathway.compute_relstats()
+#    # Write dual pathway.
+#    dualpathway.filename = "dualpathway.dot"
+#    dualpathway.build_dot_file(showintro, addedgelabels, showedgelabels,
+#                               edgeid, edgeocc, edgeprob, statstype,
+#                               weightedges)
+#    output_path = "{}/{}".format(eoi, dualpathway.filename)
+#    outfile = open(output_path, "w")
+#    outfile.write(dualpathway.dot_file)
+#    outfile.close()
 
 
 def foldcores(eoi, causalgraphs=None, siphon=False, ignorelist=[],
