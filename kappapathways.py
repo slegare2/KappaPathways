@@ -26,7 +26,7 @@ class EventNode(object):
 
     def __init__(self, nodeid, label, rank=None, weight=1, rel_wei=1.0,
                  occurrence=1, rel_occ=1.0, intro=False, first=False,
-                 highlighted=False, pos=None, eventid=None):
+                 highlighted=False, pos=None, eventid=None, shrink=False):
         """ Initialize class EventNode. """
 
         self.nodeid = nodeid
@@ -40,6 +40,8 @@ class EventNode(object):
         self.first = first
         self.highlighted = highlighted
         self.pos = pos
+        self.eventid = eventid
+        self.shrink = shrink
         self.check_types()
         self.edits = []
 
@@ -207,7 +209,7 @@ class HyperEdge(object):
     """
 
     def __init__(self, edgelist, weight=1, underlying=False, color="black",
-                 hyperid=None):
+                 hyperid=None, layout_weight=1, reverse=False):
         """ Initialize class CausalEdge. """
 
         self.edgelist = edgelist
@@ -215,6 +217,8 @@ class HyperEdge(object):
         self.underlying = underlying
         self.color = color
         self.hyperid = hyperid
+        self.layout_weight = layout_weight
+        self.reverse = reverse
         self.check_types()
         self.update()
 
@@ -606,15 +610,15 @@ class CausalGraph(object):
     """ Data structure for causal graphs. """
 
     def __init__(self, filename=None, eoi=None, hypergraph=False,
-                 processed=False, showintro=True, precedenceonly=False,
-                 rankposdict=None):
+                 producedby="KappaPathways", showintro=True,
+                 precedenceonly=False, rankposdict=None):
         """ Initialize class CausalGraph. """
 
         # Header variables.
         self.filename = filename
         self.eoi = eoi
         self.hypergraph = hypergraph
-        self.processed = processed
+        self.producedby = producedby
         self.showintro = showintro
         self.precedenceonly = precedenceonly
         self.rankposdict = rankposdict
@@ -663,8 +667,10 @@ class CausalGraph(object):
             #    type_index = line.index("nodestype")
             #    quote = line.rfind('"')
             #    self.nodestype = line[type_index+11:quote]
-            if 'processed="True"' in line:
-                self.processed = True
+            if 'producedby=' in line:
+                prod_index = line.index("producedby")
+                quote = line.rfind('"')
+                self.producedby = line[prod_index+12:quote]
             if 'showintro="False"' in line:
                 self.showintro = False
             if "eoi=" in line:
@@ -710,11 +716,15 @@ class CausalGraph(object):
                     ori_id = tokens[0]
                     if '"' in ori_id:
                         ori_id = ori_id[1:-1]
-                    #if "node" not in ori_id:
-                    #    node_id = "node{}".format(ori_id)
-                    #else:
-                    node_id = ori_id
+                    if "ev" not in ori_id and "state" not in ori_id:
+                        node_id = "ev{}".format(ori_id)
+                    else:
+                        node_id = ori_id
                     lbl_start = read_line.index("label=")+7
+                    shrk = False
+                    if "hlabel=" in read_line:
+                        lbl_start = read_line.index("hlabel=")+8
+                        shrk = True
                     if ">" in read_line:
                         lbl_end = read_line[lbl_start:].rfind('>')+lbl_start
                     else:
@@ -758,7 +768,8 @@ class CausalGraph(object):
                             self.eventnodes.append(EventNode(node_id, label,
                                                              rank,
                                                              intro=is_intro,
-                                                             first=is_first))
+                                                             first=is_first,
+                                                             shrink=shrk))
                             self.label_mapping[node_id] = label
         # Read edges.
         tmp_edges = []
@@ -777,13 +788,15 @@ class CausalGraph(object):
                 source_id = tokens[0]
                 if '"' in source_id:
                     source_id = source_id[1:-1]
-                #if "node" not in source_id and "mid" not in source_id:
-                #    source_id = "node{}".format(source_id)
+                if "state" not in source_id and "mid" not in source_id:
+                    if "ev" not in source_id:
+                        source_id = "ev{}".format(source_id)
                 target_id = tokens[2]
                 if '"' in target_id:
                     target_id = target_id[1:-1]
-                #if "node" not in target_id and "mid" not in target_id:
-                #    target_id = "node{}".format(target_id)
+                if "state" not in target_id and "mid" not in target_id:
+                    if "ev" not in target_id:
+                        target_id = "ev{}".format(target_id)
                 source = None
                 target = None
                 for eventnode in self.eventnodes:
@@ -818,7 +831,13 @@ class CausalGraph(object):
                 else:
                     labelcarrier = False
                 if self.precedenceonly == False:
-                    if self.hypergraph == False:
+                    if self.producedby == "KaFlow":
+                        if color == "grey":
+                            edgetype = "conflict"
+                            color = "black"
+                        else:
+                            edgetype = "causal"
+                    elif self.producedby == "KaStor":
                         if "style=dotted" in line:
                             edgetype = "conflict"
                             source_save = source
@@ -826,7 +845,7 @@ class CausalGraph(object):
                             target = source_save
                         else:
                             edgetype = "causal"
-                    elif self.hypergraph == True:
+                    elif self.producedby == "KappaPathways":
                         if "style=dashed" in line:
                             edgetype = "conflict"
                         else:
@@ -883,7 +902,7 @@ class CausalGraph(object):
                 if node.label == "Lig, Lig":
                     node.label = "Lig"
         self.create_hyperedges()
-        if self.processed == False:
+        if self.producedby != "KappaPathways":
             self.find_first_rules()
             self.rank_sequentially()
             self.rm_superfluous_causal_edges()
@@ -1192,7 +1211,8 @@ class CausalGraph(object):
                 for hyperedge in self.hyperedges:
                     if hyperedge.target == candidate_node:
                         incoming_hedges.append(hyperedge)
-                nsecured = 0
+                secured_hedges = []
+                potential_hedges = []
                 possible_ranks = []
                 for incoming_hedge in incoming_hedges:
                     secured = True
@@ -1202,18 +1222,37 @@ class CausalGraph(object):
                                 secured = False
                                 break
                     if secured == True:
-                        nsecured += 1
+                        secured_hedges.append(incoming_hedge)
+                        potential_hedges.append(incoming_hedge)
                         source_ranks = []
                         for source in incoming_hedge.sources:
                             if source.intro == False:
                                 source_ranks.append(source.rank)
                         possible_ranks.append(max(source_ranks)+1)
+                    elif secured == False:
+                        # Hyperedges that are not secured still count as
+                        # potential hyperedges if they do not loop back to
+                        # the candidate node.
+                        if rulepos == "bot":
+                            # I need to compute this only of rulepos == "bot"
+                            # and it is very long to compute if the graph is
+                            # large.
+                            looping_hedge = False
+                            for source in incoming_hedge.sources:
+                                paths = self.follow_hyperedges("up", source,
+                                                               [candidate_node])
+                                if len(paths) > 0:
+                                    looping_hedge = True
+                            if looping_hedge == False:
+                                potential_hedges.append(incoming_hedge)
+                nsecured = len(secured_hedges)
+                npotential = len(potential_hedges)
                 if rulepos == "top" and nsecured > 0:
                     candidate_node.rank = min(possible_ranks)
                     current_nodes.append(candidate_node)
-                if rulepos == "bot" and nsecured == len(incoming_hedges):
+                if rulepos == "bot" and nsecured == npotential:
                     candidate_node.rank = max(possible_ranks)
-                    current_nodes.append(candidate_node)                    
+                    current_nodes.append(candidate_node)
             # 4) Remove all current_nodes for which all outgoing hyperedges
             #    have their target already ranked.
             next_nodes = []
@@ -1319,8 +1358,8 @@ class CausalGraph(object):
             else:
                 new_edgelist = []
                 for edge in hyperedge.edgelist:
-                    paths = self.follow_edges("down",
-                                              edge.source, [edge.target])
+                    paths = self.follow_hyperedges("down", edge.source,
+                                                   [edge.target])
                     if len(paths) == 1:
                         new_edgelist.append(edge)
                 if len(new_edgelist) > 0:
@@ -1351,13 +1390,17 @@ class CausalGraph(object):
                             edge.layout_weight = 0
 
 
-    def follow_edges(self, direction, from_node, to_nodes=[]):
+    def follow_edges(self, direction, from_node, to_nodes=[],
+                     ignore_conflict=False, stop_at_first=False):
         """
         Return a list of all acyclic paths from a given node to the top of the
         graph (using direction="up") or to the bottom (using direction="down").
         If to_nodes are provided, return only the paths that go from from_node
         to any of the to_nodes.
         """
+        # This method takes a lot of time on large graphs and can most probably
+        # be improved to speed up calculation.
+        
     
         all_paths = [[from_node]]
         ends_reached = False
@@ -1367,15 +1410,21 @@ class CausalGraph(object):
                 path = all_paths[i]
                 next_nodes = []
                 for edge in self.causaledges:
-                    if direction == "up":
-                        if edge.target == path[-1]:
-                            next_nodes.append(edge.source)
-                    elif direction == "down":
-                        if edge.source == path[-1]:
-                            next_nodes.append(edge.source)
+                    skip = False
+                    if ignore_conflict == True:
+                        if edge.relationtype == "conflict":
+                            skip = True
+                    if skip == False:
+                        if direction == "up":
+                            if edge.target == path[-1]:
+                                next_nodes.append(edge.source)
+                        elif direction == "down":
+                            if edge.source == path[-1]:
+                                next_nodes.append(edge.target)
                 if len(next_nodes) > 0 and path[-1] not in to_nodes:
                     ends_reached = False
-                    path_copy = path.copy()
+                    if len(next_nodes) > 0:
+                        path_copy = path.copy()
                     path.append(next_nodes[0])
                     for i in range(1, len(next_nodes)):
                         new_path = path_copy.copy()
@@ -1385,6 +1434,11 @@ class CausalGraph(object):
             for i in range(len(all_paths)-1, -1, -1):
                 if len(all_paths[i]) != len(set(all_paths[i])):
                     del(all_paths[i])
+            # Exit prematurely if only one path is sufficient.
+            if stop_at_first == True:
+                for path in all_paths:
+                    if path[-1] in to_nodes:
+                        ends_reached = True
         # Remove paths that do not end with one of the to_nodes if to_nodes
         # was defined.
         if len(to_nodes) > 0:
@@ -1405,6 +1459,7 @@ class CausalGraph(object):
         If to_nodes are provided, return only the paths that go from from_node
         to any of the to_nodes.
         """
+        # Just as follow_edges, can probably be improved to speed up.
     
         all_paths = [[from_node]]
         ends_reached = False
@@ -1450,11 +1505,29 @@ class CausalGraph(object):
         """ Find the highest rank of a node in CausalGraph. """
 
         all_ranks = []
-        for node in self.eventnodes:
+        for node in self.eventnodes + self.statenodes:
             if node.rank != None:
                 all_ranks.append(node.rank)
         if len(all_ranks) > 0:
             self.maxrank = max(all_ranks)
+
+
+    def reverse_subedges(self):
+        """
+        Reverse the direction of subedges if their source has a higher
+        rank than their target.
+        """
+        
+        for hyperedge in self.hyperedges:
+            all_sources_higher_rank = True
+            for subedge in hyperedge.edgelist:
+                if subedge.target.rank > subedge.source.rank:
+                    subedge.reverse = False
+                    all_sources_higher_rank = False
+                else:
+                    subedge.reverse = True
+            if all_sources_higher_rank == True:
+                hyperedge.reverse = True
 
 
     def sequentialize_nodeids(self):
@@ -1960,10 +2033,10 @@ class CausalGraph(object):
 
         # Write info about graph.
         dot_str = 'digraph G{\n'
+        dot_str += '  producedby="{}" ;\n'.format(self.producedby)
         dot_str += '  precedenceonly="{}" ;\n'.format(self.precedenceonly)
         dot_str += '  hypergraph="{}" ;\n'.format(self.hypergraph)
         #dot_str += '  nodestype="{}" ;\n'.format(self.nodestype)
-        dot_str += '  processed="{}" ;\n'.format(self.processed)
         if self.eoi != None:
             dot_str += '  eoi="{}" ;\n'.format(self.eoi)
         if self.occurrence != None:
@@ -2032,25 +2105,33 @@ class CausalGraph(object):
                         dot_str += '//'
                     node_lines = textwrap.wrap(node.label, 20,
                                               break_long_words=False)
+                    dot_str += '{} '.format(node.nodeid)
                     node_str = ""
                     for i in range(len(node_lines)):
                         if i == 0:
                             node_str += " {} ".format(node_lines[i])
                         else:
                             node_str += "<br/> {} ".format(node_lines[i])
-                    dot_str += ('{} [label=<{}>'
-                                .format(node.nodeid, node_str))
-                    dot_str += ', shape={}, style=filled'.format(node_shape)
-                    if node.highlighted == True:
-                       dot_str += ', fillcolor=gold, penwidth=2'
-                    else:
-                       dot_str += ', fillcolor={}'.format(node_color)
-                    if node.intro == True:
-                        dot_str += ', intro={}'.format(node.intro)
-                    if node.first == True:
-                        dot_str += ', first={}'.format(node.first)
-                    if node.pos != None:
-                        dot_str += ', pos={}'.format(node.pos)
+                    if node.shrink == False:
+                        dot_str += '[label=<{}>'.format(node_str)
+                        dot_str += ', shape={}, style=filled'.format(node_shape)
+                        if node.highlighted == True:
+                           dot_str += ', fillcolor=gold, penwidth=2'
+                        else:
+                           dot_str += ', fillcolor={}'.format(node_color)
+                        if node.intro == True:
+                            dot_str += ', intro={}'.format(node.intro)
+                        if node.first == True:
+                            dot_str += ', first={}'.format(node.first)
+                        if node.pos != None:
+                            dot_str += ', pos={}'.format(node.pos)
+                    elif node.shrink == True:
+                        dot_str += '[label="", hlabel=<{}>'.format(node_str)
+                        dot_str += ', shape=circle'
+                        dot_str += ', style=filled'
+                        dot_str += ', fillcolor=white'
+                        dot_str += ', width=0.1'
+                        dot_str += ', height=0.1'
                     dot_str += ', penwidth=2'
                     dot_str += "] ;\n"
             for node in self.statenodes:
@@ -2173,14 +2254,23 @@ class CausalGraph(object):
                     midid_str = "mid{}".format(midid)
                     dot_str += self.write_midnode(midid_str)
                     dot_str += '] ;\n'
+                    all_conflict = True
                     for edge in hyperedge.edgelist:
-                        dot_str += self.write_custom_edge(edge.source.nodeid, midid_str,
-                                                     edge.color, edge.weight,
-                                                     edge.layout_weight, False)
+                        dot_str += self.write_custom_edge(edge.source.nodeid,
+                                    midid_str, edge.color, edge.weight,
+                                    edge.layout_weight, edge.relationtype,
+                                    edge.reverse, False)
                         dot_str += '] ;\n'
-                    dot_str += self.write_custom_edge(midid_str, hyperedge.target.nodeid,
-                                                 "black", hyperedge.weight,
-                                                 hyperedge.layout_weight)
+                        if edge.relationtype != "conflict":
+                            all_conflict = False
+                    if all_conflict == True:
+                        reltype = "conflict"
+                    else:
+                        reltype = "causal"
+                    dot_str += self.write_custom_edge(midid_str,
+                                    hyperedge.target.nodeid, "black",
+                                    hyperedge.weight, hyperedge.layout_weight,
+                                    reltype, hyperedge.reverse)
                     dot_str += '] ;\n'
                     midid += 1
                 else:
@@ -2252,31 +2342,41 @@ class CausalGraph(object):
         edge_str = ('{} -> {} '.format(edge.source.nodeid,
                                            edge.target.nodeid))
         edge_str += '[color={}'.format(edge.color)
+        if isinstance(edge.target, EventNode) and edge.target.shrink == True:
+            edge_str += ", arrowhead=none"
         #edge_str += ", arrowhead=onormal"
         if edge.relationtype == "conflict":
             edge_str += ", style=dashed"
         edge_str += ', w={}'.format(edge.weight)
         edge_str += ', weight={}'.format(edge.layout_weight)
-        #edge_str += ', penwidth=2'
-        edge_str += ', penwidth={}'.format(edge.weight)
+        edge_str += ', penwidth=2'
+        #edge_str += ', penwidth={}'.format(edge.weight)
 
         return edge_str
 
 
-    def write_custom_edge(self, source, target, color, weight, layout_weight, arrow=True):
+    def write_custom_edge(self, source, target, color, weight, layout_weight,
+                          relationtype="causal", reverse=False, arrow=True):
         """ Write the line of a dot file for a single edge. """
 
-        edge_str = ('{} -> {} '.format(source, target))
+        if reverse == False:
+            edge_str = ('{} -> {} '.format(source, target))
+        elif reverse == True:
+            edge_str = ('{} -> {} '.format(target, source))
         edge_str += '[color={}'.format(color)
         #edge_str += ", arrowhead=onormal"
         if arrow == False:
             edge_str += ', dir=none'
-        #if edge.relationtype == "conflict":
-        #    edge_str += ", style=dashed"
+        if relationtype == "conflict":
+            edge_str += ", style=dashed"
         edge_str += ', w={}'.format(weight)
         edge_str += ', weight={}'.format(layout_weight)
-        #edge_str += ', penwidth=2'
-        edge_str += ', penwidth={}'.format(weight)
+        edge_str += ', penwidth=2'
+        if reverse == True:
+            edge_str += ", rev=True"
+            if arrow == True:
+                edge_str += ', dir=back'
+        #edge_str += ', penwidth={}'.format(weight)
 
         return edge_str
 
@@ -2443,7 +2543,7 @@ def get_field(field, read_str, default):
 # -------------------- Causal Cores Generation Section ------------------------
 
 def getcausalcores(eoi, kappamodel, kasimpath, kaflowpath, simtime=1000,
-                   simseed=None, precedenceonly=True):
+                   simseed=None, precedenceonly=True, ignorelist=[]):
     """ 
     Generate initial causal cores of given event of interest by running KaSim 
     and then KaFlow.
@@ -2451,7 +2551,7 @@ def getcausalcores(eoi, kappamodel, kasimpath, kaflowpath, simtime=1000,
 
     new_model = add_eoi(eoi, kappamodel)
     trace_path = run_kasim(new_model, kasimpath, simtime, simseed)
-    run_kaflow(eoi, trace_path, kaflowpath, precedenceonly)
+    run_kaflow(eoi, trace_path, kaflowpath, precedenceonly, ignorelist)
 
 
 def getstories(eoi, kappamodel, kasimpath, kastorpath, simtime=1000,
@@ -2473,6 +2573,8 @@ def add_eoi(eoi, kappamodel):
         os.mkdir(eoi)
     if not os.path.exists("{}/tmp".format(eoi)):
         os.mkdir("{}/tmp".format(eoi))
+    if not os.path.exists("{}/unique".format(eoi)):
+        os.mkdir("{}/unique".format(eoi))
     last_dot = kappamodel.rfind(".")
     prefix = kappamodel[:last_dot]
     new_path = "{}/{}-eoi.ka".format(eoi, prefix)
@@ -2520,39 +2622,54 @@ def run_kasim(kappa_with_eoi, kasimpath, simtime, simseed):
     return trace_path
 
 
-def run_kaflow(eoi, trace_path, kaflowpath, precedenceonly):
+def run_kaflow(eoi, trace_path, kaflowpath, precedenceonly, ignorelist):
     """ Run KaFlow on the trace containing the EOI. """
 
     if precedenceonly == True:
         subprocess.run(("{}".format(kaflowpath),
                         "--precedence-only",
-                        "-o", "{}/tmp/precedencecore-".format(eoi),
+                        "-o", "{}/tmp/causalcore-".format(eoi),
                         "{}".format(trace_path)))
-        # Add a line to indicate that precedenceonly is True in core files.
-        core_files = get_dot_files("{}/tmp".format(eoi), "precedencecore")
-        for core_file in core_files:
-            input_file = open("{}/tmp/{}".format(eoi, core_file), "r")
-            content = input_file.readlines()
-            input_file.close()
-            content.insert(1, '  precedenceonly="True"\n')
-            output_file = open("{}/tmp/{}".format(eoi, core_file), "w")
-            output_file.writelines(content)
-            output_file.close()
     elif precedenceonly == False:
         subprocess.run(("{}".format(kaflowpath),
                         "-o", "{}/tmp/causalcore-".format(eoi),
                         "{}".format(trace_path)))
-        # Add a line to indicate that precedenceonly is True in core files.
-        core_files = get_dot_files("{}/tmp".format(eoi), "causalcore")
-        for core_file in core_files:
-            input_file = open("{}/tmp/{}".format(eoi, core_file), "r")
-            content = input_file.readlines()
-            input_file.close()
-            content.insert(1, '  precedenceonly="False"\n')
-            output_file = open("{}/tmp/{}".format(eoi, core_file), "w")
+    core_files = get_dot_files("{}/tmp".format(eoi), "causalcore")
+    filenum = 1
+    nignored = 0
+    for core_file in core_files:
+        input_path = "{}/tmp/{}".format(eoi, core_file)
+        input_file = open(input_path, "r")
+        content = input_file.readlines()
+        contains_ignored = check_ignored(eoi, input_path, ignorelist)
+        input_file.close()
+        os.remove(input_path)
+        if contains_ignored == True:
+            nignored += 1
+        elif contains_ignored == False:
+            content.insert(1, '  precedenceonly="{}"\n'.format(precedenceonly))
+            content.insert(1, '  producedby="KaFlow"\n')
+            output_file = open("{}/tmp/causalcore-{}.dot".format(eoi, filenum), "w")
             output_file.writelines(content)
             output_file.close()
-        
+            filenum += 1
+    print("Ignoring {} cores out of {} because they contain undo rules."
+        .format(nignored, len(core_files)))
+
+
+def check_ignored(eoi, input_path, ignorelist):
+    """
+    Check if core contains any ignored term in any of its nodes.
+    """
+
+    contains_ignored = False
+    core = CausalGraph(input_path, eoi)
+    for eventnode in core.eventnodes:
+        if any(ignorestr in eventnode.label for ignorestr in ignorelist):
+            contains_ignored = True
+
+    return contains_ignored
+
 
 def run_kastor(eoi, trace_path, kastorpath, compression):
     """ Run KaStor with fill_siphon and optionally weak compression. """
@@ -2617,7 +2734,22 @@ def fillsiphon(eoi, kappamodel, kastorpath):
         subprocess.run(("{}".format(kastorpath), "--none", "{}".format(trace_path)))
         os.rename("cflow_none_0.dot", "{}/tmp/siphon-{}.dot".format(eoi, filenumber))
         os.remove("cflow_none_Summary.dat")
+        # Using weak compression here will sometimes remove loop events.
+        #subprocess.run(("{}".format(kastorpath), "--weak", "{}".format(trace_path)))
+        #os.rename("cflow_Weakly_0.dot", "{}/tmp/siphonweak-{}.dot".format(eoi, filenumber))
+        #os.remove("cflow_Weakly_Summary.dat")
         os.remove(trace_path)
+    # Add a line to indicate that the file was produced by KaStor.
+    story_files = get_dot_files("{}/tmp".format(eoi), "siphon")
+    #story_files = get_dot_files("{}/tmp".format(eoi), "siphonweak")
+    for story_file in story_files:
+        input_file = open("{}/tmp/{}".format(eoi, story_file), "r")
+        content = input_file.readlines()
+        input_file.close()
+        content.insert(3, ' producedby="KaStor"\n')
+        output_file = open("{}/tmp/{}".format(eoi, story_file), "w")
+        output_file.writelines(content)
+        output_file.close()
     # Clean up and check calculation time.
     os.remove("compression_status.txt")
     os.remove("profiling.html")
@@ -2634,7 +2766,10 @@ def tweakstories(eoi, showintro=True, addedgelabels=False,
     """ Tweak stories for deemed better readability. """
 
     # Reading section.
-    story_files = get_dot_files("{}/tmp".format(eoi), "siphon")
+    story_files = get_dot_files("{}/tmp".format(eoi), "causalcore")
+    # I cannot use KaStor fillsiphon for now because I lose event ids in the
+    # process. I need to be able the recover those ids.
+    #story_files = get_dot_files("{}/tmp".format(eoi), "siphon")
     stories = []
     for story_file in story_files:
         story_path = "{}/tmp/{}".format(eoi, story_file)
@@ -2642,10 +2777,12 @@ def tweakstories(eoi, showintro=True, addedgelabels=False,
     # Tweak each story.
     for i in range(len(stories)):
         stories[i].filename = "story-{}.dot".format(i+1)
-        stories[i].processed = True
+        stories[i].producedby = "KappaPathways"
     for story in stories:
         #story.compute_relstats()
         #story.compute_visuals(showintro, color=False)
+        #story.create_hyperedges()
+        story.occurrence = None
         story.build_dot_file(showintro, addedgelabels, showedgelabels,
                              edgeid, edgeocc, edgeuse, statstype, weightedges)
         output_path = "{}/{}".format(eoi, story.filename)
@@ -2717,14 +2854,14 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
     #rules = sim["model"]["ast_rules"]
     steps = sim["trace"]
     # Write stories with state edits.
-    #tmp_stories = [stories[0]]
+    #tmp_stories = stories[0:10]
     #stories = tmp_stories
     for story in stories:
         # Reset hyperedges.
         story.hyperedges = []
         # Get actions for each event node.
         for eventnode in story.eventnodes:
-            step = steps[int(eventnode.nodeid)]
+            step = steps[int(eventnode.nodeid[2:])]
             bnd_num = 1
             editlist = [] # List of states containing only sites of type edit.
             if step[0] == 1: # Rule
@@ -2801,7 +2938,7 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
         # Get tests for each event node.
         for eventnode in story.eventnodes:
             eventnode.tests = []
-            step = steps[int(eventnode.nodeid)]
+            step = steps[int(eventnode.nodeid[2:])]
             bnd_num = 1
             tests = None
             if step[0] == 1: # Rule
@@ -2819,17 +2956,41 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
                     if state[0]["test"] != 0:
                         tmp_states.append(state)
                 eventnode.tests = tmp_states
+            # Group sites by agents for each test.
+            grouped_tests = []
+            for test in eventnode.tests:
+                new_test = group_sites_by_agent(test)
+                grouped_tests.append(new_test)
+            eventnode.tests = grouped_tests
         # Add edges between state nodes and the event nodes that require them.
         for statenode in story.statenodes:
+            # !! Here I have to do something if i include stories with undos.
+            # Gather eventnodes going down until some event undoes the state
+            # of current statenode. !!
             for eventnode in story.eventnodes:
-                editused = False
-                for eventtest in eventnode.tests:
-                    are_same = compare_states(statenode.edit, eventtest)
-                    if are_same == True:
-                        editused = True
-                        break
-                if editused == True:
-                    new_edge = CausalEdge(statenode, eventnode)
+                if eventnode.rank > statenode.rank:
+                    editused = False
+                    for eventtest in eventnode.tests:
+                        are_rel = edit_vs_test(statenode.edit, eventtest)
+                        #are_same = compare_states(statenode.edit, eventtest,
+                        #                          ignoretype=True)
+                        if are_rel == True:
+                            editused = True
+                            break
+                    if editused == True:
+                        new_edge = CausalEdge(statenode, eventnode)
+                        story.causaledges.append(new_edge)
+        # Add conflict edges between states and target events.
+        for edge in story.causaledges:
+            if edge.relationtype == "conflict":
+                out_state_nodes = []
+                for edge2 in story.causaledges:
+                    if edge2.source == edge.source:
+                        if isinstance(edge2.target, StateNode):
+                            out_state_nodes.append(edge2.target)
+                for out_state_node in out_state_nodes:
+                    new_edge = CausalEdge(out_state_node, edge.target,
+                                          relationtype="conflict")
                     story.causaledges.append(new_edge)
         # Find secondary edges.
         for statenode in story.statenodes:
@@ -2885,20 +3046,23 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
         for j in edges_to_remove:
             del(story.causaledges[j])
         story.create_hyperedges()
-    ## Write stories with edited states.
-    #for i in range(len(stories)):
-    #    stories[i].filename = "edits-{}.dot".format(i+1)
-    #for story in stories:
-    #    story.build_dot_file(showintro, addedgelabels, showedgelabels,
-    #                         edgeid, edgeocc, edgeprob, statstype, weightedges)
-    #    output_path = "{}/tmp/{}".format(eoi, story.filename)
-    #    outfile = open(output_path, "w")
-    #    outfile.write(story.dot_file)
-    #    outfile.close()
+    # Write stories with edited states.
+    for i in range(len(stories)):
+        stories[i].filename = "edits-{}.dot".format(i+1)
+    for story in stories:
+        story.occurrence = None
+        story.build_dot_file(showintro, addedgelabels, showedgelabels,
+                             edgeid, edgeocc, edgeprob, statstype, weightedges)
+        output_path = "{}/tmp/{}".format(eoi, story.filename)
+        outfile = open(output_path, "w")
+        outfile.write(story.dot_file)
+        outfile.close()
+
 
     # Then write state (context + edit).
     """ Get the cumulative relevant context for each state node. """
     for story in stories:
+        print(story.filename)
         story.hyperedges = []
         rule_outputs = []
         for edge in story.causaledges:
@@ -2909,7 +3073,8 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
         for statenode in rule_outputs:
             cumul_nodes = []
             # Get upstream path of state nodes.
-            paths = story.follow_edges("up", statenode)
+            # This part takes a long time on large graphs, may be improved.
+            paths = story.follow_edges("up", statenode, ignore_conflict=False)
             state_paths = []
             for path in paths:
                 state_path = []
@@ -2968,14 +3133,11 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
                         target_events.append(edge.target)
                 # Check if there is at least one of the target nodes which is
                 # in the future of current state node (has an upstream path).
-                relevant_for_future = False
-                for target_event in target_events:
-                    upstream_paths = story.follow_edges("up", target_event,
-                                                        [statenode])
-                    if len(upstream_paths) > 0:
-                        relevant_for_future = True
-                        break
-                if relevant_for_future == True:
+                downstream_paths = story.follow_edges("down", statenode,
+                                                      target_events,
+                                                      ignore_conflict=True,
+                                                      stop_at_first=True)
+                if len(downstream_paths) > 0:                
                     relevant_nodes.append(cumul_node)
             # Build current state node context from the state of
             # all the relevant_nodes.
@@ -2989,31 +3151,26 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
                     elif context_agent["type"] != None:
                         context_agent["type"] = "context"
                     full_state.append(context_agent)
-            statenode.state = group_sites_by_agent(full_state) 
+            statenode.state = group_sites_by_agent(full_state)
             lbl = write_context_expression(statenode.state)
             statenode.label = lbl
-        ## Weight edges to align rule outputs 
-        #for edge in story.causaledges:
-        #    if edge.secondary == True:
-        #        edge.weight = 0
-        #    elif edge.secondary == False:
-        #        if edge.source in rule_outputs or edge.target in rule_outputs:
-        #            edge.layout_weight = 1
-        #        else:
-        #            edge.layout_weight = 0
+        for statenode in story.statenodes:
+            if statenode not in rule_outputs:
+                statenode.state = statenode.edit
         story.create_hyperedges()
         story.align_vertical()
 
-    ## Write stories with context on state nodes.
-    #for i in range(len(stories)):
-    #    stories[i].filename = "state-{}.dot".format(i+1)
-    #for story in stories:
-    #    story.build_dot_file(showintro, addedgelabels, showedgelabels,
-    #                         edgeid, edgeocc, edgeprob, statstype, weightedges)
-    #    output_path = "{}/tmp/{}".format(eoi, story.filename)
-    #    outfile = open(output_path, "w")
-    #    outfile.write(story.dot_file)
-    #    outfile.close()
+    # Write stories with context on state nodes.
+    for i in range(len(stories)):
+        stories[i].filename = "state-{}.dot".format(i+1)
+    for story in stories:
+        story.build_dot_file(showintro, addedgelabels, showedgelabels,
+                             edgeid, edgeocc, edgeprob, statstype, weightedges)
+        output_path = "{}/tmp/{}".format(eoi, story.filename)
+        outfile = open(output_path, "w")
+        outfile.write(story.dot_file)
+        outfile.close()
+
 
     # Distinguish events that are applications of a same rule but
     # in a different context.
@@ -3077,13 +3234,14 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
     editset = []
     statesets = []
     for story in stories:
-        rule_outputs = []
-        for edge in story.causaledges:
-            if isinstance(edge.source, EventNode):
-                if edge.source.intro == False:
-                    if isinstance(edge.target, StateNode):
-                        rule_outputs.append(edge.target)
-        for statenode in rule_outputs:
+        #rule_outputs = []
+        #for edge in story.causaledges:
+        #    if isinstance(edge.source, EventNode):
+        #        if edge.source.intro == False:
+        #            if isinstance(edge.target, StateNode):
+        #                rule_outputs.append(edge.target)
+        #for statenode in rule_outputs:
+        for statenode in story.statenodes:
             edit_found = False
             for i in range(len(editset)):
                 are_same = compare_states(statenode.edit, editset[i],
@@ -3168,46 +3326,85 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
         outfile.write(story.dot_file)
         outfile.close()
 
-    ## Simplify state node labels by removing the part that is common to all
-    ## state labels with a same edit.
-    #### Postpone that ###
-
-    ## 1) Gather lists of all nodes with the same edit.
-    #edit_set = []
-    #same_edit_nodes = []
-    #for story in stories:
-    #    rule_outputs = []
-    #    for edge in story.causaledges:
-    #        if isinstance(edge.source, EventNode):
-    #            if edge.source.intro == False:
-    #                if isinstance(edge.target, StateNode):
-    #                    rule_outputs.append(edge.target)
-    #    for statenode in rule_outputs:
-    #        edit_found = False
-    #        for i in range(len(edit_set)):
-    #            are_same = compare_states(statenode.edit, edit_set[i],
-    #                                      ignorevalue=False, ignoreid=True)
-    #            if are_same == True:
-    #                edit_found = True
-    #                same_edit_nodes[i].append(statenode)
-    #                break
-    #        if edit_found == False:
-    #            edit_set.append(statenode.edit)
-    #            same_edit_nodes.append([statenode])
-    ## 2) Each group of nodes with a same edit, remove the part that is
-    ##    common among the state of each node, if any.
-    #for group_of_nodes in same_edit_nodes:
-    # 
-    ## Writes stories with distinguished events.
-    #for i in range(len(stories)):
-    #    stories[i].filename = "simplified-{}.dot".format(i+1)
-    #for story in stories:
-    #    story.build_dot_file(showintro, addedgelabels, showedgelabels,
-    #                         edgeid, edgeocc, edgeprob, statstype, weightedges)
-    #    output_path = "{}/{}".format(eoi, story.filename)
-    #    outfile = open(output_path, "w")
-    #    outfile.write(story.dot_file)
-    #    outfile.close()
+#    # Simplify state node labels by removing the part that is common to all
+#    # state labels with a same edit.
+#
+#    # 1) Gather lists of all nodes with the same edit.
+#    edit_set = []
+#    same_edit_nodes = []
+#    for story in stories:
+#        rule_outputs = []
+#        for edge in story.causaledges:
+#            if isinstance(edge.source, EventNode):
+#                if edge.source.intro == False:
+#                    if isinstance(edge.target, StateNode):
+#                        rule_outputs.append(edge.target)
+#        for statenode in rule_outputs:
+#            edit_found = False
+#            for i in range(len(edit_set)):
+#                are_same = compare_states(statenode.edit, edit_set[i],
+#                                          ignorevalue=False, ignoreid=True)
+#                if are_same == True:
+#                    edit_found = True
+#                    same_edit_nodes[i].append(statenode)
+#                    break
+#            if edit_found == False:
+#                edit_set.append(statenode.edit)
+#                same_edit_nodes.append([statenode])
+#    # 2) For each group of nodes, take the state of the first node and find
+#    #    equivalent agents among the state of all other nodes
+#    for group_of_nodes in same_edit_nodes:
+#        print("----")
+#        print(group_of_nodes[0].label)
+#        similitudes = []
+#        if len(group_of_nodes) > 1 :
+#            first_node = group_of_nodes[0]
+#            for statenode in group_of_nodes[1:]:
+#                simil = []
+#                for agent_first in first_node.state:
+#                    compare = []
+#                    for agent_other in statenode.state:
+#                        value = 0.0
+#                        if agent_first["name"] == agent_other["name"]:
+#                            value += 1
+#                            # Check sites
+#                            for site_first in agent_first["sites"]:
+#                                for site_other in agent_other["sites"]:
+#                                    # ?? Check the partner first ??
+#                                    if site_first["name"] == site_other["name"]:
+#                                        value += 1
+#                                        if site_first["value"] != None:
+#                                            if site_first["value"] == site_other["value"]:
+#                                                value += 1
+#                                        if site_first["bond"] != None:
+#                                            if site_first["bond"] == "." and site_other["bond"] == ".":
+#                                                value += 1
+#                                            else:
+#                                                if site_first["bond"]["partner"]["agentname"] == site_other["bond"]["partner"]["agentname"]:
+#                                                    value += 0.5
+#                                                    if site_first["bond"]["partner"]["sitename"] == site_other["bond"]["partner"]["sitename"]:
+#                                                        value += 0.5
+#                        compare.append(value)
+#                    simil.append(compare)
+#                similitudes.append(simil)
+#            for simil in similitudes:
+#                print(simil)
+#
+#
+#
+#    # 3) For each node in a group, remove all sites from agents for which
+#    #    equivalent agents with the forst node have been found.
+#
+#    # Writes stories with distinguished events.
+#    for i in range(len(stories)):
+#        stories[i].filename = "simplified-{}.dot".format(i+1)
+#    for story in stories:
+#        story.build_dot_file(showintro, addedgelabels, showedgelabels,
+#                             edgeid, edgeocc, edgeprob, statstype, weightedges)
+#        output_path = "{}/tmp/{}".format(eoi, story.filename)
+#        outfile = open(output_path, "w")
+#        outfile.write(story.dot_file)
+#        outfile.close()
 
     # Remove intro edits and secondary edges.
     for story in stories:
@@ -3235,8 +3432,17 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
                         edge2 = story.causaledges[l]
                         if edge2.source == introedit:
                             edges_to_remove.append(l)
-                            new_edge = CausalEdge(edge1.source, edge2.target)
-                            story.causaledges.append(new_edge)
+                            # Check if edge already exists.
+                            already_exists = False
+                            for e in story.causaledges:
+                                if e.source == edge1.source:
+                                    if e.target == edge2.target:
+                                        already_exists = True
+                                        break
+                            if already_exists == False:
+                                new_edge = CausalEdge(edge1.source,
+                                                      edge2.target)
+                                story.causaledges.append(new_edge)
         sorted_to_remove = sorted(edges_to_remove, reverse=True)
         for k in nodes_to_remove:
             del(story.statenodes[k])
@@ -3255,7 +3461,7 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
     # Writes stories with event and state nodes.
     for i in range(len(stories)):
         stories[i].filename = "dualstory-{}.dot".format(i+1)
-        stories[i].processed = True
+        #stories[i].processed = True
     for story in stories:
         story.build_dot_file(showintro, addedgelabels, showedgelabels,
                              edgeid, edgeocc, edgeprob, statstype, weightedges)
@@ -3274,7 +3480,7 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
             modstory.eventnodes[j].label = dualstory.eventnodes[j].label
     for i in range(len(storiescopy)):
         storiescopy[i].filename = "modstory-{}.dot".format(i+1)
-        storiescopy[i].processed = True
+        #storiescopy[i].processed = True
     for story in storiescopy:
         story.create_hyperedges()
         story.align_vertical()
@@ -3284,6 +3490,51 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
         outfile = open(output_path, "w")
         outfile.write(story.dot_file)
         outfile.close()
+
+    ## Write stories with state nodes only.
+    ## Works only with atomic rules for now.
+    #for story in stories:
+    #    # The first nodes become the output of the event
+    #    # nodes which had first=True.
+    #    for hyperedge in story.hyperedges:
+    #        first_in_sources = False
+    #        for source in hyperedge.sources:
+    #            if source.first == True:
+    #                first_in_sources = True
+    #                break
+    #        if first_in_sources == True:
+    #            hyperedge.target.first = True
+    #    hyperedges_to_remove = []
+    #    for hyperedge in story.hyperedges:
+    #        if isinstance(hyperedge.target, EventNode):
+    #            if hyperedge.target.label != story.eoi:
+    #                for i in range(len(story.hyperedges)):
+    #                    hyperedge2 = story.hyperedges[i]
+    #                    if hyperedge.target in hyperedge2.sources:
+    #                        new_target = hyperedge2.target
+    #                        hyperedges_to_remove.append(i)
+    #                        # I consider only one output state node per event
+    #                        # node at the moment (atomic rules).
+    #                        # Will need to allow more.
+    #                        break
+    #                for subedge in hyperedge.edgelist:
+    #                    subedge.target = new_target
+    #                hyperedge.target = new_target
+    #    sorted_hyperedges = sorted(hyperedges_to_remove, reverse=True)
+    #    for i in sorted_hyperedges:
+    #        del(story.hyperedges[i])
+    #    events_to_remove = []
+    #    for j in range(len(story.eventnodes)):
+    #        if story.eventnodes[j].intro == False:
+    #            if story.eventnodes[j].label != story.eoi:
+    #                events_to_remove.insert(0, j)
+    #            else:
+    #                story.eventnodes[j].rank = story.eventnodes[j].rank + 0.5
+    #    for j in events_to_remove:
+    #        del(story.eventnodes[j])
+    #    #for node in story.eventnodes + story.statenodes:
+    #    #    node.rank = math.ceil(node.rank/2)
+    #    story.get_maxrank()
 
     # Write stories with state nodes only.
     # Works only with atomic rules for now.
@@ -3298,40 +3549,61 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
                     break
             if first_in_sources == True:
                 hyperedge.target.first = True
+        # Connect state nodes together, removing event nodes
         hyperedges_to_remove = []
         for hyperedge in story.hyperedges:
-            if isinstance(hyperedge.target, EventNode):
-                if hyperedge.target.label != story.eoi:
-                    for i in range(len(story.hyperedges)):
-                        hyperedge2 = story.hyperedges[i]
+            if hyperedge.target.label != story.eoi:
+                if isinstance(hyperedge.target, EventNode):
+                    outgoing_edges = []
+                    for hyperedge2 in story.hyperedges:
                         if hyperedge.target in hyperedge2.sources:
-                            new_target = hyperedge2.target
-                            hyperedges_to_remove.append(i)
-                            # I consider only one output state node per event
-                            # node at the moment (atomic rules).
-                            # Will need to allow more.
-                            break
-                    for subedge in hyperedge.edgelist:
-                        subedge.target = new_target
-                    hyperedge.target = new_target
+                            outgoing_edges.append(hyperedge2)
+                    if len(outgoing_edges) == 1:
+                        # Reconnect the hyperedge targeting the event
+                        # to now target the output state.
+                        for subedge in hyperedge.edgelist:
+                            subedge.target = outgoing_edges[0].target
+                        hyperedge.target = outgoing_edges[0].target
+                        he_index = story.hyperedges.index(outgoing_edges[0])
+                        hyperedges_to_remove.append(he_index)
+                    elif len(outgoing_edges) > 1:
+                        # Shrink the event node. Nodes that are shrank hide
+                        # their label and are shown as a small white circle.
+                        hyperedge.target.shrink = True
+                        # Also change outgoing edges type to conflict of all
+                        # incoming edge are of type conflict.
+                        in_all_conflict = True
+                        for subedge in hyperedge.edgelist:
+                            if subedge.relationtype != "conflict":
+                                in_all_conflict = False
+                                break
+                        if in_all_conflict == True:
+                            for out_hyperedge in outgoing_edges:
+                                for subedge in out_hyperedge.edgelist:
+                                    subedge.relationtype = "conflict"
         sorted_hyperedges = sorted(hyperedges_to_remove, reverse=True)
         for i in sorted_hyperedges:
             del(story.hyperedges[i])
+
         events_to_remove = []
         for j in range(len(story.eventnodes)):
             if story.eventnodes[j].intro == False:
-                if story.eventnodes[j].label != story.eoi:
+                lbl = story.eventnodes[j].label
+                shrk = story.eventnodes[j].shrink
+                if lbl != story.eoi and shrk == False:
                     events_to_remove.insert(0, j)
                 else:
-                    story.eventnodes[j].rank = story.eventnodes[j].rank + 0.5
+                    if shrk == False:
+                        story.eventnodes[j].rank = story.eventnodes[j].rank + 0.5
         for j in events_to_remove:
             del(story.eventnodes[j])
         #for node in story.eventnodes + story.statenodes:
         #    node.rank = math.ceil(node.rank/2)
         story.get_maxrank()
+
     for i in range(len(stories)):
         stories[i].filename = "statestory-{}.dot".format(i+1)
-        stories[i].processed = True
+        #stories[i].processed = True
     for story in stories:
         story.build_dot_file(showintro, addedgelabels, showedgelabels,
                              edgeid, edgeocc, edgeprob, statstype, weightedges)
@@ -3457,19 +3729,22 @@ def state_from_test(signatures, test, bnd_num):
         agent = {"name": agentname, "id": agid_n, "sites": [site],
                  "test": None}
         state.append(agent)
-    if test[0] == 2: # Is_Free
+    if test[0] == 2 or test[0] == 3: # Is_Free or Is_Bound.
         ag_n = test[1][0][1]
         agid_n = test[1][0][0]
         site_n = test[1][1]
         entry = signatures[ag_n]
         agentname = entry["name"]
         sitename = entry["decl"][site_n]["name"]
-        site = {"name": sitename, "bond": ".", "value": None,
-                "agentname": agentname, "agentid": agid_n, "test": 2}
+        if test[0] == 2:
+            bnd = "."
+        elif test[0] == 3:
+            bnd = "_"
+        site = {"name": sitename, "bond": bnd, "value": None,
+                "agentname": agentname, "agentid": agid_n, "test": test[0]}
         agent = {"name": agentname, "id": agid_n, "sites": [site], 
                  "test": None}
         state.append(agent)
-    #if test[0] == 3: # Is_Bound (No example yet).
     #if test[0] == 4: # Has_Binding_type (No example yet).
     if test[0] == 5: # Is_Bound_to
         ag1_n = test[1][0][1]
@@ -3521,6 +3796,16 @@ def group_sites_by_agent(state):
                         seen_agent["sites"].append(site)
         if agent_found == False:
             new_state.append(agent)
+    ## Also group bond and value of same sites together
+    ## (i.e. A(x[.] x{p}) becomes A(x[.]{p}))
+    ## ... This is a bad idea to do this at this point,
+    ##leave it for when we write the label.
+    #for agent in new_state:
+    #    seen_sites = []
+    #    for i in range(len(agent["sites"])):
+    #        site = agent["sites"][i]
+    #        if site["name"] not in seen_sites:
+    #            seen_sites.append(site["name"])            
 
     return new_state
 
@@ -3561,18 +3846,31 @@ def write_kappa_agent(agent, bond="num", hidevalue=False, hideid=False):
         agent_str += "{}".format(site["name"])
         if hidevalue == False:
             if site["bond"] != None:
-                if site["bond"] == ".":
-                    agent_str += "[.]"
-                else:
+                agent_str += "["
+                if isinstance(site["bond"], dict):
                     if bond == "num":
-                        agent_str += "[{}]".format(site["bond"]["num"])
+                        agent_str += "{}".format(site["bond"]["num"])
                     elif bond == "partner":
                         partner = site["bond"]["partner"]
-                        agent_str += "[{}.{}".format(partner["sitename"],
+                        agent_str += "{}.{}".format(partner["sitename"],
                                                      partner["agentname"])
                         if hideid == False:
                             agent_str += "{}".format(partner["agentid"])
-                        agent_str += "]"
+                else:
+                    agent_str += site["bond"]
+                agent_str += "]"
+                #if site["bond"] == ".":
+                #    agent_str += "[.]"
+                #else:
+                #    if bond == "num":
+                #        agent_str += "[{}]".format(site["bond"]["num"])
+                #    elif bond == "partner":
+                #        partner = site["bond"]["partner"]
+                #        agent_str += "[{}.{}".format(partner["sitename"],
+                #                                     partner["agentname"])
+                #        if hideid == False:
+                #            agent_str += "{}".format(partner["agentid"])
+                #        agent_str += "]"
             if site["value"] != None:
                 agent_str += "{{{}}}".format(site["value"])
         elif hidevalue == True:
@@ -3609,18 +3907,30 @@ def write_kappa_site(site, bond="num", hidevalue=False, hideid=False):
     site_str += "{}".format(site["name"])
     if hidevalue == False:
         if site["bond"] != None:
-            if site["bond"] == ".":
-                site_str += "[.]"
-            else:
+            site_str += "["
+            if isinstance(site["bond"], dict):
                 if bond == "num":
-                    site_str += "[{}]".format(site["bond"]["num"])
+                    site_str += "{}".format(site["bond"]["num"])
                 elif bond == "partner":
                     partner = site["bond"]["partner"]
-                    site_str += "[{}.{}".format(partner["sitename"],
+                    site_str += "{}.{}".format(partner["sitename"],
                                                  partner["agentname"])
                     if hideid == False:
                         site_str += "{}".format(partner["agentid"])
-                    site_str += "]"
+            else:
+                site_str += site["bond"]
+            site_str += "]"
+            #if site["bond"] == ".":
+            #    site_str += "[.]"
+            #else:
+            #    if bond == "num":
+            #        site_str += "{}".format(site["bond"]["num"])
+            #    elif bond == "partner":
+            #        partner = site["bond"]["partner"]
+            #        site_str += "{}.{}".format(partner["sitename"],
+            #                                     partner["agentname"])
+            #        if hideid == False:
+            #            site_str += "{}".format(partner["agentid"])
         if site["value"] != None:
             site_str += "{{{}}}".format(site["value"])
     elif hidevalue == True:
@@ -3634,7 +3944,160 @@ def write_kappa_site(site, bond="num", hidevalue=False, hideid=False):
     return site_str
 
 
-def compare_states(state1, state2, ignorevalue=False, ignoreid=False):
+def edit_vs_test(edit, test, return_correspondances=False):
+    """
+    Determine if what is produced by an edit can be used by a given test.
+    The test may contain wildcards _ or #.
+    """
+
+
+    # Gather edit and test sites. Keep agents without sites in a separate list.
+    edit_sites = []
+    test_sites = []
+    edit_empty = []
+    test_empty = []
+    for edit_agent in edit:
+        if edit_agent["sites"] != None:
+            for edit_site in edit_agent["sites"]:
+                edit_sites.append(edit_site)
+        else:
+            edit_empty.append(edit_agent)
+    for test_agent in test:
+        if test_agent["sites"] != None:
+            for test_site in test_agent["sites"]:
+                test_sites.append(test_site)
+        else:
+            test_empty.append(test_agent)
+    # Compare empty agents.
+    ag_related = True
+    ag_correspondances = []
+    test_indexes = list(range(len(test_empty)))
+    for edit_agent in edit_empty:
+        for i in test_indexes:
+            test_agent = test_empty[i]
+            same_name = edit_agent["name"] == test_agent["name"]
+            same_id = edit_agent["id"] == test_agent["id"]
+            if same_name and same_id:
+                are_same = True
+                ag_correspondances.append(i)
+                test_indexes.remove(i)
+                break
+            else:
+                are_same = False
+        if are_same == False:
+            ag_related = False
+            break
+    if len(test_indexes) > 0:
+        ag_related = False        
+    # Compare sites.
+    # Make a first pass to check which edit sites should
+    # be ignored because of wildcards in tests.
+    edits_to_ignore = []
+    test_indexes = list(range(len(test_sites)))
+    for edit_site in edit_sites:
+        for i in test_indexes:
+            test_site = test_sites[i]
+            are_rel, ignore_partner = edit_vs_test_sites(edit_site, test_site)
+            if ignore_partner == True:
+                # Find the site which is bound to current edit_site.
+                partner = edit_site["bond"]["partner"]
+                partner_found = False
+                for j in range(len(edit_sites)):
+                    edit_site2 = edit_sites[j]
+                    same_site = edit_site2["name"] == partner["sitename"]
+                    same_ag = edit_site2["agentname"] == partner["agentname"]
+                    same_agid = edit_site2["agentid"] == partner["agentid"]
+                    if same_site and same_ag and same_agid:
+                        partner_found = True
+                        edits_to_ignore.append(j)
+                        break
+                if partner_found == False:
+                    raise ValueError("Could not find partner of site {}:{}({})"
+                        .format(edit_site["agentname"], edit_site["agentid"],
+                                edit_site["name"]))
+    # Now compare sites, ignoring edit sites determined above.
+    site_related = True
+    site_correspondances = []
+    for j in range(len(edit_sites)):
+        if j not in edits_to_ignore:
+            edit_site = edit_sites[j]
+            for i in test_indexes:
+                test_site = test_sites[i]
+                are_rel, ignore_partner = edit_vs_test_sites(edit_site, test_site)
+                if are_rel == True:
+                    site_related = True
+                    site_correspondances.append(i)
+                    test_indexes.remove(i)
+                    break
+                else:
+                    site_related = False
+            if are_rel == False:
+                site_related = False
+                break
+    if len(test_indexes) > 0:
+        site_related = False
+    if ag_related == True and site_related == True:
+        are_related = True
+    else:
+        are_related = False
+
+    if return_correspondances == False:
+        return are_related
+    elif return_correspondances == True:
+        return are_related, ag_correspondances, site_correspondances
+
+
+def edit_vs_test_sites(edit, test):
+    """
+    Determine if a site produce by an edit can be used by a given test site.
+    The test may contain wildcards _ or #.
+    """
+
+    ignore_partner = False
+    are_rel = True
+    if edit["name"] != test["name"]:
+        are_rel = False
+    if edit["agentname"] != test["agentname"]:
+        are_rel = False
+    if edit["agentid"] != test["agentid"]:
+        are_rel = False
+    if test["value"] != "#":
+        if edit["value"] != test["value"]:
+            are_rel = False
+    # Check bonds.
+    if are_rel == True:
+        # If test bond is a wildcard #, anything goes.
+        if test["bond"] == "#":
+            ignore_partner = True
+            return are_rel, ignore_partner
+        # Check if both sites are free or without binding.
+        elif edit["bond"] == "." or test["bond"] == ".":
+            if edit["bond"] != "." or test["bond"] != ".":
+                are_rel = False
+        elif edit["bond"] == None or test["bond"] == None:
+            if edit["bond"] != None or test["bond"] != None:
+                are_rel = False
+        # Else check if they have equivalent bindings.
+        else:
+            if test["bond"] == "_":
+                ignore_partner = True
+            explicit_edit = isinstance(edit["bond"], dict)
+            explicit_test = isinstance(test["bond"], dict)
+            if explicit_edit == True and explicit_test == True:
+                edit_partner = edit["bond"]["partner"]
+                test_partner = test["bond"]["partner"]
+                if edit_partner["agentname"] != test_partner["agentname"]:
+                    are_rel = False
+                if edit_partner["agentid"] != test_partner["agentid"]:
+                    are_rem = False
+                if edit_partner["sitename"] != test_partner["sitename"]:
+                    are_rel = False
+
+    return are_rel, ignore_partner
+
+
+def compare_states(state1, state2, ignorevalue=False, ignoreid=False,
+                   ignoretype=False):
     """ Determine if two states (two lists of agents) are the same. """
 
     list1 = state1.copy()
@@ -3644,14 +4107,17 @@ def compare_states(state1, state2, ignorevalue=False, ignoreid=False):
     for i in range(len(list1)):
         agent1 = list1[i]
         for agent2 in list2:
-            same_agents = compare_agents(agent1, agent2, ignorevalue, ignoreid)
+            same_agents, ignrs = compare_agents(agent1, agent2, ignorevalue,
+                                                ignoreid, ignoretype)
+            # Search state for partner of ignrs[0][site k]
             if same_agents == True:
                 found1.insert(0, i)
                 break
     for j in range(len(list2)):
         agent2 = list2[j]
         for agent1 in list1:
-            same_agents = compare_agents(agent2, agent1, ignorevalue, ignoreid)
+            same_agents, ignrs = compare_agents(agent2, agent1, ignorevalue,
+                                                ignoreid, ignoretype)
             if same_agents == True:
                 found2.insert(0, j)
                 break
@@ -3667,14 +4133,23 @@ def compare_states(state1, state2, ignorevalue=False, ignoreid=False):
     return are_same
 
 
-def compare_agents(agent1, agent2, ignorevalue=False, ignoreid=False):
+def search_partner_in_state(state, agent, site):
+    """ Search state for the agent and index of partner of given site. """
+
+
+def compare_agents(agent1, agent2, ignorevalue=False, ignoreid=False,
+                   ignoretype=False):
     """ Determine if two agents are the same (with same sites). """
 
+    ignore_sites = [[], []]
     are_same = True
     if agent1["name"] != agent2["name"]:
         are_same = False
+    if ignoretype == False:
+        if agent1["type"] != agent2["type"]:
+           are_same = False
     if ignoreid == False:
-       if agent1["id"] != agent2["id"]:
+        if agent1["id"] != agent2["id"]:
            are_same = False
     if are_same == True:
         # Compare the sites.
@@ -3682,62 +4157,155 @@ def compare_agents(agent1, agent2, ignorevalue=False, ignoreid=False):
         list2 = agent2["sites"].copy()
         found1 = []
         found2 = []
+        ignore1 = []
+        ignore2 = []
         for i in range(len(list1)):
             site1 = list1[i]
             for site2 in list2:
-                same_sites = compare_sites(site1, site2, ignorevalue, ignoreid)
+                same_sites, ignr = compare_sites(site1, site2, ignorevalue,
+                                                 ignoreid, ignoretype)
+                if ignr != 0: 
+                    if ignr == 1:
+                        # Add ignr site to ignore_sites list to later pass
+                        # it to compare_states.
+                        ignore_sites[0].append(i)
+                        # Search agent1 for the index of partner of site1.
+                        index = search_partner_in_agent(agent1, site1)
+                    if ignr == 2:
+                        index = search_partner_in_agent(agent2, site2)
+                    if index != None:
+                        ignore1.append(index)
                 if same_sites == True:
                     found1.insert(0, i)
                     break
         for j in range(len(list2)):
             site2 = list2[j]
             for site1 in list1:
-                same_sites = compare_sites(site2, site1, ignorevalue, ignoreid)
+                same_sites, ignr = compare_sites(site2, site1, ignorevalue,
+                                                 ignoreid, ignoretype)
+                if ignr != 0:
+                    if ignr == 1:
+                        # Add ignr site to ignore_sites list to later pass
+                        # it to compare_states.
+                        ignore_sites[1].append(j)
+                        # Search agent2 for the index of partner of site2.
+                        index = search_partner_in_agent(agent2, site2)
+                    if ignr == 2:
+                        index = search_partner_in_agent(agent1, site1)
+                    if index != None:
+                        ignore2.append(index)
                 if same_sites == True:
                     found2.insert(0, j)
                     break
-        for i in found1:
+        to_remove1 = sorted(found1+ignore1, reverse=True)
+        for i in to_remove1:
             del(list1[i])
-        for j in found2:
+        to_remove2 = sorted(found2+ignore2, reverse=True)
+        for j in to_remove2:
             del(list2[j])
         if len(list1) == 0 and len(list2) == 0:
             are_same = True
         else:
             are_same = False 
 
-    return are_same
+    return are_same, ignore_sites
 
 
-def compare_sites(site1, site2, ignorevalue=False, ignoreid=False):
+def search_partner_in_agent(agent, site):
+    """ Search agent for the index of partner of given site. """
+
+    partner_index = None
+    list1 = agent["sites"]
+    bnd_num = site["bond"]["num"]
+    for k in range(len(list1)):
+        if list1[k] != site:
+            if isinstance(list1[k]["bond"], dict):
+                if list1[k]["bond"]["num"] == bnd_num:
+                    partner_index = k
+                    break
+
+    return partner_index
+
+
+def compare_sites(site1, site2, ignorevalue=False, ignoreid=False,
+                  ignoretype=False):
     """ Determine if two sites are the same. """
 
+    ignore_partner = 0
     are_same = True
     if site1["name"] != site2["name"]:
         are_same = False
-    if ignorevalue == False:
-        if site1["value"] != site2["value"]:
+    if ignoretype == False:
+        if site1["type"] != site2["type"]:
             are_same = False
+    if ignorevalue == False:
+        if site1["value"] != "#" and site1["value"] != "#":
+            if site1["value"] != site2["value"]:
+                are_same = False
     # Check bonds.
-    has_partner1 = isinstance(site1["bond"], dict)
-    has_partner2 = isinstance(site2["bond"], dict)
-    if has_partner1 != has_partner2:
-        are_same = False
     if are_same == True:
-        if has_partner1 == False:
-            if site1["bond"] != site2["bond"]:
+        # If any bond is a wildcard, anything goes.
+        # Remember to tell compare_agents to then ignore
+        # the partner of the non-wildcard site.
+        if site1["bond"] == "#":
+            ignore_partner = 2
+        if site2["bond"] == "#":
+            ignore_partner = 1
+        if site1["bond"] == "#" and site2["bond"] == "#":
+           raise ValueError("Comparing two # wildcards is not"
+                            "expected to happen.") 
+        if ignore_partner != 0:
+            return True, ignore_partner
+        # Check if both sites are free or with no binding.
+        elif site1["bond"] == None or site2["bond"] == None:
+            if site1["bond"] != None or site2["bond"] != None:
                 are_same = False
-        elif has_partner1 == True:
-            partner1 = site1["bond"]["partner"]
-            partner2 = site2["bond"]["partner"]
-            if partner1["agentname"] != partner2["agentname"]:
+        elif site1["bond"] == "." or site2["bond"] == ".":
+            if site1["bond"] != "." or site2["bond"] != ".":
                 are_same = False
-            if ignoreid == False:
-                if partner1["agentid"] != partner2["agentid"]:
+        # Else check if they have equivalent bindings.
+        else:
+            if site1["bond"] == "_":
+                ignore_partner = 2
+            if site2["bond"] == "_":
+                ignore_partner = 1
+            if site1["bond"] == "_" and site2["bond"] == "_":
+               raise ValueError("Comparing two _ wildcards is not"
+                                "expected to happen.")
+            has_partner1 = isinstance(site1["bond"], dict)
+            has_partner2 = isinstance(site2["bond"], dict)
+            if has_partner1 == True and has_partner2 == True:
+                partner1 = site1["bond"]["partner"]
+                partner2 = site2["bond"]["partner"]
+                if partner1["agentname"] != partner2["agentname"]:
                     are_same = False
-            if partner1["sitename"] != partner2["sitename"]:
-                are_same = False
+                if ignoreid == False:
+                    if partner1["agentid"] != partner2["agentid"]:
+                        are_same = False
+                if partner1["sitename"] != partner2["sitename"]:
+                    are_same = False
+    #has_partner1 = isinstance(site1["bond"], dict)
+    #has_partner2 = isinstance(site2["bond"], dict)
+    #if has_partner1 != has_partner2:
+    #    if site1["bond"] != "_" and site2["bond"] != "_":
+    #        are_same = False
+    #if are_same == True:
+    #    if has_partner1 == False:
+    #        if site1["bond"] != site2["bond"]:
+    #            are_same = False
+    #    elif has_partner1 == True:
+    #        if site1["bond"] != "_" and site2["bond"] != "_":
+    #            partner1 = site1["bond"]["partner"]
+    #            partner2 = site2["bond"]["partner"]
+    #            if partner1["agentname"] != partner2["agentname"]:
+    #                are_same = False
+    #            if ignoreid == False:
+    #                if partner1["agentid"] != partner2["agentid"]:
+    #                    are_same = False
+    #            if partner1["sitename"] != partner2["sitename"]:
+    #                are_same = False
 
-    return are_same
+    return are_same, ignore_partner
 
 
 #def compare_states(state1, state2, ignorevalue=False, ignoreid=False):
@@ -3805,6 +4373,147 @@ def get_output_of_node(story, node):
     return output_states
 
 
+#def write_context_expression2(state, hidevalue=False, hideid=False):
+#    """
+#    Write a Kappa language string with the edit in bold font and context in
+#    normal font. The string is made to be read as html to allow special fonts.
+#    """
+#
+#    print(state)
+#    # Sort agents by the number of bonds that they have.
+#    for agent in state:
+#        nbonds = 0
+#        for site in agent["sites"]:
+#            if site["bond"] != None and site["bond"] != ".":
+#                nbonds += 1
+#        agent["nbonds"] = nbonds
+#    sorted_agents = sorted(state, key=lambda x: x["nbonds"])
+#    # Put agents containing the edited sites first.
+#    full_context = []
+#    used_agents = []
+#    for i in range(len(sorted_agents)):
+#        agent = sorted_agents[i]
+#        if agent["type"] == "edit":
+#            full_context.append(agent)
+#            used_agents.insert(0, i)
+#            break
+#        for site in agent["sites"]:
+#            if site["type"] == "edit":
+#                full_context.append(agent)
+#                used_agents.insert(0, i)
+#                break
+#    for i in used_agents:
+#        del(sorted_agents[i])
+#    print(full_context)
+#    # Iteratively add context agents to the left or right of the full_context
+#    # list depending on whether they are bound to an agent that is on the
+#    # first or second half of the current full_context list.
+#    bond_found = True
+#    while bond_found == True:
+#        bond_found = False
+#        half_index = int(len(full_context)/2)
+#        for i in range(len(sorted_agents)):
+#            remaining_agent = sorted_agents[i]
+#            # Check if remaining agent has one site that is bound to an agent
+#            # that is already in full_context.
+#            for rem_site in remaining_agent["sites"]:
+#                if rem_site["bond"] != None and rem_site["bond"] != ".":
+#                    partner = rem_site["bond"]["partner"]
+#                    partnerid = "{}:{}".format(partner["agentname"],
+#                                               partner["agentid"])
+#                    for j in range(len(full_context)):
+#                        existing_agent = full_context[j]
+#                        fullid = "{}:{}".format(existing_agent["name"],
+#                                                existing_agent["id"])
+#                        if partnerid == fullid:
+#                            # Add this remaining agent to full_context list.
+#                            if j < half_index:
+#                                full_context.insert(0, remaining_agent)
+#                            elif j >= half_index:
+#                                full_context.append(remaining_agent)
+#                            bond_found = True
+#                            break
+#                if bond_found == True:
+#                    break
+#            if bond_found == True:
+#                del(sorted_agents[i])
+#                break
+#    # Add remaining unbound agents.
+#    for agent in sorted_agents:
+#        full_context.append(agent)
+#    # Reassign bond numbers.
+#    for agent in full_context:
+#        for site in agent["sites"]:
+#            if site["bond"] != None and site["bond"] != ".":
+#                site["bond"]["num"] = 0
+#    bondid = 1
+#    for agent1 in full_context:
+#        for site1 in agent1["sites"]:
+#            if site1["bond"] != None and site1["bond"] != ".":
+#                if site1["bond"]["num"] == 0:
+#                    # Find partner.
+#                    partner = site1["bond"]["partner"]
+#                    partnerid = "{}:{}".format(partner["agentname"],
+#                                               partner["agentid"])
+#                    for agent2 in full_context:
+#                        fullid = "{}:{}".format(agent2["name"], agent2["id"])
+#                        if fullid == partnerid:
+#                            for site2 in agent2["sites"]:
+#                                if site2["name"] == partner["sitename"]:
+#                                    site1["bond"]["num"] = bondid
+#                                    site2["bond"]["num"] = bondid
+#                                    bondid += 1
+#                                    break
+#    print("---")
+#    print(full_context)
+#    # Sort sites within agents. Put sites used for bindings on the left if
+#    # they bind to an agent that appears before in the full_context list.
+#    # Put sites that have only a value and no binding at the end.
+#    for i in range(len(full_context)):
+#        agent1 = full_context[i]
+#        ordered_edits = []
+#        ordered_context = []
+#        for site1 in agent1["sites"]:
+#            if site1["bond"] != None and site1["bond"] != ".":
+#                partner = site1["bond"]["partner"]
+#                partnerid = "{}:{}".format(partner["agentname"],
+#                                           partner["agentid"])
+#                for j in range(len(full_context)):
+#                    agent2 = full_context[j]
+#                    fullid = "{}:{}".format(agent2["name"], agent2["id"])
+#                    if fullid == partnerid:
+#                        if j < i:
+#                            if site1["type"] == "edit":
+#                                ordered_edits.insert(0, site1)
+#                            elif site1["type"] == "context":
+#                                ordered_context.insert(0, site1)
+#                        elif j >= i:
+#                            if site1["type"] == "edit":
+#                                ordered_edits.append(site1)
+#                            elif site1["type"] == "context":
+#                                ordered_context.append(site1)
+#                        break
+#        for site1 in agent1["sites"]:
+#            if site1["bond"] == None or site1["bond"] == ".":
+#                if site1["type"] == "edit":
+#                    ordered_edits.append(site1)
+#                elif site1["type"] == "context":
+#                    ordered_context.append(site1)
+#        agent1["sites"] = ordered_edits + ordered_context
+#    print("---")
+#    print(full_context)
+#    # Write string with sites in the order determined by the previous sorting.
+#    context_str = ""
+#    for i in range(len(full_context)):
+#        agent_str = write_kappa_agent(full_context[i], "num",
+#                                      hidevalue, hideid)
+#        context_str += agent_str
+#        if i < len(full_context)-1:
+#            context_str += ", "
+#
+#    return context_str
+
+
 def write_context_expression(state, hidevalue=False, hideid=False):
     """
     Write a Kappa language string with the edit in bold font and context in
@@ -3846,9 +4555,9 @@ def write_context_expression(state, hidevalue=False, hideid=False):
             remaining_agent = sorted_agents[i]
             # Check if remaining agent has one site that is bound to an agent
             # that is already in full_context.
-            for remaining_site in remaining_agent["sites"]:
-                if remaining_site["bond"] != None:
-                    partner = remaining_site["bond"]["partner"]
+            for rem_site in remaining_agent["sites"]:
+                if rem_site["bond"] != None and rem_site["bond"] != ".":
+                    partner = rem_site["bond"]["partner"]
                     partnerid = "{}:{}".format(partner["agentname"],
                                                partner["agentid"])
                     for j in range(len(full_context)):
@@ -3874,12 +4583,14 @@ def write_context_expression(state, hidevalue=False, hideid=False):
     # Reassign bond numbers.
     for agent in full_context:
         for site in agent["sites"]:
-            if site["bond"] != None:
+            #if site["bond"] != None and site["bond"] != ".":
+            if isinstance(site["bond"], dict):
                 site["bond"]["num"] = 0
     bondid = 1
     for agent1 in full_context:
         for site1 in agent1["sites"]:
-            if site1["bond"] != None:
+            #if site1["bond"] != None and site1["bond"] != ".":
+            if isinstance(site1["bond"], dict):
                 if site1["bond"]["num"] == 0:
                     # Find partner.
                     partner = site1["bond"]["partner"]
@@ -3888,12 +4599,16 @@ def write_context_expression(state, hidevalue=False, hideid=False):
                     for agent2 in full_context:
                         fullid = "{}:{}".format(agent2["name"], agent2["id"])
                         if fullid == partnerid:
+
                             for site2 in agent2["sites"]:
                                 if site2["name"] == partner["sitename"]:
-                                    site1["bond"]["num"] = bondid
-                                    site2["bond"]["num"] = bondid
-                                    bondid += 1
-                                    break
+                                    #sb2 = site2["bond"]
+                                    #if sb2 != None and sb2 != ".":
+                                    if isinstance(site2["bond"], dict):
+                                        site1["bond"]["num"] = bondid
+                                        site2["bond"]["num"] = bondid
+                                        bondid += 1
+                                        break
     # Sort sites within agents. Put sites used for bindings on the left if
     # they bind to an agent that appears before in the full_context list.
     # Put sites that have only a value and no binding at the end.
@@ -3902,7 +4617,8 @@ def write_context_expression(state, hidevalue=False, hideid=False):
         ordered_edits = []
         ordered_context = []
         for site1 in agent1["sites"]:
-            if site1["bond"] != None:
+            #if site1["bond"] != None and site1["bond"] != ".":
+            if isinstance(site1["bond"], dict):
                 partner = site1["bond"]["partner"]
                 partnerid = "{}:{}".format(partner["agentname"],
                                            partner["agentid"])
@@ -3922,7 +4638,8 @@ def write_context_expression(state, hidevalue=False, hideid=False):
                                 ordered_context.append(site1)
                         break
         for site1 in agent1["sites"]:
-            if site1["bond"] == None:
+            #if site1["bond"] == None or site1["bond"] == ".":
+            if not isinstance(site1["bond"], dict):
                 if site1["type"] == "edit":
                     ordered_edits.append(site1)
                 elif site1["type"] == "context":
@@ -4043,18 +4760,21 @@ def getuniquestories(eoi, causalgraphs=None, siphon=False, showintro=True,
                      rmprev=False, msg=True):
     """ Get unique stories, dual stories and state stories. """
 
+    print("modstory")
     mergedualstories(eoi, "modstory", showintro=showintro,
                      addedgelabels=addedgelabels,
                      showedgelabels=showedgelabels, edgeid=edgeid,
                      edgeocc=edgeocc, edgeprob=edgeprob,
                      weightedges=weightedges, color=color, writedot=writedot,
                      rmprev=rmprev)
+    print("dualstory")
     mergedualstories(eoi, "dualstory", showintro=showintro,
                      addedgelabels=addedgelabels,
                      showedgelabels=showedgelabels, edgeid=edgeid,
                      edgeocc=edgeocc, edgeprob=edgeprob,
                      weightedges=weightedges, color=color, writedot=writedot,
                      rmprev=rmprev)
+    print("statestory")
     mergedualstories(eoi, "statestory", showintro=showintro,
                      addedgelabels=addedgelabels,
                      showedgelabels=showedgelabels, edgeid=edgeid,
@@ -4596,16 +5316,19 @@ def buildpathways(eoi, causalgraphs=None, siphon=False, ignorelist=[],
                   weightedges=True, color=True, writedot=True, rmprev=False):
     """ Build event pathway, dual pathway and state pathway. """
 
+    print("modstory")
     foldpathway(eoi, "modstory", showintro=showintro,
                 addedgelabels=addedgelabels, showedgelabels=showedgelabels,
                 edgeid=edgeid, edgeocc=edgeocc, edgeprob=edgeprob,
                 weightedges=weightedges, color=color, writedot=writedot,
                 rmprev=rmprev)
+    print("dualstory")
     foldpathway(eoi, "dualstory", showintro=showintro,
                 addedgelabels=addedgelabels, showedgelabels=showedgelabels,
                 edgeid=edgeid, edgeocc=edgeocc, edgeprob=edgeprob,
                 weightedges=weightedges, color=color, writedot=writedot,
                 rmprev=rmprev)
+    print("statestory")
     foldpathway(eoi, "statestory", showintro=showintro,
                 addedgelabels=addedgelabels, showedgelabels=showedgelabels,
                 edgeid=edgeid, edgeocc=edgeocc, edgeprob=edgeprob,
@@ -4629,24 +5352,45 @@ def foldpathway(eoi, prefix, causalgraphs=None, siphon=False, ignorelist=[],
     else:
        stories = causalgraphs
        story_files = None
+    #stories = [stories[9]]
     pathway = stories[0]
     foldstory(pathway)
     for i in range(1, len(stories)):
+        print(i)
         pathway.occurrence += stories[i].occurrence
         pathway.eventnodes += stories[i].eventnodes
         pathway.statenodes += stories[i].statenodes
         pathway.hyperedges += stories[i].hyperedges
         foldstory(pathway)
-    pathway.align_vertical()
+    #pathway.align_vertical()
     pathway.hypergraph = True
+    # Ranking with intropos="top", rulepos="top" is the fastest as it does
+    # not require follow_hyperedges, which takes long on large graphs.
     #pathway.rank_sequentially(intropos="top", rulepos="top")
     #pathway.rank_sequentially(intropos="top", rulepos="bot")
-    #pathway.rank_sequentially(intropos="bot", rulepos="top")
+    #-->pathway.rank_sequentially(intropos="bot", rulepos="top")
     pathway.rank_sequentially(intropos="bot", rulepos="bot")
+    #pathway.get_maxrank()
 
+    # Resequentialize node ids. This is required because otherwise the method
+    # build_dot_file will draw nodes with same id as if they were merged.
+    event_number = 1
+    state_number = 1
+    for rank_int in range(int(2*pathway.maxrank)+1):
+        current_rank = rank_int/2
+        for statenode in pathway.statenodes:
+            if statenode.rank == current_rank:
+                statenode.nodeid = "state{}".format(state_number)
+                state_number += 1
+        for eventnode in pathway.eventnodes:
+            if eventnode.rank == current_rank:
+                eventnode.nodeid = "event{}".format(event_number)
+                event_number += 1
     #compute_mesh_occurrence(eoi, pathway)
     #pathway.compute_visuals(showintro, color)
+    pathway.reverse_subedges()
     #pathway.compute_relstats()
+
     # Write dual pathway.
     if prefix == "modstory":
         pathway.filename = "eventpathway.dot"
@@ -4654,7 +5398,6 @@ def foldpathway(eoi, prefix, causalgraphs=None, siphon=False, ignorelist=[],
         pathway.filename = "dualpathway.dot"
     if prefix == "statestory":
         pathway.filename = "statepathway.dot"
-    #pathway.filename = "dualpathway.dot"
     pathway.build_dot_file(showintro, addedgelabels, showedgelabels,
                            edgeid, edgeocc, edgeprob, statstype,
                            weightedges)
@@ -4677,7 +5420,7 @@ def foldstory(story):
         for i in range(len(story.eventnodes)):
             for j in range(i+1, len(story.eventnodes)):
                 if story.eventnodes[i].label == story.eventnodes[j].label:
-                    # Merging two nodes effectively deletes a node.
+                    # Merging two nodes, effectively deletes a node.
                     merge_nodes(i, j, story.eventnodes, story.hyperedges)
                     pair_found = True
                     break
@@ -4690,7 +5433,7 @@ def foldstory(story):
         for i in range(len(story.statenodes)):
             for j in range(i+1, len(story.statenodes)):
                 if story.statenodes[i].label == story.statenodes[j].label:
-                    # Merging two nodes effectively deletes a node.
+                    # Merging two nodes, effectively deletes a node.
                     merge_nodes(i, j, story.statenodes, story.hyperedges)
                     pair_found = True
                     break
