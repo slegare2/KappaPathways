@@ -2857,6 +2857,7 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
     #tmp_stories = stories[0:10]
     #stories = tmp_stories
     for story in stories:
+        print(story.filename)
         # Reset hyperedges.
         story.hyperedges = []
         # Get actions for each event node.
@@ -2963,23 +2964,20 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
                 grouped_tests.append(new_test)
             eventnode.tests = grouped_tests
         # Add edges between state nodes and the event nodes that require them.
-        for statenode in story.statenodes:
-            # !! Here I have to do something if i include stories with undos.
-            # Gather eventnodes going down until some event undoes the state
-            # of current statenode. !!
-            for eventnode in story.eventnodes:
-                if eventnode.rank > statenode.rank:
-                    editused = False
-                    for eventtest in eventnode.tests:
+        # A given test must have only one edit that satisfy it.
+        for eventnode in story.eventnodes:
+            for eventtest in eventnode.tests:
+                satisfying_edits = []
+                for statenode in story.statenodes:
+                    if statenode.rank < eventnode.rank:
                         are_rel = edit_vs_test(statenode.edit, eventtest)
-                        #are_same = compare_states(statenode.edit, eventtest,
-                        #                          ignoretype=True)
                         if are_rel == True:
-                            editused = True
-                            break
-                    if editused == True:
-                        new_edge = CausalEdge(statenode, eventnode)
-                        story.causaledges.append(new_edge)
+                            satisfying_edits.append(statenode)
+                if len(satisfying_edits) > 0:
+                    sorted_edits = sorted(satisfying_edits,
+                                          key=lambda x: x.rank, reverse=True)
+                    new_edge = CausalEdge(sorted_edits[0], eventnode)
+                    story.causaledges.append(new_edge)
         # Add conflict edges between states and target events.
         for edge in story.causaledges:
             if edge.relationtype == "conflict":
@@ -3015,6 +3013,29 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
                 if edge.target not in direct_target_events:
                     edge.secondary = True
                     edge.color = "gray60"
+        # Revert secondary for rule outputs that have only secondary edges.
+        story.rule_outputs = []
+        for edge in story.causaledges:
+            if isinstance(edge.source, EventNode):
+                if edge.source.intro == False:
+                    if isinstance(edge.target, StateNode):
+                        story.rule_outputs.append(edge.target)
+        for statenode in story.rule_outputs:
+            outgoing_edges = []
+            target_ranks = []
+            has_normal = False
+            for i in range(len(story.causaledges)):
+                edge = story.causaledges[i]
+                if edge.source == statenode:
+                    outgoing_edges.append(i)
+                    target_ranks.append(edge.target.rank)
+                    if edge.secondary == False:
+                        has_normal = True
+            if has_normal == False:
+                for i in outgoing_edges:
+                    if story.causaledges[i].target.rank == min(target_ranks):
+                        story.causaledges[i].secondary = False
+                        story.causaledges[i].color = "black"
         # Remove all edges between two event nodes.
         edges_to_remove = []
         for i in range(len(story.causaledges)):
@@ -3058,107 +3079,225 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
         outfile.write(story.dot_file)
         outfile.close()
 
+    #time_start = time.perf_counter()
+    ## Then write state (context + edit).
+    #""" Get the cumulative relevant context for each state node. """
+    #for story in stories:
+    #    print(story.filename)
+    #    story.hyperedges = []
+    #    story.rule_outputs = []
+    #    for edge in story.causaledges:
+    #        if isinstance(edge.source, EventNode):
+    #            if edge.source.intro == False:
+    #                if isinstance(edge.target, StateNode):
+    #                    story.rule_outputs.append(edge.target)
+    #    for statenode in story.rule_outputs:
+    #        cumul_nodes = []
+    #        # Get upstream path of state nodes.
+    #        # This part takes a long time on large graphs, may be improved.
+    #        paths = story.follow_edges("up", statenode, ignore_conflict=False)
+    #        state_paths = []
+    #        for path in paths:
+    #            state_path = []
+    #            for node in path:
+    #                if isinstance(node, StateNode):
+    #                    state_path.append(node)
+    #            state_paths.append(state_path)
+    #        # Keep only the first value encountered for each site encountered
+    #        # while following path up.
+    #        seen_sites = []
+    #        for agent in statenode.edit:
+    #            if agent["sites"] != None:
+    #                for site in agent["sites"]:
+    #                    site_str = write_kappa_site(site, "num", True)
+    #                    seen_sites.append(site_str)
+    #            else:
+    #                agent_str = write_kappa_agent(agent, "num", True)
+    #                seen_sites.append(agent_str)
+    #        for path in state_paths:
+    #            for node in path:
+    #                # All edited sites of a state node must be unseen before
+    #                # we can keep the node.
+    #                keep_node = True
+    #                for agent in node.edit:
+    #                    if agent["sites"] != None:
+    #                        for site in agent["sites"]:
+    #                            site_str = write_kappa_site(site, "num", True)
+    #                            if site_str in seen_sites:
+    #                                keep_node = False
+    #                            else:
+    #                                seen_sites.append(site_str)
+    #                    else:
+    #                        agent_str = write_kappa_agent(agent, "num", True)
+    #                        if agent_str in seen_sites:
+    #                            keep_node = False
+    #                        else:
+    #                            seen_sites.append(agent_str)
+    #                if keep_node == True and node not in cumul_nodes:
+    #                    cumul_nodes.append(node)
+    #        # Also add all the state nodes which have the same event as source.
+    #        # !! I won't need this part once I implement parallel context !!
+    #        for edge in story.causaledges:
+    #            if edge.target == statenode:
+    #                source_event = edge.source
+    #        for edge in story.causaledges:
+    #            if edge.source == source_event:
+    #                if edge.target != statenode:
+    #                    cumul_nodes.append(edge.target)
+    #        # Check which of the cumul nodes are relevant for the future of the
+    #        # current state node.
+    #        relevant_nodes = []
+    #        for cumul_node in cumul_nodes:
+    #            # Find all target event nodes.
+    #            target_events = []
+    #            for edge in story.causaledges:
+    #                if edge.source == cumul_node:
+    #                    target_events.append(edge.target)
+    #            # Check if there is at least one of the target nodes which is
+    #            # in the future of current state node (has an upstream path).
+    #            downstream_paths = story.follow_edges("down", statenode,
+    #                                                  target_events,
+    #                                                  ignore_conflict=True,
+    #                                                  stop_at_first=True)
+    #            if len(downstream_paths) > 0:                
+    #                relevant_nodes.append(cumul_node)
+    #        # Build current state node context from the state of
+    #        # all the relevant_nodes.
+    #        full_state = copy.deepcopy(statenode.edit)
+    #        for relevant_node in relevant_nodes:
+    #            for agent in relevant_node.edit:
+    #                context_agent = copy.deepcopy(agent)
+    #                if context_agent["type"] == None:
+    #                    for context_site in context_agent["sites"]:
+    #                        context_site["type"] = "context"
+    #                elif context_agent["type"] != None:
+    #                    context_agent["type"] = "context"
+    #                full_state.append(context_agent)
+    #        statenode.state = group_sites_by_agent(full_state)
+    #        lbl = write_context_expression(statenode.state)
+    #        statenode.label = lbl
+    #    for statenode in story.statenodes:
+    #        if statenode not in story.rule_outputs:
+    #            statenode.state = statenode.edit
+    #    story.create_hyperedges()
+    #    story.align_vertical()
 
-    # Then write state (context + edit).
-    """ Get the cumulative relevant context for each state node. """
+    #time_stop = time.perf_counter()
+    #time_diff = time_stop - time_start
+    #print("Time:", time_diff)
+
+    # ----------------------------
+
+    #time_start = time.perf_counter()
     for story in stories:
         print(story.filename)
         story.hyperedges = []
-        rule_outputs = []
+        story.rule_outputs = []
         for edge in story.causaledges:
             if isinstance(edge.source, EventNode):
                 if edge.source.intro == False:
                     if isinstance(edge.target, StateNode):
-                        rule_outputs.append(edge.target)
-        for statenode in rule_outputs:
-            cumul_nodes = []
-            # Get upstream path of state nodes.
-            # This part takes a long time on large graphs, may be improved.
-            paths = story.follow_edges("up", statenode, ignore_conflict=False)
-            state_paths = []
-            for path in paths:
-                state_path = []
-                for node in path:
-                    if isinstance(node, StateNode):
-                        state_path.append(node)
-                state_paths.append(state_path)
-            # Keep only the first value encountered for each site encountered
-            # while following path up.
-            seen_sites = []
-            for agent in statenode.edit:
-                if agent["sites"] != None:
-                    for site in agent["sites"]:
-                        site_str = write_kappa_site(site, "num", True)
-                        seen_sites.append(site_str)
-                else:
-                    agent_str = write_kappa_agent(agent, "num", True)
-                    seen_sites.append(agent_str)
-            for path in state_paths:
-                for node in path:
-                    # All edited sites of a state node must be unseen before
-                    # we can keep the node.
-                    keep_node = True
-                    for agent in node.edit:
+                        story.rule_outputs.append(edge.target)
+        for statenode in story.statenodes:
+            statenode.cumulnodes = []
+        for cr in range(1, story.maxrank):
+            current_rank = cr + 0.5
+            for statenode in story.rule_outputs:
+                if statenode.rank == current_rank:
+                    # Find immediate upstream state nodes.
+                    for edge in story.causaledges:
+                        if edge.target == statenode:
+                            src_rule = edge.source
+                            break
+                    upstream_nodes = []
+                    for edge in story.causaledges:
+                        if edge.target == src_rule:
+                            upstream_nodes.append(edge.source)
+                    # Add the immediate upstream nodes and their cumulnodes
+                    # to the cumulnodes of the current statenode.
+                    for upstream_node in upstream_nodes:
+                        statenode.cumulnodes.append(upstream_node)
+                        for up_cumulnode in upstream_node.cumulnodes:
+                            if up_cumulnode not in statenode.cumulnodes:
+                                statenode.cumulnodes.append(up_cumulnode)
+                    # Remove from cumulnodes any node that has at least one
+                    # edit site in common with the current node edit sites
+                    current_sites = []
+                    for agent in statenode.edit:
                         if agent["sites"] != None:
                             for site in agent["sites"]:
                                 site_str = write_kappa_site(site, "num", True)
-                                if site_str in seen_sites:
-                                    keep_node = False
-                                else:
-                                    seen_sites.append(site_str)
+                                current_sites.append(site_str)
                         else:
                             agent_str = write_kappa_agent(agent, "num", True)
-                            if agent_str in seen_sites:
-                                keep_node = False
+                            current_sites.append(agent_str)
+                    cumul_to_remove = []
+                    for i in range(len(statenode.cumulnodes)):
+                        prevnode = statenode.cumulnodes[i]
+                        for agent in prevnode.edit:
+                            if agent["sites"] != None:
+                                for site in agent["sites"]:
+                                    site_str = write_kappa_site(site, "num", True)
+                                    if site_str in current_sites:
+                                        cumul_to_remove.insert(0, i)
                             else:
-                                seen_sites.append(agent_str)
-                    if keep_node == True and node not in cumul_nodes:
-                        cumul_nodes.append(node)
-            # Also add all the state nodes which have the same event as source.
-            for edge in story.causaledges:
-                if edge.target == statenode:
-                    source_event = edge.source
-            for edge in story.causaledges:
-                if edge.source == source_event:
-                    if edge.target != statenode:
-                        cumul_nodes.append(edge.target)
-            # Check which of the cumul nodes are relevant for the future of the
-            # current state node.
-            relevant_nodes = []
-            for cumul_node in cumul_nodes:
-                # Find all target event nodes.
-                target_events = []
-                for edge in story.causaledges:
-                    if edge.source == cumul_node:
-                        target_events.append(edge.target)
-                # Check if there is at least one of the target nodes which is
-                # in the future of current state node (has an upstream path).
-                downstream_paths = story.follow_edges("down", statenode,
-                                                      target_events,
-                                                      ignore_conflict=True,
-                                                      stop_at_first=True)
-                if len(downstream_paths) > 0:                
-                    relevant_nodes.append(cumul_node)
-            # Build current state node context from the state of
-            # all the relevant_nodes.
-            full_state = copy.deepcopy(statenode.edit)
-            for relevant_node in relevant_nodes:
-                for agent in relevant_node.edit:
-                    context_agent = copy.deepcopy(agent)
-                    if context_agent["type"] == None:
-                        for context_site in context_agent["sites"]:
-                            context_site["type"] = "context"
-                    elif context_agent["type"] != None:
-                        context_agent["type"] = "context"
-                    full_state.append(context_agent)
-            statenode.state = group_sites_by_agent(full_state)
-            lbl = write_context_expression(statenode.state)
-            statenode.label = lbl
+                                agent_str = write_kappa_agent(agent, "num", True)
+                                if agent_str in current_sites:
+                                    cumul_to_remove.insert(0, i)
+                    for i in cumul_to_remove:
+                        del(statenode.cumulnodes[i])
+                    # Remove cumul nodes that are no more useful for future.
+                    cumul_to_remove = []
+                    for i in range(len(statenode.cumulnodes)):
+                        cumulnode = statenode.cumulnodes[i]
+                        # Find all target event nodes.
+                        target_events = []
+                        for edge in story.causaledges:
+                            if edge.source == cumulnode:
+                                target_events.append(edge.target)
+                        # Check if there is at least one of the target nodes
+                        # which is in the future of current state node
+                        # (has an upstream path).
+                        downstream_paths = story.follow_edges("down",
+                            statenode, target_events, ignore_conflict=True,
+                            stop_at_first=True)
+                        if len(downstream_paths) == 0:
+                            cumul_to_remove.insert(0, i)
+                    for i in cumul_to_remove:
+                        del(statenode.cumulnodes[i])
+                    # Add neighbors nodes. This part can probably be removed
+                    # once parallel context is implemented.
+                    neighbors = []
+                    #for edge in story.causaledges:
+                    #    if edge.source == src_rule:
+                    #        if edge.target != statenode:
+                    #            neighbors.append(edge.target)
+                    # Build current state node context from the state of
+                    # all the relevant_nodes.
+                    full_state = copy.deepcopy(statenode.edit)
+                    for cumulnode in statenode.cumulnodes + neighbors:
+                        for agent in cumulnode.edit:
+                            context_agent = copy.deepcopy(agent)
+                            if context_agent["type"] == None:
+                                for context_site in context_agent["sites"]:
+                                    context_site["type"] = "context"
+                            elif context_agent["type"] != None:
+                                context_agent["type"] = "context"
+                            full_state.append(context_agent)
+                    statenode.state = group_sites_by_agent(full_state)
+                    lbl = write_context_expression(statenode.state)
+                    statenode.label = lbl
         for statenode in story.statenodes:
-            if statenode not in rule_outputs:
+            if statenode not in story.rule_outputs:
                 statenode.state = statenode.edit
         story.create_hyperedges()
         story.align_vertical()
+
+    #time_stop = time.perf_counter()
+    #time_diff = time_stop - time_start
+    #print("Time:", time_diff)
+
+    # -----------------------------
 
     # Write stories with context on state nodes.
     for i in range(len(stories)):
@@ -3170,7 +3309,6 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
         outfile = open(output_path, "w")
         outfile.write(story.dot_file)
         outfile.close()
-
 
     # Distinguish events that are applications of a same rule but
     # in a different context.
@@ -3262,13 +3400,13 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
                 editset.append(statenode.edit)
                 statesets.append([statenode.state])
     for story in stories:
-        rule_outputs = []
+        story.rule_outputs = []
         for edge in story.causaledges:
             if isinstance(edge.source, EventNode):
                 if edge.source.intro == False:
                     if isinstance(edge.target, StateNode):
-                        rule_outputs.append(edge.target)
-        for statenode in rule_outputs:
+                        story.rule_outputs.append(edge.target)
+        for statenode in story.rule_outputs:
             for i in range(len(editset)):
                 are_same = compare_states(statenode.edit, editset[i],
                                           ignorevalue=False, ignoreid=True)
@@ -3285,13 +3423,17 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
     possible_states = []
     standard_labels = []
     for story in stories:
-        rule_outputs = []
+        #rule_outputs = []
+        story.intro_outputs = []
         for edge in story.causaledges:
             if isinstance(edge.source, EventNode):
-                if edge.source.intro == False:
+                #if edge.source.intro == False:
+                #    if isinstance(edge.target, StateNode):
+                #        rule_outputs.append(edge.target)
+                if edge.source.intro == True:
                     if isinstance(edge.target, StateNode):
-                        rule_outputs.append(edge.target)
-        for statenode in rule_outputs:
+                        story.intro_outputs.append(edge.target)
+        for statenode in story.rule_outputs:
             state_index = None
             for i in range(len(possible_states)):
                 are_same = compare_states(statenode.state, possible_states[i],
@@ -3313,7 +3455,11 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
                 statenode.label = standard_label
             # Otherwise assign the already chosen standard label.
             else:
-                statenode.label = standard_labels[i]       
+                statenode.label = standard_labels[i]
+        for statenode in story.intro_outputs:  
+            lbl = write_context_expression(statenode.edit, hidevalue=False,
+                                           hideid=True)
+            statenode.label = lbl
 
     # Writes stories with distinguished events.
     for i in range(len(stories)):
@@ -4929,6 +5075,7 @@ def equivalent_hyperedge_lists(edgelist1, edgelist2, enforcerank=True,
     correspondances = []
     list2_indexes = list(range(len(edgelist2)))
     for hyperedge1 in edgelist1:
+        equi_edges = False
         for i in list2_indexes:
             hyperedge2 = edgelist2[i]
             equi_edges = equivalent_hyperedges(hyperedge1, hyperedge2,
@@ -4969,7 +5116,7 @@ def equivalent_hyperedges(hyperedge1, hyperedge2, enforcerank=True,
         are_equivalent = True
     else:
         are_equivalent = False
-        
+
     if return_correspondances == False:
         return are_equivalent
     elif return_correspondances == True:
@@ -4992,6 +5139,7 @@ def equivalent_node_lists(nodelist1, nodelist2, enforcerank=True,
     correspondances = []
     list2_indexes = list(range(len(nodelist2)))
     for node1 in nodelist1:
+        equi_nodes = False
         for i in list2_indexes:
             node2 = nodelist2[i]
             equi_nodes = equivalent_nodes(node1, node2, enforcerank)
@@ -5356,7 +5504,7 @@ def foldpathway(eoi, prefix, causalgraphs=None, siphon=False, ignorelist=[],
     pathway = stories[0]
     foldstory(pathway)
     for i in range(1, len(stories)):
-        print(i)
+        print(i+1)
         pathway.occurrence += stories[i].occurrence
         pathway.eventnodes += stories[i].eventnodes
         pathway.statenodes += stories[i].statenodes
@@ -5366,10 +5514,10 @@ def foldpathway(eoi, prefix, causalgraphs=None, siphon=False, ignorelist=[],
     pathway.hypergraph = True
     # Ranking with intropos="top", rulepos="top" is the fastest as it does
     # not require follow_hyperedges, which takes long on large graphs.
-    #pathway.rank_sequentially(intropos="top", rulepos="top")
+    pathway.rank_sequentially(intropos="top", rulepos="top")
     #pathway.rank_sequentially(intropos="top", rulepos="bot")
-    #-->pathway.rank_sequentially(intropos="bot", rulepos="top")
-    pathway.rank_sequentially(intropos="bot", rulepos="bot")
+    #pathway.rank_sequentially(intropos="bot", rulepos="top") # <--
+    #pathway.rank_sequentially(intropos="bot", rulepos="bot")
     #pathway.get_maxrank()
 
     # Resequentialize node ids. This is required because otherwise the method
