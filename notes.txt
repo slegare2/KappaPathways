@@ -1,0 +1,6 @@
+Parallel context is tied to undoings:
+Is it useful only when there are undo rules in teh stories?
+Would there be examples where I need to include parallel context
+even if there is no undo rule in the story?
+
+

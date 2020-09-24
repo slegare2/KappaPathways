@@ -145,7 +145,7 @@ class CausalEdge(object):
                  color="black", secondary=False, underlying=False,
                  reverse=False, labelcarrier=True, indicator=False,
                  meshid=None, pos=None, labelpos=None, overridewidth=None,
-                 overridelabel=None):
+                 overridelabel=None, essential=False):
         """ Initialize class CausalEdge. """
 
         self.source = source
@@ -167,6 +167,7 @@ class CausalEdge(object):
         self.labelpos = labelpos
         self.overridewidth = overridewidth
         self.overridelabel = overridelabel
+        self.essential = essential
         self.check_types()
 
 
@@ -208,17 +209,32 @@ class HyperEdge(object):
     target EventNode.
     """
 
-    def __init__(self, edgelist, weight=1, underlying=False, color="black",
-                 hyperid=None, layout_weight=1, reverse=False):
+    def __init__(self, edgelist, weight=1, layout_weight=1, rel_wei=1.0, 
+                 occurrence=None, rel_occ=None, relationtype="causal",
+                 color="black", secondary=False, underlying=False,
+                 reverse=False, labelcarrier=True, indicator=False,
+                 hyperid=None, pos=None, labelpos=None, overridewidth=None,
+                 overridelabel=None):
         """ Initialize class CausalEdge. """
 
         self.edgelist = edgelist
         self.weight = weight
-        self.underlying = underlying
-        self.color = color
-        self.hyperid = hyperid
         self.layout_weight = layout_weight
+        self.rel_wei = rel_wei
+        self.occurrence = occurrence
+        self.rel_occ = rel_occ
+        self.relationtype = relationtype
+        self.color = color
+        self.secondary = secondary
+        self.underlying = underlying
         self.reverse = reverse
+        self.labelcarrier = labelcarrier
+        self.indicator = indicator
+        self.hyperid = hyperid
+        self.pos = pos
+        self.labelpos = labelpos
+        self.overridewidth = overridewidth
+        self.overridelabel = overridelabel
         self.check_types()
         self.update()
 
@@ -229,14 +245,17 @@ class HyperEdge(object):
         self.target = self.edgelist[0].target
         self.sources = []
         all_weights = []
-        for edge in self.edgelist:
-            if edge.target != self.target:
+        all_conflicts = True
+        for subedge in self.edgelist:
+            if subedge.target != self.target:
                 raise ValueError("Hyperedge has more than one target.")
-            self.sources.append(edge.source)
-            #if edge.source.intro == False:
-            #    edge.weight = self.weight
-            all_weights.append(edge.weight)
+            self.sources.append(subedge.source)
+            all_weights.append(subedge.weight)
+            if subedge.relationtype != "conflict":
+                all_conflicts = False
         self.weight = min(all_weights)
+        if all_conflicts == True:
+            self.relationtype = "conflict"
         # I do not enforce equal weight among all subedges because I want
         # to allow zero weight on edges with intro source for better layout.
         #self.weight = self.edgelist[0].weight
@@ -871,9 +890,13 @@ class CausalGraph(object):
                 #    elif 'cover="True"' in line:
                 #        tmp_cmidedges.append(new_edge)
                 #else:
+                ess = False
+                if "ess=True" in line:
+                    ess = True
                 new_edge = CausalEdge(source, target, weight=weight,
                                       relationtype=edgetype, meshid=meshid,
-                                      underlying=underlying, color=color)
+                                      underlying=underlying, color=color,
+                                      essential=ess)
                 if 'cover="True"' not in line:
                     tmp_edges.append(new_edge)
                 elif 'cover="True"' in line:
@@ -1227,7 +1250,21 @@ class CausalGraph(object):
                         source_ranks = []
                         for source in incoming_hedge.sources:
                             if source.intro == False:
-                                source_ranks.append(source.rank)
+                                shrk = False
+                                if isinstance(source, EventNode):
+                                    if source.shrink == True:
+                                        shrk = True
+                                if shrk == False:
+                                    source_ranks.append(source.rank)
+                                else:
+                                    # If node is shrunk, take the max rank
+                                    # among its sources instead of own rank.
+                                    subranks = []
+                                    for hyperedge2 in self.hyperedges:
+                                        if hyperedge2.target == source:
+                                            for subsource in hyperedge2.sources:
+                                                subranks.append(subsource.rank)
+                                    source_ranks.append(max(subranks))
                         possible_ranks.append(max(source_ranks)+1)
                     elif secured == False:
                         # Hyperedges that are not secured still count as
@@ -1514,20 +1551,77 @@ class CausalGraph(object):
 
     def reverse_subedges(self):
         """
-        Reverse the direction of subedges if their source has a higher
-        rank than their target.
+        Reverse the direction of subedges if their source has a higher rank
+        than their target. Reverse hyperedge if all its subedges are reversed.
         """
-        
+
+        # Reset reverse edge information.
         for hyperedge in self.hyperedges:
-            all_sources_higher_rank = True
+            hyperedge.reverse = False
             for subedge in hyperedge.edgelist:
-                if subedge.target.rank > subedge.source.rank:
-                    subedge.reverse = False
-                    all_sources_higher_rank = False
-                else:
-                    subedge.reverse = True
-            if all_sources_higher_rank == True:
-                hyperedge.reverse = True
+                subedge.reverse = False
+        # Compute new edge reversion.
+        for hyperedge in self.hyperedges:
+            # Check if source or target is shrunk.
+            shrunk_src, shrunk_trg = False, False
+            if isinstance(hyperedge.sources[0], EventNode):
+                shrunk_src = hyperedge.sources[0].shrink
+            if isinstance(hyperedge.target, EventNode):
+                shrunk_trg = hyperedge.target.shrink
+            # Normal case, no shrunk node as source or target.
+            if shrunk_src == False and shrunk_trg == False:
+                all_subedges_reversed = True
+                for subedge in hyperedge.edgelist:
+                   if subedge.source.rank > subedge.target.rank:
+                       subedge.reverse = True
+                   else:
+                       all_subedges_reversed = False
+                if all_subedges_reversed == True:
+                    hyperedge.reverse = True
+                #all_sources_higher_rank = True
+                #for subedge in hyperedge.edgelist:
+                #    if subedge.source.rank < subedge.target.rank:
+                #        all_sources_higher_rank = False
+                #    else:
+                #        subedge.reverse = True
+                #if all_sources_higher_rank == True:
+                #    hyperedge.reverse = True
+            # If the source is shrunk, the hyperedge has only one subedge.
+            # Reverse edge only if all sources are of higher rank.
+            elif shrunk_src == True:
+                src_list = []
+                for hyperedge2 in self.hyperedges:
+                    if hyperedge2.target == hyperedge.sources[0]:
+                        src_list += hyperedge2.sources
+                all_sources_higher_rank = True
+                for source in src_list:
+                    if source.rank < hyperedge.target.rank:
+                        all_sources_higher_rank = False
+                        break
+                if all_sources_higher_rank == True:
+                    hyperedge.edgelist[0].reverse = True
+                    hyperedge.reverse = True
+            # Case where the target is shrunk.
+            # Reverse subedge only if all its targets are of lower rank.
+            # Reverse the hyperedge if all subedges are reversed.
+            elif shrunk_trg == True:
+                trg_list = []
+                for hyperedge2 in self.hyperedges:
+                    if hyperedge2.sources[0] == hyperedge.target:
+                        trg_list.append(hyperedge2.target)
+                all_subedges_reversed = True
+                for subedge in hyperedge.edgelist:
+                    all_targets_lower = True
+                    for target in trg_list:
+                        if subedge.source.rank < target.rank:
+                            all_targets_lower = False
+                            break
+                    if all_targets_lower == True:
+                        subedge.reverse = True
+                    else:
+                        all_subedges_reversed = False
+                if all_subedges_reversed == True:
+                    hyperedge.reverse = True
 
 
     def sequentialize_nodeids(self):
@@ -2063,6 +2157,18 @@ class CausalGraph(object):
         #for coverhyper in self.coverhypers:
         #    all_uses.append(covermesh.uses)
         average_weight = statistics.mean(all_weights)
+        # Build drawing parameters dict.
+        params = {"average_weight": average_weight,
+                  "minpenwidth": minpenwidth,
+                  "medpenwidth": medpenwidth,
+                  "maxpenwidth": maxpenwidth,
+                  "addedgelabels": addedgelabels,
+                  "showedgelabels": showedgelabels,
+                  "edgeid": edgeid,
+                  "edgeocc": edgeocc,
+                  "edgeuse": edgeuse,
+                  "statstype": statstype,
+                  "weightedges": weightedges}
         # Draw nodes.
         midranks = 1
         for int_rank in range(int((self.maxrank+1)*(midranks+1))):
@@ -2089,7 +2195,7 @@ class CausalGraph(object):
                         dot_str += ', pos={}'.format(rankpos)
                 dot_str += '];\n'
             for node in self.eventnodes:
-                if node.rank == current_rank:
+                if node.rank == current_rank and node.shrink == False:
                     #node_shape = 'invhouse'
                     node_shape = 'rectangle'
                     node_color = 'lightblue'
@@ -2104,7 +2210,7 @@ class CausalGraph(object):
                     if showintro == False and node.intro == True:
                         dot_str += '//'
                     node_lines = textwrap.wrap(node.label, 20,
-                                              break_long_words=False)
+                                               break_long_words=False)
                     dot_str += '{} '.format(node.nodeid)
                     node_str = ""
                     for i in range(len(node_lines)):
@@ -2112,26 +2218,28 @@ class CausalGraph(object):
                             node_str += " {} ".format(node_lines[i])
                         else:
                             node_str += "<br/> {} ".format(node_lines[i])
-                    if node.shrink == False:
-                        dot_str += '[label=<{}>'.format(node_str)
-                        dot_str += ', shape={}, style=filled'.format(node_shape)
-                        if node.highlighted == True:
-                           dot_str += ', fillcolor=gold, penwidth=2'
-                        else:
-                           dot_str += ', fillcolor={}'.format(node_color)
-                        if node.intro == True:
-                            dot_str += ', intro={}'.format(node.intro)
-                        if node.first == True:
-                            dot_str += ', first={}'.format(node.first)
-                        if node.pos != None:
-                            dot_str += ', pos={}'.format(node.pos)
-                    elif node.shrink == True:
-                        dot_str += '[label="", hlabel=<{}>'.format(node_str)
-                        dot_str += ', shape=circle'
-                        dot_str += ', style=filled'
-                        dot_str += ', fillcolor=white'
-                        dot_str += ', width=0.1'
-                        dot_str += ', height=0.1'
+                    #if node.shrink == False:
+                    dot_str += '[label=<{}>'.format(node_str)
+                    dot_str += ', shape={}, style=filled'.format(node_shape)
+                    if node.highlighted == True:
+                       dot_str += ', fillcolor=gold, penwidth=2'
+                    else:
+                       dot_str += ', fillcolor={}'.format(node_color)
+                    if node.intro == True:
+                        dot_str += ', intro={}'.format(node.intro)
+                    if node.first == True:
+                        dot_str += ', first={}'.format(node.first)
+                    if node.pos != None:
+                        dot_str += ', pos={}'.format(node.pos)
+
+                    #elif node.shrink == True:
+                    #    dot_str += '[label="", hlabel=<{}>'.format(node_str)
+                    #    dot_str += ', shape=circle'
+                    #    dot_str += ', style=filled'
+                    #    dot_str += ', fillcolor=white'
+                    #    dot_str += ', width=0.1'
+                    #    dot_str += ', height=0.1'
+
                     dot_str += ', penwidth=2'
                     dot_str += "] ;\n"
             for node in self.statenodes:
@@ -2161,7 +2269,6 @@ class CausalGraph(object):
                         dot_str += ', pos={}'.format(node.pos)
                     dot_str += ', penwidth=2'
                     dot_str += "] ;\n"
-
             ## Draw intermediary nodes that emulate hyperedges if two
             ## sources or more are drawn.
             #for hyperedge in self.hyperedges:
@@ -2188,6 +2295,18 @@ class CausalGraph(object):
             if showintro == False and current_rank < 1:
                 dot_str += "//"
             dot_str += "}\n"
+        # Draw unranked shrunk nodes.
+        for node in self.eventnodes:
+            if node.shrink == True:
+                dot_str += '{} '.format(node.nodeid)
+                dot_str += '[label="", hlabel=<{}>'.format(node_str)
+                dot_str += ', shape=circle'
+                dot_str += ', style=filled'
+                dot_str += ', fillcolor=white'
+                dot_str += ', width=0.1'
+                dot_str += ', height=0.1'
+                dot_str += ', penwidth=2'
+                dot_str += "] ;\n"
         ## Draw unranked midnodes.
         #for mesh in self.meshes:
         #    for midnode in mesh.midnodes:
@@ -2244,38 +2363,39 @@ class CausalGraph(object):
         if self.hypergraph == False:
             for hyperedge in self.hyperedges:
                 for edge in hyperedge.edgelist:
-                    dot_str += self.write_edge(edge)
-                    dot_str += '] ;\n'
-        # Custom hyperedges.
+                    dot_str += self.write_edge(edge, params)
+        # Write hyperedges.
         elif self.hypergraph == True:
             midid = 1
             for hyperedge in self.hyperedges:
-                if len(hyperedge.edgelist) > 1:
-                    midid_str = "mid{}".format(midid)
-                    dot_str += self.write_midnode(midid_str)
-                    dot_str += '] ;\n'
-                    all_conflict = True
-                    for edge in hyperedge.edgelist:
-                        dot_str += self.write_custom_edge(edge.source.nodeid,
-                                    midid_str, edge.color, edge.weight,
-                                    edge.layout_weight, edge.relationtype,
-                                    edge.reverse, False)
-                        dot_str += '] ;\n'
-                        if edge.relationtype != "conflict":
-                            all_conflict = False
-                    if all_conflict == True:
-                        reltype = "conflict"
-                    else:
-                        reltype = "causal"
-                    dot_str += self.write_custom_edge(midid_str,
-                                    hyperedge.target.nodeid, "black",
-                                    hyperedge.weight, hyperedge.layout_weight,
-                                    reltype, hyperedge.reverse)
-                    dot_str += '] ;\n'
-                    midid += 1
-                else:
-                    dot_str += self.write_edge(hyperedge.edgelist[0])
-                    dot_str += '] ;\n'
+                dot_str += self.write_hyperedge(hyperedge, midid, params)
+                midid += 1
+                #if len(hyperedge.edgelist) > 1:
+                #    midid_str = "mid{}".format(midid)
+                #    dot_str += self.write_midnode(midid_str)
+                #    dot_str += '] ;\n'
+                #    all_conflict = True
+                #    for edge in hyperedge.edgelist:
+                #        dot_str += self.write_custom_edge(edge.source.nodeid,
+                #                    midid_str, edge.color, edge.weight,
+                #                    edge.layout_weight, edge.relationtype,
+                #                    edge.reverse, False)
+                #        dot_str += '] ;\n'
+                #        if edge.relationtype != "conflict":
+                #            all_conflict = False
+                #    if all_conflict == True:
+                #        reltype = "conflict"
+                #    else:
+                #        reltype = "causal"
+                #    dot_str += self.write_custom_edge(midid_str,
+                #                    hyperedge.target.nodeid, "black",
+                #                    hyperedge.weight, hyperedge.layout_weight,
+                #                    reltype, hyperedge.reverse)
+                #    dot_str += '] ;\n'
+                #    midid += 1
+                #else:
+                #    dot_str += self.write_edge(hyperedge.edgelist[0])
+                #    dot_str += '] ;\n'
         # Draw cover edges if intro nodes are not shown.
         if showintro == False:
             for covermesh in self.covermeshes:
@@ -2300,14 +2420,120 @@ class CausalGraph(object):
         mid_str += ', fillcolor=black'
         mid_str += ', width=0.1'
         mid_str += ', height=0.1'
+        mid_str += '] ;\n'
 
         return mid_str
+
+
+    def write_edge(self, edge, params, arrow=True,
+                   custom_src_id=None, custom_trg_id=None):
+        """ Write the line of a dot file for a single edge. """
+
+        # Check if a custom source or target is used.
+        source_id = custom_src_id
+        if custom_src_id == None:
+            source_id = edge.source.nodeid
+        target_id = custom_trg_id
+        if custom_trg_id == None:
+            target_id = edge.target.nodeid
+        # Write source and target node ids.
+        if edge.reverse == False:
+            edge_str = ('{} -> {} ['.format(source_id, target_id))
+        elif edge.reverse == True:
+            edge_str = ('{} -> {} ['.format(target_id, source_id))
+            edge_str += 'rev=True, '
+        # Write edge color.
+        edge_str += 'color={}'.format(edge.color)
+        # Overwrite arrow if target is shrunk.
+        if isinstance(edge.target, EventNode) and edge.target.shrink == True:
+            arrow = False
+        if arrow == False:
+            edge_str += ', dir=none'
+        elif arrow == True and edge.reverse == True:
+            edge_str += ', dir=back'
+        # Indicate conflict by a dashed line.
+        if edge.relationtype == "conflict":
+            edge_str += ", style=dashed"
+        # Write statistics.
+        edge_str += ', w={}'.format(edge.weight)
+        edge_str += ', weight={}'.format(edge.layout_weight)
+        # Compute penwidth.
+        ratio = edge.weight/params["average_weight"]
+        pensize = math.log(ratio,2) + params["medpenwidth"]
+        if pensize < params["minpenwidth"]:
+            pensize = params["minpenwidth"]
+        if pensize > params["maxpenwidth"]:
+            pensize = params["maxpenwidth"]
+        edge_str += ', penwidth={}'.format(pensize)
+        # Write labels.
+        if params["addedgelabels"] == True:
+            edge_str += ', label="{}"'.format(edge.weight)
+            if params["showedgelabels"] == True:
+                edge_str += ', fontcolor={}'.format(edge.color)
+            elif params["showedgelabels"] == False:
+                edge_str += ', fontcolor=transparent'
+        # Write whether edge is essential.
+        if edge.essential == True:
+            edge_str += ', ess=True'
+        #if addedgelabels == True:
+        #    if midedge.overridelabel == None:
+        #        if midedge.labelcarrier == True:
+        #            label_str = ""
+        #            if edgeid == True:
+        #                label_str += "  #{}".format(mesh.meshid)
+        #                if edgeocc == True or edgeuse == True:
+        #                    label_str += "\\n"
+        #            if edgeocc == True:
+        #                label_str += "  {}".format(occ_stat)
+        #                if edgeuse == True:
+        #                   label_str += "\\n"
+        #            if edgeuse == True:
+        #                label_str += "  {}".format(use_stat)
+        #            mid_str += ', label="{}"'.format(label_str)
+        #            if midedge.labelpos != None:
+        #                mid_str += ', lp={}'.format(midedge.labelpos)
+        #        if showedgelabels == True:
+        #            mid_str += ', fontcolor={}'.format(midedge.color)
+        #        elif showedgelabels == False:
+        #            mid_str += ', fontcolor=transparent'
+        #    else:
+        #        mid_str += ', label="{}"'.format(midedge.overridelabel)
+        #        if midedge.labelpos != None:
+        #            mid_str += ', lp={}'.format(midedge.labelpos)
+        edge_str += '] ;\n'
+
+        return edge_str
+
+
+    def write_hyperedge(self, hyperedge, midid, params):
+        """
+        Write the dot lines for the subedges an midnode of an hyperedge.
+        """
+
+        if len(hyperedge.edgelist) == 1:
+            hyper_str = self.write_edge(hyperedge.edgelist[0], params)
+        elif len(hyperedge.edgelist) > 1:
+            # Write mid node.
+            midid_str = "mid{}".format(midid)
+            hyper_str = self.write_midnode(midid_str)
+            # Write subedges without arrow.
+            all_conflict = True
+            for subedge in hyperedge.edgelist:
+                hyper_str += self.write_edge(subedge, params, arrow=False,
+                                             custom_trg_id=midid_str)
+                if subedge.relationtype != "conflict":
+                    all_conflict = False
+            # Write final edge with arrow (if target not shrunk).
+            hyper_str += self.write_edge(hyperedge, params,
+                                         custom_src_id=midid_str)
+
+        return hyper_str
 
 
     #def write_midnode(self, mesh, midnode, average_use, minpenwidth,
     #                  medpenwidth, maxpenwidth):
     #    """ Write the line of a dot file for a single midnode."""
-
+    #
     #    ratio = mesh.uses/average_use
     #    pensize = math.log(ratio, 2) + medpenwidth
     #    if pensize < minpenwidth:
@@ -2332,148 +2558,103 @@ class CausalGraph(object):
     #        mid_str += ', height={:.4f}'.format(midnode.overridewidth)
     #    if midnode.pos != None:
     #        mid_str += ', pos={}'.format(midnode.pos)
-
+    #
     #    return mid_str
-
-
-    def write_edge(self, edge):
-        """ Write the line of a dot file for a single edge. """
-
-        edge_str = ('{} -> {} '.format(edge.source.nodeid,
-                                           edge.target.nodeid))
-        edge_str += '[color={}'.format(edge.color)
-        if isinstance(edge.target, EventNode) and edge.target.shrink == True:
-            edge_str += ", arrowhead=none"
-        #edge_str += ", arrowhead=onormal"
-        if edge.relationtype == "conflict":
-            edge_str += ", style=dashed"
-        edge_str += ', w={}'.format(edge.weight)
-        edge_str += ', weight={}'.format(edge.layout_weight)
-        edge_str += ', penwidth=2'
-        #edge_str += ', penwidth={}'.format(edge.weight)
-
-        return edge_str
-
-
-    def write_custom_edge(self, source, target, color, weight, layout_weight,
-                          relationtype="causal", reverse=False, arrow=True):
-        """ Write the line of a dot file for a single edge. """
-
-        if reverse == False:
-            edge_str = ('{} -> {} '.format(source, target))
-        elif reverse == True:
-            edge_str = ('{} -> {} '.format(target, source))
-        edge_str += '[color={}'.format(color)
-        #edge_str += ", arrowhead=onormal"
-        if arrow == False:
-            edge_str += ', dir=none'
-        if relationtype == "conflict":
-            edge_str += ", style=dashed"
-        edge_str += ', w={}'.format(weight)
-        edge_str += ', weight={}'.format(layout_weight)
-        edge_str += ', penwidth=2'
-        if reverse == True:
-            edge_str += ", rev=True"
-            if arrow == True:
-                edge_str += ', dir=back'
-        #edge_str += ', penwidth={}'.format(weight)
-
-        return edge_str
-
-
-#    def write_midedge(self, mesh, midedge, average_use, minpenwidth,
-#                      medpenwidth, maxpenwidth, addedgelabels, showedgelabels,
-#                      edgeid, edgeocc, edgeuse, statstype, weightedges):
-#        """ Write the line of a dot file for a single midedge. """
-#
-#        ratio = mesh.uses/average_use
-#        pensize = math.log(ratio,2) + medpenwidth
-#        if pensize < minpenwidth:
-#            pensize = minpenwidth
-#        if pensize > maxpenwidth:
-#            pensize = maxpenwidth
-#        if midedge.reverse == False:
-#            mid_str = ('"{}" -> "{}" '.format(midedge.source.nodeid,
-#                                              midedge.target.nodeid))
-#        elif midedge.reverse == True:
-#            mid_str = ('"{}" -> "{}" '.format(midedge.target.nodeid,
-#                                              midedge.source.nodeid))
-#        mid_str += '[meshid={}'.format(mesh.meshid)
-#        if midedge.overridewidth == None:
-#            mid_str += ', penwidth={}'.format(pensize)
-#        else:
-#            mid_str += ', penwidth={}'.format(midedge.overridewidth)
-#        mid_str += ', color={}'.format(midedge.color)
-#        if statstype == "abs":
-#            occ_stat = "{}".format(mesh.occurrence)
-#            use_stat = "{}".format(mesh.uses)
-#        elif statstype == "rel":
-#            occ_stat = "{:.2}".format(mesh.rel_occ)
-#            use_stat = "{:.2}".format(mesh.usage)
-#        elif statstype == "both":
-#            occ_stat = "{}".format(mesh.occurrence)
-#            occ_stat += " ({:.2})".format(mesh.rel_occ)
-#            use_stat = "{}".format(mesh.uses)
-#            use_stat += " ({:.2})".format(mesh.usage)
-#        if addedgelabels == True:
-#            if midedge.overridelabel == None:
-#                if midedge.labelcarrier == True:
-#                    label_str = ""
-#                    if edgeid == True:
-#                        label_str += "  #{}".format(mesh.meshid)
-#                        if edgeocc == True or edgeuse == True:
-#                            label_str += "\\n"
-#                    if edgeocc == True:
-#                        label_str += "  {}".format(occ_stat)
-#                        if edgeuse == True:
-#                           label_str += "\\n"
-#                    if edgeuse == True:
-#                        label_str += "  {}".format(use_stat)
-#                    mid_str += ', label="{}"'.format(label_str)
-#                    if midedge.labelpos != None:
-#                        mid_str += ', lp={}'.format(midedge.labelpos)
-#                if showedgelabels == True:
-#                    mid_str += ', fontcolor={}'.format(midedge.color)
-#                elif showedgelabels == False:
-#                    mid_str += ', fontcolor=transparent'
-#            else:
-#                mid_str += ', label="{}"'.format(midedge.overridelabel)
-#                if midedge.labelpos != None:
-#                    mid_str += ', lp={}'.format(midedge.labelpos)
-#        if midedge.indicator == True:
-#            if isinstance(midedge.source, EventNode):
-#                mid_str += ", dir=none"
-#            else:
-#                mid_str += ", dir=both"
-#            if midedge.reverse == False:
-#                if isinstance(midedge.target, MidNode):
-#                    mid_str += ", arrowhead=none"
-#                if isinstance(midedge.source, MidNode):
-#                    #mid_str += ", arrowtail=icurve"
-#                    mid_str += ", arrowtail=crow"
-#                    #mid_str += ", arrowtail=inv"
-#            elif midedge.reverse == True:
-#                if isinstance(midedge.target, MidNode):
-#                    mid_str += ", arrowtail=none"
-#                if isinstance(midedge.source, MidNode):
-#                    #mid_str += ", arrowhead=icurve"
-#                    mid_str += ", arrowhead=crow"
-#                    #mid_str += ", arrowhead=inv"
-#        elif midedge.indicator == False:
-#            if isinstance(midedge.target, MidNode):
-#                mid_str += ", dir=none"
-#        if midedge.reverse == True:
-#            mid_str += ", rev=True"
-#        if midedge.relationtype == "conflict":
-#            mid_str += ", style=dotted"
-#        mid_str += ', uses={}'.format(mesh.uses)
-#        mid_str += ', usage={}'.format(mesh.usage)
-#        if weightedges == True:
-#            mid_str += ', weight={}'.format(mesh.weight)
-#        if midedge.pos != None:
-#            mid_str += ', pos={}'.format(midedge.pos)
-#
-#        return mid_str
+    #
+    #
+    #def write_midedge(self, mesh, midedge, average_use, minpenwidth,
+    #                  medpenwidth, maxpenwidth, addedgelabels, showedgelabels,
+    #                  edgeid, edgeocc, edgeuse, statstype, weightedges):
+    #    """ Write the line of a dot file for a single midedge. """
+    #
+    #    ratio = mesh.uses/average_use
+    #    pensize = math.log(ratio,2) + medpenwidth
+    #    if pensize < minpenwidth:
+    #        pensize = minpenwidth
+    #    if pensize > maxpenwidth:
+    #        pensize = maxpenwidth
+    #    if midedge.reverse == False:
+    #        mid_str = ('"{}" -> "{}" '.format(midedge.source.nodeid,
+    #                                          midedge.target.nodeid))
+    #    elif midedge.reverse == True:
+    #        mid_str = ('"{}" -> "{}" '.format(midedge.target.nodeid,
+    #                                          midedge.source.nodeid))
+    #    mid_str += '[meshid={}'.format(mesh.meshid)
+    #    if midedge.overridewidth == None:
+    #        mid_str += ', penwidth={}'.format(pensize)
+    #    else:
+    #        mid_str += ', penwidth={}'.format(midedge.overridewidth)
+    #    mid_str += ', color={}'.format(midedge.color)
+    #    if statstype == "abs":
+    #        occ_stat = "{}".format(mesh.occurrence)
+    #        use_stat = "{}".format(mesh.uses)
+    #    elif statstype == "rel":
+    #        occ_stat = "{:.2}".format(mesh.rel_occ)
+    #        use_stat = "{:.2}".format(mesh.usage)
+    #    elif statstype == "both":
+    #        occ_stat = "{}".format(mesh.occurrence)
+    #        occ_stat += " ({:.2})".format(mesh.rel_occ)
+    #        use_stat = "{}".format(mesh.uses)
+    #        use_stat += " ({:.2})".format(mesh.usage)
+    #    if addedgelabels == True:
+    #        if midedge.overridelabel == None:
+    #            if midedge.labelcarrier == True:
+    #                label_str = ""
+    #                if edgeid == True:
+    #                    label_str += "  #{}".format(mesh.meshid)
+    #                    if edgeocc == True or edgeuse == True:
+    #                        label_str += "\\n"
+    #                if edgeocc == True:
+    #                    label_str += "  {}".format(occ_stat)
+    #                    if edgeuse == True:
+    #                       label_str += "\\n"
+    #                if edgeuse == True:
+    #                    label_str += "  {}".format(use_stat)
+    #                mid_str += ', label="{}"'.format(label_str)
+    #                if midedge.labelpos != None:
+    #                    mid_str += ', lp={}'.format(midedge.labelpos)
+    #            if showedgelabels == True:
+    #                mid_str += ', fontcolor={}'.format(midedge.color)
+    #            elif showedgelabels == False:
+    #                mid_str += ', fontcolor=transparent'
+    #        else:
+    #            mid_str += ', label="{}"'.format(midedge.overridelabel)
+    #            if midedge.labelpos != None:
+    #                mid_str += ', lp={}'.format(midedge.labelpos)
+    #    if midedge.indicator == True:
+    #        if isinstance(midedge.source, EventNode):
+    #            mid_str += ", dir=none"
+    #        else:
+    #            mid_str += ", dir=both"
+    #        if midedge.reverse == False:
+    #            if isinstance(midedge.target, MidNode):
+    #                mid_str += ", arrowhead=none"
+    #            if isinstance(midedge.source, MidNode):
+    #                #mid_str += ", arrowtail=icurve"
+    #                mid_str += ", arrowtail=crow"
+    #                #mid_str += ", arrowtail=inv"
+    #        elif midedge.reverse == True:
+    #            if isinstance(midedge.target, MidNode):
+    #                mid_str += ", arrowtail=none"
+    #            if isinstance(midedge.source, MidNode):
+    #                #mid_str += ", arrowhead=icurve"
+    #                mid_str += ", arrowhead=crow"
+    #                #mid_str += ", arrowhead=inv"
+    #    elif midedge.indicator == False:
+    #        if isinstance(midedge.target, MidNode):
+    #            mid_str += ", dir=none"
+    #    if midedge.reverse == True:
+    #        mid_str += ", rev=True"
+    #    if midedge.relationtype == "conflict":
+    #        mid_str += ", style=dotted"
+    #    mid_str += ', uses={}'.format(mesh.uses)
+    #    mid_str += ', usage={}'.format(mesh.usage)
+    #    if weightedges == True:
+    #        mid_str += ', weight={}'.format(mesh.weight)
+    #    if midedge.pos != None:
+    #        mid_str += ', pos={}'.format(midedge.pos)
+    #
+    #    return mid_str
 
 
     def __repr__(self):
@@ -3372,14 +3553,14 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
     editset = []
     statesets = []
     for story in stories:
-        #rule_outputs = []
-        #for edge in story.causaledges:
-        #    if isinstance(edge.source, EventNode):
-        #        if edge.source.intro == False:
-        #            if isinstance(edge.target, StateNode):
-        #                rule_outputs.append(edge.target)
-        #for statenode in rule_outputs:
-        for statenode in story.statenodes:
+        story.rule_outputs = []
+        for edge in story.causaledges:
+            if isinstance(edge.source, EventNode):
+                if edge.source.intro == False:
+                    if isinstance(edge.target, StateNode):
+                        story.rule_outputs.append(edge.target)
+        #for statenode in story.statenodes:
+        for statenode in story.rule_outputs:
             edit_found = False
             for i in range(len(editset)):
                 are_same = compare_states(statenode.edit, editset[i],
@@ -3400,12 +3581,12 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
                 editset.append(statenode.edit)
                 statesets.append([statenode.state])
     for story in stories:
-        story.rule_outputs = []
-        for edge in story.causaledges:
-            if isinstance(edge.source, EventNode):
-                if edge.source.intro == False:
-                    if isinstance(edge.target, StateNode):
-                        story.rule_outputs.append(edge.target)
+        #story.rule_outputs = []
+        #for edge in story.causaledges:
+        #    if isinstance(edge.source, EventNode):
+        #        if edge.source.intro == False:
+        #            if isinstance(edge.target, StateNode):
+        #                story.rule_outputs.append(edge.target)
         for statenode in story.rule_outputs:
             for i in range(len(editset)):
                 are_same = compare_states(statenode.edit, editset[i],
@@ -3637,51 +3818,6 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
         outfile.write(story.dot_file)
         outfile.close()
 
-    ## Write stories with state nodes only.
-    ## Works only with atomic rules for now.
-    #for story in stories:
-    #    # The first nodes become the output of the event
-    #    # nodes which had first=True.
-    #    for hyperedge in story.hyperedges:
-    #        first_in_sources = False
-    #        for source in hyperedge.sources:
-    #            if source.first == True:
-    #                first_in_sources = True
-    #                break
-    #        if first_in_sources == True:
-    #            hyperedge.target.first = True
-    #    hyperedges_to_remove = []
-    #    for hyperedge in story.hyperedges:
-    #        if isinstance(hyperedge.target, EventNode):
-    #            if hyperedge.target.label != story.eoi:
-    #                for i in range(len(story.hyperedges)):
-    #                    hyperedge2 = story.hyperedges[i]
-    #                    if hyperedge.target in hyperedge2.sources:
-    #                        new_target = hyperedge2.target
-    #                        hyperedges_to_remove.append(i)
-    #                        # I consider only one output state node per event
-    #                        # node at the moment (atomic rules).
-    #                        # Will need to allow more.
-    #                        break
-    #                for subedge in hyperedge.edgelist:
-    #                    subedge.target = new_target
-    #                hyperedge.target = new_target
-    #    sorted_hyperedges = sorted(hyperedges_to_remove, reverse=True)
-    #    for i in sorted_hyperedges:
-    #        del(story.hyperedges[i])
-    #    events_to_remove = []
-    #    for j in range(len(story.eventnodes)):
-    #        if story.eventnodes[j].intro == False:
-    #            if story.eventnodes[j].label != story.eoi:
-    #                events_to_remove.insert(0, j)
-    #            else:
-    #                story.eventnodes[j].rank = story.eventnodes[j].rank + 0.5
-    #    for j in events_to_remove:
-    #        del(story.eventnodes[j])
-    #    #for node in story.eventnodes + story.statenodes:
-    #    #    node.rank = math.ceil(node.rank/2)
-    #    story.get_maxrank()
-
     # Write stories with state nodes only.
     # Works only with atomic rules for now.
     for story in stories:
@@ -3746,6 +3882,26 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
         #for node in story.eventnodes + story.statenodes:
         #    node.rank = math.ceil(node.rank/2)
         story.get_maxrank()
+        # Find essential edges, edges that have an intro as source that
+        # is not mentioned in the edit of the target.
+        for hyperedge in story.hyperedges:
+            for subedge in hyperedge.edgelist:
+                subedge.essential = False
+                if subedge.source.intro == True:
+                    # All agents from the intro edits must be seen in
+                    # the edit of the target.
+                    intro_agent_in_target = True
+                    for intro_edit in subedge.source.edits:
+                        for intro_agent in intro_edit:
+                            agent_found = False
+                            for target_agent in subedge.target.edit:
+                                if target_agent["name"] == intro_agent["name"]:
+                                    if target_agent["id"] == intro_agent["id"]:
+                                        agent_found = True
+                                        break
+                            if agent_found == False:
+                                subedge.essential = True
+                                break
 
     for i in range(len(stories)):
         stories[i].filename = "statestory-{}.dot".format(i+1)
