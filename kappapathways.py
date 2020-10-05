@@ -85,7 +85,7 @@ class StateNode(object):
     def __init__(self, nodeid, label, rank=None, weight=1, rel_wei=1.0,
                  occurrence=1, rel_occ=1.0, intro=False, first=False,
                  highlighted=False, pos=None, eventid=None, edit=None,
-                 context=[]):
+                 context=[], shrink=False):
         """ Initialize class StateNode. """
 
         self.nodeid = nodeid
@@ -101,6 +101,7 @@ class StateNode(object):
         self.pos = pos
         self.edit = edit
         self.context = context
+        self.shrink = shrink
         self.check_types()
 
 
@@ -214,7 +215,7 @@ class HyperEdge(object):
                  color="black", secondary=False, underlying=False,
                  reverse=False, labelcarrier=True, indicator=False,
                  hyperid=None, pos=None, labelpos=None, overridewidth=None,
-                 overridelabel=None):
+                 overridelabel=None, essential=False):
         """ Initialize class CausalEdge. """
 
         self.edgelist = edgelist
@@ -235,6 +236,7 @@ class HyperEdge(object):
         self.labelpos = labelpos
         self.overridewidth = overridewidth
         self.overridelabel = overridelabel
+        self.essential = essential
         self.check_types()
         self.update()
 
@@ -571,9 +573,16 @@ class HyperEdge(object):
 #                for midedge in self.midedges:
 #                    if midedge.source == self.midnodes[i]:
 #                        midedge.indicator = True
-#
-#
-#    def assign_label_carrier(self):
+
+
+    def assign_label_carrier(self):
+        """ Choose which hyperedge and subedge will carry labels. """
+
+        for hyperedge in self.hyperedges+self.coverhyperedges: 
+            print(hyperedge.labelcarrier)
+
+
+#    def assign_label_carrier_for_mesh(self):
 #        """
 #        Choose which midedge will carry the label in meshes that contain more
 #        than one midedge. Take the first midedge that has an enabling as source,
@@ -652,11 +661,12 @@ class CausalGraph(object):
         #self.edgegroups = []
         #self.midnodegroups = []
         # Cover edges and midnodes computed from nointro.
-        self.coveredges = []
-        self.covermidnodes = []
-        self.covermidedges = []
-        self.covermeshes = []
-        self.covermidnodegroups = []
+        #self.coveredges = []
+        #self.covermidnodes = []
+        #self.covermidedges = []
+        #self.covermeshes = []
+        #self.covermidnodegroups = []
+        self.coverhyperedges = []
         # Post-computed variables.
         self.occurrence = 1
         self.maxrank = None
@@ -1307,12 +1317,23 @@ class CausalGraph(object):
                 if keep_node == True:
                     next_nodes.append(current_node)
             current_nodes = next_nodes
-        # Rank intro nodes at 0.
+        # Rank intro nodes at 0 if top is selected.
         for node in self.eventnodes:
             if node.intro == True:
                 node.rank = 0
-        # Optionally, push intro nodes down when possible.
+        # Rank intro nodes at the lowest rank among its targets, minus 1.
         if intropos == "bot":
+            for node in self.eventnodes:
+                if node.intro == True:
+                    target_ranks = []
+                    for hyperedge in self.hyperedges:
+                        if node in hyperedge.sources:
+                            target_ranks.append(hyperedge.target.rank)
+                    node.rank = min(target_ranks) - 1
+        # Optionally, push targets of intro nodes down when possible.
+        # This way of doing it does not work very well. Takes a long time on
+        # large graphs.
+        if intropos == "bot2":
             # Root nodes are first nodes with the longest path to the EOI.
             for eventnode in self.eventnodes:
                 if eventnode.label == self.eoi:
@@ -1555,13 +1576,14 @@ class CausalGraph(object):
         than their target. Reverse hyperedge if all its subedges are reversed.
         """
 
+        all_hyperedges = self.hyperedges + self.coverhyperedges
         # Reset reverse edge information.
-        for hyperedge in self.hyperedges:
+        for hyperedge in all_hyperedges:
             hyperedge.reverse = False
             for subedge in hyperedge.edgelist:
                 subedge.reverse = False
         # Compute new edge reversion.
-        for hyperedge in self.hyperedges:
+        for hyperedge in all_hyperedges:
             # Check if source or target is shrunk.
             shrunk_src, shrunk_trg = False, False
             if isinstance(hyperedge.sources[0], EventNode):
@@ -1572,7 +1594,8 @@ class CausalGraph(object):
             if shrunk_src == False and shrunk_trg == False:
                 all_subedges_reversed = True
                 for subedge in hyperedge.edgelist:
-                   if subedge.source.rank > subedge.target.rank:
+                   src_rank = subedge.source.rank
+                   if src_rank != None and src_rank > subedge.target.rank:
                        subedge.reverse = True
                    else:
                        all_subedges_reversed = False
@@ -1590,12 +1613,13 @@ class CausalGraph(object):
             # Reverse edge only if all sources are of higher rank.
             elif shrunk_src == True:
                 src_list = []
-                for hyperedge2 in self.hyperedges:
+                for hyperedge2 in all_hyperedges:
                     if hyperedge2.target == hyperedge.sources[0]:
                         src_list += hyperedge2.sources
                 all_sources_higher_rank = True
                 for source in src_list:
-                    if source.rank < hyperedge.target.rank:
+                    src_rank = source.rank
+                    if src_rank != None and src_rank < hyperedge.target.rank:
                         all_sources_higher_rank = False
                         break
                 if all_sources_higher_rank == True:
@@ -1606,14 +1630,15 @@ class CausalGraph(object):
             # Reverse the hyperedge if all subedges are reversed.
             elif shrunk_trg == True:
                 trg_list = []
-                for hyperedge2 in self.hyperedges:
+                for hyperedge2 in all_hyperedges:
                     if hyperedge2.sources[0] == hyperedge.target:
                         trg_list.append(hyperedge2.target)
                 all_subedges_reversed = True
                 for subedge in hyperedge.edgelist:
                     all_targets_lower = True
+                    src_rank = subedge.source.rank
                     for target in trg_list:
-                        if subedge.source.rank < target.rank:
+                        if src_rank != None and src_rank < target.rank:
                             all_targets_lower = False
                             break
                     if all_targets_lower == True:
@@ -1640,6 +1665,83 @@ class CausalGraph(object):
 
 
     def build_nointro(self):
+        """
+        Create new hyperedges for the version of the graph where intro nodes
+        are hidden.
+        """
+
+        for hyperedge in self.hyperedges:
+            hyperedge.underlying = False
+        self.coverhyperedges = []
+        for hyperedge in self.hyperedges:
+            underlying_list = []
+            if hyperedge.underlying == False:
+                has_intro, all_intro = self.check_intro(hyperedge)
+                if has_intro == True:
+                    if all_intro == True:
+                        hyperedge.underlying = True
+                    else:
+                        a, b, c = self.find_underlying(hyperedge)
+                        nointro_hedge = a
+                        underlying_list = b
+                        correspondances = c
+                        #hedge_list.append(hyperedge)
+                        #nointro = self.build_nointro_hyperedge(hyperedge)
+                        #if len(nointro.edgelist) > 0:
+                        #    # Check all other hyperedges that have the same
+                        #    # subedges when ignoring subedges with intro nodes
+                        #    # as source. They will all be grouped inside a
+                        #    # single hyperedge without any intro source.
+                        #    for hyperedge2 in self.hyperedges:
+                        #        if hyperedge2.color == hyperedge.color:
+                        #            if hyperedge2 != hyperedge:
+                        #                if hyperedge2.underlying == False:
+                        #                    nointro2 = self.build_nointro_hyperedge(hyperedge2)
+                        #                    are_equi, corr = equivalent_hyperedges(nointro, nointro2, return_correspondances=True)
+                        #                    if are_equi == True:
+                        #                        hedge_list.append(hyperedge2)
+                        #                        corrs.append(corr)
+            if len(underlying_list) > 0:
+                # Compute weight of nointro hyperedge as the sum the weight
+                # of all its underlying hyperedges. Also mark meshes that were used as
+                # underlying.
+                weight_summ = 0
+                for hedge in underlying_list:
+                    weight_summ += hedge.weight
+                    hedge.underlying = True
+                nointro_hedge.weight = weight_summ
+                if len(nointro_hedge.edgelist) > 0:
+                    self.coverhyperedges.append(nointro_hedge)
+
+
+    def find_underlying(self, hyperedge):
+        """
+        Find the list of underlying hyperedges to form a cover hyperedge.
+        """
+
+        underlying_list = [hyperedge]
+        nointro_hedge = self.build_nointro_hyperedge(hyperedge)
+        correspondances = []
+        if len(nointro_hedge.edgelist) > 0:
+            # Check all other hyperedges that have the same subedges when
+            # ignoring subedges with intro nodes as source. They will all
+            # be grouped inside a single hyperedge without any intro source.
+            for hyperedge2 in self.hyperedges:
+                if hyperedge2.color == hyperedge.color:
+                    if hyperedge2 != hyperedge:
+                        if hyperedge2.underlying == False:
+                            nointro_hedge2 = (self.
+                                build_nointro_hyperedge(hyperedge2))
+                            are_equi, corr = equivalent_hyperedges(nointro_hedge,
+                                nointro_hedge2, return_correspondances=True)
+                            if are_equi == True:
+                                underlying_list.append(hyperedge2)
+                                correspondances.append(corr)
+
+        return nointro_hedge, underlying_list, correspondances
+
+
+    def build_nointro_for_meshes(self):
         """
         Create new meshes for the version of the graph that hides
         intro nodes.
@@ -1720,19 +1822,74 @@ class CausalGraph(object):
         return max_meshid
 
 
-    def check_intro(self, mesh):
-        """ Check if a mesh has intro nodes in its sources. """
+    def check_intro(self, hyperedge):
+        """ Check if a hyperedge has intro nodes in its sources. """
 
         has_intro = False
         all_intro = True
-        for midedge in mesh.midedges:
-            if isinstance(midedge.source, EventNode):
-                if midedge.source.intro == True:
+        for subedge in hyperedge.edgelist:
+            if subedge.essential == False:
+                #if isinstance(subedge.source, EventNode):
+                if subedge.source.intro == True:
                     has_intro = True
-                if midedge.source.intro == False:
+                if subedge.source.intro == False:
                     all_intro = False
 
         return has_intro, all_intro
+
+
+    #def check_intro_for_meshes(self, mesh):
+    #    """ Check if a mesh has intro nodes in its sources. """
+
+    #    has_intro = False
+    #    all_intro = True
+    #    for midedge in mesh.midedges:
+    #        if isinstance(midedge.source, EventNode):
+    #            if midedge.source.intro == True:
+    #                has_intro = True
+    #            if midedge.source.intro == False:
+    #                all_intro = False
+
+    #    return has_intro, all_intro
+
+
+    def build_nointro_hyperedge(self, hyperedge):
+        """ Build a new hyperedge without subedges from intro nodes. """
+
+        new_hyperedge = copy.deepcopy(hyperedge)
+        new_edgelist = []
+        for subedge in hyperedge.edgelist:
+            if isinstance(subedge.source, EventNode):
+                if subedge.source.intro == False:
+                    new_edgelist.append(subedge)
+            else:
+                new_edgelist.append(subedge)
+        if len(new_edgelist) > 0:
+            new_hyperedge.edgelist = new_edgelist
+            new_hyperedge.update()
+
+        return new_hyperedge
+                
+
+    def assign_label_carriers(self):
+        """ Choose which hyperedge and subedge will carry labels. """
+
+        for hyperedge in self.hyperedges+self.coverhyperedges:
+            if hyperedge.underlying == False:
+                if hyperedge.sources[0].shrink == False:
+                    if len(hyperedge.edgelist) > 1:
+                        for subedge in hyperedge.edgelist:
+                            subedge.labelcarrier = False
+                elif hyperedge.sources[0].shrink == True:
+                    # Show labels of edges from shrunk nodes only if their
+                    # weight is different from that of the upstream hyperedge.
+                    for hyperedge2 in self.hyperedges+self.coverhyperedges:
+                        if hyperedge2.target == hyperedge.sources[0]:
+                            up_hedge = hyperedge2
+                            break
+                    if up_hedge.weight == hyperedge.weight:
+                        hyperedge.edgelist[0].labelcarrier = False
+                        hyperedge.labelcarrier = False
 
 
     def nointro_mesh(self, mesh, midid):
@@ -2205,8 +2362,6 @@ class CausalGraph(object):
                     if node.label == self.eoi:
                         node_shape = 'ellipse'
                         node_color = 'indianred2'
-                    #if self.nodestype == 'species':
-                    #    node_shape = 'ellipse'
                     if showintro == False and node.intro == True:
                         dot_str += '//'
                     node_lines = textwrap.wrap(node.label, 20,
@@ -2218,7 +2373,6 @@ class CausalGraph(object):
                             node_str += " {} ".format(node_lines[i])
                         else:
                             node_str += "<br/> {} ".format(node_lines[i])
-                    #if node.shrink == False:
                     dot_str += '[label=<{}>'.format(node_str)
                     dot_str += ', shape={}, style=filled'.format(node_shape)
                     if node.highlighted == True:
@@ -2231,16 +2385,7 @@ class CausalGraph(object):
                         dot_str += ', first={}'.format(node.first)
                     if node.pos != None:
                         dot_str += ', pos={}'.format(node.pos)
-
-                    #elif node.shrink == True:
-                    #    dot_str += '[label="", hlabel=<{}>'.format(node_str)
-                    #    dot_str += ', shape=circle'
-                    #    dot_str += ', style=filled'
-                    #    dot_str += ', fillcolor=white'
-                    #    dot_str += ', width=0.1'
-                    #    dot_str += ', height=0.1'
-
-                    dot_str += ', penwidth=2'
+                    #dot_str += ', penwidth=2'
                     dot_str += "] ;\n"
             for node in self.statenodes:
                 if node.rank == current_rank:
@@ -2267,7 +2412,7 @@ class CausalGraph(object):
                         dot_str += ', first={}'.format(node.first)
                     if node.pos != None:
                         dot_str += ', pos={}'.format(node.pos)
-                    dot_str += ', penwidth=2'
+                    #dot_str += ', penwidth=2'
                     dot_str += "] ;\n"
             ## Draw intermediary nodes that emulate hyperedges if two
             ## sources or more are drawn.
@@ -2284,29 +2429,57 @@ class CausalGraph(object):
             #            dot_str += '] ;\n'
             # Intermediary nodes from cover edges, same as above but only
             # if showintro is False.
-            if showintro == False:
-                for covermesh in self.covermeshes:
-                    for midnode in covermesh.midnodes:
-                        if midnode.rank == current_rank:
-                            dot_str += self.write_midnode(covermesh, midnode,
-                                average_use, minpenwidth, medpenwidth, maxpenwidth)
-                            dot_str += ', cover="True"] ;\n'
+            #if showintro == False:
+            #    for covermesh in self.covermeshes:
+            #        for midnode in covermesh.midnodes:
+            #            if midnode.rank == current_rank:
+            #                dot_str += self.write_midnode(covermesh, midnode,
+            #                    average_use, minpenwidth, medpenwidth, maxpenwidth)
+            #                dot_str += ', cover="True"] ;\n'
             # Close rank braces.
             if showintro == False and current_rank < 1:
                 dot_str += "//"
             dot_str += "}\n"
-        # Draw unranked shrunk nodes.
+        # Draw unranked event nodes and shrank nodes.
         for node in self.eventnodes:
-            if node.shrink == True:
-                dot_str += '{} '.format(node.nodeid)
-                dot_str += '[label="", hlabel=<{}>'.format(node_str)
-                dot_str += ', shape=circle'
-                dot_str += ', style=filled'
-                dot_str += ', fillcolor=white'
-                dot_str += ', width=0.1'
-                dot_str += ', height=0.1'
-                dot_str += ', penwidth=2'
-                dot_str += "] ;\n"
+            if node.rank == None or node.shrink == True:
+                node_lines = textwrap.wrap(node.label, 20,
+                                           break_long_words=False)
+                node_str = ""
+                for i in range(len(node_lines)):
+                    if i == 0:
+                        node_str += " {} ".format(node_lines[i])
+                    else:
+                        node_str += "<br/> {} ".format(node_lines[i])
+                if node.shrink == False:
+                    node_shape = 'ellipse'
+                    node_color = 'white'
+                    if showintro == False and node.intro == True:
+                        dot_str += '//'
+                    dot_str += '{} '.format(node.nodeid)
+                    dot_str += '[label=<{}>'.format(node_str)
+                    dot_str += ', shape={}, style=filled'.format(node_shape)
+                    if node.highlighted == True:
+                       dot_str += ', fillcolor=gold, penwidth=2'
+                    else:
+                       dot_str += ', fillcolor={}'.format(node_color)
+                    if node.intro == True:
+                        dot_str += ', intro={}'.format(node.intro)
+                    if node.first == True:
+                        dot_str += ', first={}'.format(node.first)
+                    if node.pos != None:
+                        dot_str += ', pos={}'.format(node.pos)
+                    dot_str += "] ;\n"
+                elif node.shrink == True:
+                    dot_str += '{} '.format(node.nodeid)
+                    dot_str += '[label="", hlabel=<{}>'.format(node_str)
+                    dot_str += ', shape=circle'
+                    dot_str += ', style=filled'
+                    dot_str += ', fillcolor=white'
+                    dot_str += ', width=0.1'
+                    dot_str += ', height=0.1'
+                    dot_str += ', penwidth=2'
+                    dot_str += "] ;\n"
         ## Draw unranked midnodes.
         #for mesh in self.meshes:
         #    for midnode in mesh.midnodes:
@@ -2362,14 +2535,18 @@ class CausalGraph(object):
         #        dot_str += '] ;\n'
         if self.hypergraph == False:
             for hyperedge in self.hyperedges:
-                for edge in hyperedge.edgelist:
-                    dot_str += self.write_edge(edge, params)
+                u = hyperedge.underlying
+                if showintro == True or (showintro == False and u == False):
+                    for edge in hyperedge.edgelist:
+                        dot_str += self.write_edge(edge, params)
         # Write hyperedges.
         elif self.hypergraph == True:
             midid = 1
             for hyperedge in self.hyperedges:
-                dot_str += self.write_hyperedge(hyperedge, midid, params)
-                midid += 1
+                u = hyperedge.underlying
+                if showintro == True or (showintro == False and u == False):
+                    dot_str += self.write_hyperedge(hyperedge, midid, params)
+                    midid += 1
                 #if len(hyperedge.edgelist) > 1:
                 #    midid_str = "mid{}".format(midid)
                 #    dot_str += self.write_midnode(midid_str)
@@ -2397,15 +2574,20 @@ class CausalGraph(object):
                 #    dot_str += self.write_edge(hyperedge.edgelist[0])
                 #    dot_str += '] ;\n'
         # Draw cover edges if intro nodes are not shown.
+        #if showintro == False:
+        #    for covermesh in self.covermeshes:
+        #        covermesh.check_indicators()
+        #        for midedge in covermesh.midedges:
+        #            dot_str += self.write_midedge(covermesh, midedge,
+        #                average_use, minpenwidth, medpenwidth, maxpenwidth,
+        #                addedgelabels, showedgelabels, edgeid, edgeocc,
+        #                edgeuse, statstype, weightedges)
+        #            dot_str += ', cover="True"] ;\n'
         if showintro == False:
-            for covermesh in self.covermeshes:
-                covermesh.check_indicators()
-                for midedge in covermesh.midedges:
-                    dot_str += self.write_midedge(covermesh, midedge,
-                        average_use, minpenwidth, medpenwidth, maxpenwidth,
-                        addedgelabels, showedgelabels, edgeid, edgeocc,
-                        edgeuse, statstype, weightedges)
-                    dot_str += ', cover="True"] ;\n'
+            for coverhyperedge in self.coverhyperedges:
+                #coverhyperedge.check_indicators()
+                dot_str += self.write_hyperedge(coverhyperedge, midid, params)
+                midid += 1
         # Close graph.
         dot_str += "}"
         self.dot_file = dot_str
@@ -2467,7 +2649,8 @@ class CausalGraph(object):
         edge_str += ', penwidth={}'.format(pensize)
         # Write labels.
         if params["addedgelabels"] == True:
-            edge_str += ', label="{}"'.format(edge.weight)
+            if edge.labelcarrier == True:
+                edge_str += ', label=" {}"'.format(edge.weight)
             if params["showedgelabels"] == True:
                 edge_str += ', fontcolor={}'.format(edge.color)
             elif params["showedgelabels"] == False:
@@ -2963,6 +3146,7 @@ def tweakstories(eoi, showintro=True, addedgelabels=False,
         #story.compute_relstats()
         #story.compute_visuals(showintro, color=False)
         #story.create_hyperedges()
+        story.rank_sequentially(intropos="bot2")
         story.occurrence = None
         story.build_dot_file(showintro, addedgelabels, showedgelabels,
                              edgeid, edgeocc, edgeuse, statstype, weightedges)
@@ -3876,7 +4060,7 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
                     events_to_remove.insert(0, j)
                 else:
                     if shrk == False:
-                        story.eventnodes[j].rank = story.eventnodes[j].rank + 0.5
+                        story.eventnodes[j].rank = story.eventnodes[j].rank+0.5
         for j in events_to_remove:
             del(story.eventnodes[j])
         #for node in story.eventnodes + story.statenodes:
@@ -5670,9 +5854,9 @@ def foldpathway(eoi, prefix, causalgraphs=None, siphon=False, ignorelist=[],
     pathway.hypergraph = True
     # Ranking with intropos="top", rulepos="top" is the fastest as it does
     # not require follow_hyperedges, which takes long on large graphs.
-    pathway.rank_sequentially(intropos="top", rulepos="top")
+    #pathway.rank_sequentially(intropos="top", rulepos="top")
     #pathway.rank_sequentially(intropos="top", rulepos="bot")
-    #pathway.rank_sequentially(intropos="bot", rulepos="top") # <--
+    pathway.rank_sequentially(intropos="bot", rulepos="top") # <--
     #pathway.rank_sequentially(intropos="bot", rulepos="bot")
     #pathway.get_maxrank()
 
@@ -5692,7 +5876,9 @@ def foldpathway(eoi, prefix, causalgraphs=None, siphon=False, ignorelist=[],
                 event_number += 1
     #compute_mesh_occurrence(eoi, pathway)
     #pathway.compute_visuals(showintro, color)
+    pathway.build_nointro()
     pathway.reverse_subedges()
+    pathway.assign_label_carriers()
     #pathway.compute_relstats()
 
     # Write dual pathway.
@@ -5753,7 +5939,10 @@ def foldstory(story):
                 for j in range(i+1, len(hyperedge.edgelist)):
                     edge2 = hyperedge.edgelist[j]
                     if edge1.source.label == edge2.source.label:
-                        edge1.weight += edge2.weight
+                        # It seems summing the weights here is incorrect.
+                        # We want the edge weights to denote how much a
+                        # relationship was useful.
+                        #edge1.weight += edge2.weight
                         del(hyperedge.edgelist[j])
                         pair_found = True
                         break
