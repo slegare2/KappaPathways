@@ -143,7 +143,7 @@ class CausalEdge(object):
     """
 
     def __init__(self, source, target, weight=1, layout_weight=1, rel_wei=1.0,
-                 occurrence=None, rel_occ=None, number=None, rel_num=None,
+                 occurrence=1, rel_occ=1.0, number=1, rel_num=1.0,
                  relationtype="causal",
                  color="black", secondary=False, underlying=False,
                  reverse=False, labelcarrier=True, indicator=False,
@@ -215,7 +215,7 @@ class HyperEdge(object):
     """
 
     def __init__(self, edgelist, weight=1, layout_weight=1, rel_wei=1.0, 
-                 occurrence=None, rel_occ=None, number=None, rel_num=None,
+                 occurrence=1, rel_occ=1.0, number=1, rel_num=1.0,
                  relationtype="causal", color="black", secondary=False,
                  underlying=False, reverse=False, labelcarrier=True,
                  indicator=False, hyperid=None, pos=None, labelpos=None,
@@ -253,15 +253,18 @@ class HyperEdge(object):
         self.target = self.edgelist[0].target
         self.sources = []
         all_weights = []
+        all_numbers = []
         all_conflicts = True
         for subedge in self.edgelist:
             if subedge.target != self.target:
                 raise ValueError("Hyperedge has more than one target.")
             self.sources.append(subedge.source)
             all_weights.append(subedge.weight)
+            all_numbers.append(subedge.number)
             if subedge.relationtype != "conflict":
                 all_conflicts = False
         self.weight = min(all_weights)
+        self.number = min(all_numbers)
         if all_conflicts == True:
             self.relationtype = "conflict"
         # I do not enforce equal weight among all subedges because I want
@@ -914,9 +917,9 @@ class CausalGraph(object):
                 if "ess=True" in line:
                     ess = True
                 new_edge = CausalEdge(source, target, weight=weight,
-                                      relationtype=edgetype, meshid=meshid,
-                                      underlying=underlying, color=color,
-                                      essential=ess)
+                                      number=weight, relationtype=edgetype,
+                                      meshid=meshid, underlying=underlying,
+                                      color=color, essential=ess)
                 if 'cover="True"' not in line:
                     tmp_edges.append(new_edge)
                 elif 'cover="True"' in line:
@@ -1268,8 +1271,10 @@ class CausalGraph(object):
                         secured_hedges.append(incoming_hedge)
                         potential_hedges.append(incoming_hedge)
                         source_ranks = []
+                        all_intro = True
                         for source in incoming_hedge.sources:
                             if source.intro == False:
+                                all_intro = False
                                 shrk = False
                                 if isinstance(source, EventNode):
                                     if source.shrink == True:
@@ -1285,6 +1290,8 @@ class CausalGraph(object):
                                             for subsource in hyperedge2.sources:
                                                 subranks.append(subsource.rank)
                                     source_ranks.append(max(subranks))
+                        #if all_intro == True:
+                        #    source_ranks.append(0)
                         possible_ranks.append(max(source_ranks)+1)
                     elif secured == False:
                         # Hyperedges that are not secured still count as
@@ -1309,6 +1316,10 @@ class CausalGraph(object):
                     current_nodes.append(candidate_node)
                 if rulepos == "bot" and nsecured == npotential:
                     candidate_node.rank = max(possible_ranks)
+                    #if 1 in possible_ranks:
+                    #    candidate_node.rank = 1
+                    #else:
+                    #    candidate_node.rank = max(possible_ranks)
                     current_nodes.append(candidate_node)
             # 4) Remove all current_nodes for which all outgoing hyperedges
             #    have their target already ranked.
@@ -2323,14 +2334,18 @@ class CausalGraph(object):
         medpenwidth = 3
         maxpenwidth = 6.5
         all_weights = []
+        all_numbers = []
         for hyperedge in self.hyperedges:
             if hyperedge.underlying == False:
                 all_weights.append(hyperedge.weight)
+                all_numbers.append(hyperedge.number)
         #for coverhyper in self.coverhypers:
         #    all_uses.append(covermesh.uses)
         average_weight = statistics.mean(all_weights)
+        average_number = statistics.mean(all_numbers)
         # Build drawing parameters dict.
         params = {"average_weight": average_weight,
+                  "average_number": average_number,
                   "minpenwidth": minpenwidth,
                   "medpenwidth": medpenwidth,
                   "maxpenwidth": maxpenwidth,
@@ -2654,9 +2669,11 @@ class CausalGraph(object):
             edge_str += ", style=dashed"
         # Write statistics.
         edge_str += ', w={}'.format(edge.weight)
-        edge_str += ', weight={}'.format(edge.layout_weight)
+        if params["weightedges"] == True:
+            edge_str += ', weight={}'.format(edge.layout_weight)
         # Compute penwidth.
-        ratio = edge.weight/params["average_weight"]
+        #ratio = edge.weight/params["average_weight"]
+        ratio = edge.number/params["average_number"]
         pensize = math.log(ratio,2) + params["medpenwidth"]
         if pensize < params["minpenwidth"]:
             pensize = params["minpenwidth"]
@@ -2666,8 +2683,8 @@ class CausalGraph(object):
         # Write labels.
         if params["addedgelabels"] == True:
             if edge.labelcarrier == True:
-                edge_str += ', label=" {}\n'.format(edge.weight)
-                edge_str += '{}"'.format(edge.number)
+                edge_str += ', label=" {}\n'.format(edge.number)
+                edge_str += ' {}"'.format(edge.weight)
             if params["showedgelabels"] == True:
                 edge_str += ', fontcolor={}'.format(edge.color)
             elif params["showedgelabels"] == False:
@@ -3159,6 +3176,18 @@ def tweakstories(eoi, showintro=True, addedgelabels=False,
     for i in range(len(stories)):
         stories[i].filename = "story-{}.dot".format(i+1)
         stories[i].producedby = "KappaPathways"
+
+    # Optionally keep only short stories for faster calculation.
+    #num = 1
+    #stories_tmp = []
+    #for story in stories:
+    #    if story.maxrank < 30:
+    #        story.filename = "story-{}.dot".format(num)
+    #        story.producedby = "KappaPathways"
+    #        stories_tmp.append(story)
+    #        num += 1
+    #stories = stories_tmp
+
     for story in stories:
         #story.compute_relstats()
         #story.compute_visuals(showintro, color=False)
@@ -3237,10 +3266,10 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
     steps = sim["trace"]
 
     # Find edits produced by each event.
-    tmp_stories = stories[0:5]
-    stories = tmp_stories
+    #tmp_stories = stories[0:5]
+    #stories = tmp_stories
     for story in stories:
-        print(story.filename)
+        print(story.filename) 
         # Reset hyperedges.
         story.hyperedges = []
         # Get actions for each event node.
@@ -3673,8 +3702,12 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
                     lbl = write_context_expression(statenode.state)
                     statenode.label = lbl
         for statenode in story.statenodes:
-            if statenode not in story.rule_outputs:
+            if statenode in story.rule_outputs:
+                statenode.introstate = False
+            #if statenode not in story.rule_outputs:
+            else:
                 statenode.state = statenode.edit
+                statenode.introstate = True         
         story.create_hyperedges()
         story.align_vertical()
     #time_stop = time.perf_counter()
@@ -3692,64 +3725,104 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
         outfile.write(story.dot_file)
         outfile.close()
 
-    # Temporaryly disable parallel context untill I figure out how to limit
-    # upward propagation
-    #
+    # ----------
+
     ## Add parallel context to states.
     #for story in stories:
-    #    concur_nodes = []
+    #    print(story.filename)
+    #    # 0) For each event nodes, build a list of incoming states
+    #    #    (excluding intro states).
     #    for eventnode in story.eventnodes:
-    #        if eventnode.intro == False:
-    #            incoming_sources = []
-    #            for edge in story.causaledges:
-    #                if edge.secondary == False and edge.target == eventnode:
-    #                    if edge.source in story.rule_outputs:
-    #                        incoming_sources.append(edge.source)
-    #            if len(incoming_sources) > 1:
-    #                # Spotted a merging of concurrent paths.
-    #                # Put the state of each incoming source as parallel
-    #                # context of each other incoming sources
-    #                for source1 in incoming_sources:
-    #                    concur_nodes.append(source1)
-    #                    source1.parallel_state = []
-    #                    for source2 in incoming_sources:
-    #                        if source2 != source1:
-    #                            for agent in source2.state:
-    #                                para_agent = copy.deepcopy(agent)
-    #                                if para_agent["type"] == None:
-    #                                    for para_site in para_agent["sites"]:
-    #                                        para_site["type"] = "parallel"
-    #                                elif para_agent["type"] != None:
-    #                                    para_agent["type"] = "parallel"
-    #                                source1.parallel_state.append(para_agent)
-    #                for source in incoming_sources:
-    #                    newstate = source.state + source.parallel_state
-    #                    source.state = group_sites_by_agent(newstate)
-    #                    lbl = write_context_expression(source.state)
-    #                    source.label = lbl
-    #    ## Propagate parallel context up.
-    #    #modified_nodes = []
-    #    #for concur_node in concur_nodes:
-    #    #    # Find all upstream nodes:
-    #    #    upstream_nodes = []
-    #    #    upstream_paths = story.follow_edges("up", concur_node,
-    #    #                                        ignore_conflict=False,
-    #    #                                        stop_at_first=False)
-    #    #    for path in upstream_paths:
-    #    #        for node in path:
-    #    #            if node in story.rule_outputs:
-    #    #                if node not in upstream_nodes:
-    #    #                    upstream_nodes.append(node)
-    #    #    for upstream_node in upstream_nodes:
-    #    #        if upstream_node not in modified_nodes:
-    #    #            modified_nodes.append(upstream_node)
-    #    #        # Copy all the parallel sites from concur_node to
-    #    #        # its upstream nodes.
-    #    #        upstream_node.state += concur_node.parallel_state
-    #    #for statenode in modified_nodes:
-    #    #    statenode.state = group_sites_by_agent(statenode.state)
-    #    #    lbl = write_context_expression(statenode.state)
-    #    #    statenode.label = lbl 
+    #        incoming_states = []
+    #        for edge in story.causaledges:
+    #            if edge.secondary == False and edge.target == eventnode:
+    #                if edge.source.introstate == False:
+    #                    incoming_states.append(edge.source)
+    #        eventnode.incoming_states = incoming_states
+    #    # For each state node ...
+    #    for statenode in story.statenodes:
+    #        # 1) Get all downstream event nodes.
+    #        downstream_paths = story.follow_edges("down",
+    #                                              statenode,
+    #                                              ignore_conflict=False)
+    #        downstream_nodes = [statenode]
+    #        for path in downstream_paths:
+    #            for node in path:
+    #                #if isinstance(node, EventNode):
+    #                if node not in downstream_nodes:
+    #                    downstream_nodes.append(node)
+    #        # 2) Keep only event nodes that have agents from the current state
+    #        #    node in their test.
+    #        relevant_events = []
+    #        for downstream_node in downstream_nodes:
+    #            if isinstance(downstream_node, EventNode):
+    #                keep_event = False
+    #                for test in downstream_node.tests:
+    #                    for test_agent in test:
+    #                        for state_agent in statenode.state:
+    #                            if test_agent["name"] == state_agent["name"]:
+    #                                if test_agent["id"] == state_agent["id"]:
+    #                                    keep_event = True
+    #                                    break
+    #                if keep_event == True:
+    #                    relevant_events.append(downstream_node)
+    #        # 3) Check which relevant event nodes have many incoming states.
+    #        relevant_statenodes = []
+    #        for relevant_event in relevant_events:
+    #            if len(relevant_event.incoming_states) > 1:
+    #                # 4) Check which incoming states are not in
+    #                #    downstream nodes.
+    #                for incoming_state in relevant_event.incoming_states:
+    #                    if incoming_state not in downstream_nodes:
+    #                        relevant_statenodes.append(incoming_state)
+    #        # 5) Add the state of relevant state nodes as parallel context of
+    #        #    the current state node.
+    #        statenode.parallel_state = []
+    #        for relevant_statenode in relevant_statenodes:
+    #            relevant_state = relevant_statenode.state
+    #            for agent in relevant_state:
+    #                para_agent = copy.deepcopy(agent)
+    #                if para_agent["type"] == None:
+    #                    for para_site in para_agent["sites"]:
+    #                        para_site["type"] = "parallel"
+    #                elif para_agent["type"] != None:
+    #                    para_agent["type"] = "parallel"
+    #                statenode.parallel_state.append(para_agent)
+    #        # 5.1) Remove any parallel site that is already
+    #        #      present from upstream context.
+    #        for para_agent in statenode.parallel_state:
+    #            sites_to_remove = []
+    #            for j in range(len(para_agent["sites"])):
+    #                para_site = para_agent["sites"][j]
+    #                site_found = False
+    #                # Check if this site is already in statenode.state.
+    #                for agent in statenode.state:
+    #                    for site in agent["sites"]:
+    #                        are_same, ig = compare_sites(site, para_site,
+    #                                                     ignoretype=True)
+    #                        if are_same == True:
+    #                            site_found = True
+    #                            break
+    #                if site_found == True:
+    #                    sites_to_remove.insert(0, j)
+    #            for j in sites_to_remove:
+    #                del(para_agent["sites"][j])
+    #    # 6) Put parallel context information into the state of each
+    #    #    state node.
+    #    for statenode in story.statenodes:
+    #        newstate = statenode.state + statenode.parallel_state
+    #        statenode.state = group_sites_by_agent(newstate)
+    #        lbl = write_context_expression(statenode.state)
+    #        statenode.label = lbl
+
+    #        #if statenode.nodeid == "state105":    
+    #        #    for agent in statenode.state:
+    #        #        print(agent)
+    #        #    print("===")
+    #        #    for relevant_event in relevant_events:
+    #        #        print(relevant_event.label)
+    #            
+    #
 
     ## Write stories with parallel context.
     #for i in range(len(stories)):
@@ -3762,7 +3835,7 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
     #    outfile.write(story.dot_file)
     #    outfile.close()
 
-
+    # ----------
 
     # Distinguish events that are applications of a same rule but
     # in a different context.
@@ -6019,24 +6092,24 @@ def buildpathways(eoi, causalgraphs=None, siphon=False, ignorelist=[],
                   intropos="top", rulepos="top"):
     """ Build event pathway, dual pathway and state pathway. """
 
-    #print("modstory")
-    #foldpathway(eoi, "modstory", showintro=showintro,
-    #            addedgelabels=addedgelabels, showedgelabels=showedgelabels,
-    #            edgeid=edgeid, edgeocc=edgeocc, edgeprob=edgeprob,
-    #            weightedges=weightedges, color=color, writedot=writedot,
-    #            rmprev=rmprev, intropos=intropos, rulepos=rulepos)
+    print("modstory")
+    foldpathway(eoi, "modstory", showintro=showintro,
+                addedgelabels=addedgelabels, showedgelabels=showedgelabels,
+                edgeid=edgeid, edgeocc=edgeocc, edgeprob=edgeprob,
+                weightedges=weightedges, color=color, writedot=writedot,
+                rmprev=rmprev, intropos=intropos, rulepos=rulepos)
     print("dualstory")
     foldpathway(eoi, "dualstory", showintro=showintro,
                 addedgelabels=addedgelabels, showedgelabels=showedgelabels,
                 edgeid=edgeid, edgeocc=edgeocc, edgeprob=edgeprob,
                 weightedges=weightedges, color=color, writedot=writedot,
                 rmprev=rmprev, intropos=intropos, rulepos=rulepos)
-    #print("statestory")
-    #foldpathway(eoi, "statestory", showintro=showintro,
-    #            addedgelabels=addedgelabels, showedgelabels=showedgelabels,
-    #            edgeid=edgeid, edgeocc=edgeocc, edgeprob=edgeprob,
-    #            weightedges=weightedges, color=color, writedot=writedot,
-    #            rmprev=rmprev, intropos=intropos, rulepos=rulepos)
+    print("statestory")
+    foldpathway(eoi, "statestory", showintro=showintro,
+                addedgelabels=addedgelabels, showedgelabels=showedgelabels,
+                edgeid=edgeid, edgeocc=edgeocc, edgeprob=edgeprob,
+                weightedges=weightedges, color=color, writedot=writedot,
+                rmprev=rmprev, intropos=intropos, rulepos=rulepos)
 
 
 def foldpathway(eoi, prefix, causalgraphs=None, siphon=False, ignorelist=[],
@@ -6073,16 +6146,20 @@ def foldpathway(eoi, prefix, causalgraphs=None, siphon=False, ignorelist=[],
     #pathway.rank_sequentially(intropos="top", rulepos="bot")
     #pathway.rank_sequentially(intropos="bot", rulepos="top") # <--
     #pathway.rank_sequentially(intropos="bot", rulepos="bot")
+    #pathway.get_maxrank() 
     pathway.rank_sequentially(intropos=intropos, rulepos=rulepos)
-    #pathway.get_maxrank()
-
 
     # Compute the number of unique instances of precedence relationships.
+    initial_files = get_dot_files("{}/tmp".format(eoi), prefix)
+    initial_stories = []
+    for initial_file in initial_files:
+        initial_path = "{}/tmp/{}".format(eoi, initial_file)
+        initial_stories.append(CausalGraph(initial_path, eoi))
     hyperedge_instances = []
     for i in range(len(pathway.hyperedges)):
         hyperedge_instances.append([])
-    for story in stories:
-        for story_hedge in story.hyperedges:
+    for initial_story in initial_stories:
+        for story_hedge in initial_story.hyperedges:
             corresponding_hedge = None
             for i in range(len(pathway.hyperedges)):
                 pathway_hedge = pathway.hyperedges[i]
