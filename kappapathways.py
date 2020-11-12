@@ -16,6 +16,7 @@ import random
 import copy
 import textwrap
 import time
+import collections
 
 
 class EventNode(object):
@@ -216,10 +217,11 @@ class HyperEdge(object):
 
     def __init__(self, edgelist, weight=1, layout_weight=1, rel_wei=1.0, 
                  occurrence=1, rel_occ=1.0, number=1, rel_num=1.0,
-                 relationtype="causal", color="black", secondary=False,
-                 underlying=False, reverse=False, labelcarrier=True,
-                 indicator=False, hyperid=None, pos=None, labelpos=None,
-                 overridewidth=None, overridelabel=None, essential=False):
+                 relationtype="causal", color="black", midcolor="black",
+                 secondary=False, underlying=False, reverse=False,
+                 labelcarrier=True, indicator=False, hyperid=None, pos=None,
+                 labelpos=None, overridewidth=None, overridelabel=None,
+                 essential=False):
         """ Initialize class CausalEdge. """
 
         self.edgelist = edgelist
@@ -232,6 +234,7 @@ class HyperEdge(object):
         self.rel_num = rel_num
         self.relationtype = relationtype
         self.color = color
+        self.midcolor = midcolor
         self.secondary = secondary
         self.underlying = underlying
         self.reverse = reverse
@@ -2305,7 +2308,8 @@ class CausalGraph(object):
 
     def build_dot_file(self, showintro=True, addedgelabels=True,
                        showedgelabels=True, edgeid=True, edgeocc=False,
-                       edgeuse=True, statstype="rel", weightedges=False):
+                       edgeuse=True, statstype="rel", weightedges=False,
+                       edgewidthscale=1):
         """ build a dot file of the CausalGraph. """
 
         # Write info about graph.
@@ -2330,9 +2334,9 @@ class CausalGraph(object):
         dot_str += '  node [pin=true] ;\n'
         #dot_str += '  edge [fontsize=18] ;\n'
         # Compute some statistics to assign edge and intermediary node width.
-        minpenwidth = 1
-        medpenwidth = 3
-        maxpenwidth = 6.5
+        minpenwidth = 1 * edgewidthscale
+        medpenwidth = 3 * edgewidthscale
+        maxpenwidth = 6.5 * edgewidthscale
         all_weights = []
         all_numbers = []
         for hyperedge in self.hyperedges:
@@ -2355,7 +2359,8 @@ class CausalGraph(object):
                   "edgeocc": edgeocc,
                   "edgeuse": edgeuse,
                   "statstype": statstype,
-                  "weightedges": weightedges}
+                  "weightedges": weightedges,
+                  "edgewidthscale": edgewidthscale}
         # Draw nodes.
         midranks = 1
         for int_rank in range(int((self.maxrank+1)*(midranks+1))):
@@ -2624,15 +2629,15 @@ class CausalGraph(object):
         self.dot_file = dot_str
 
 
-    def write_midnode(self, midid):
+    def write_midnode(self, midid, color, scale):
         """ Write the line of a dot file for a single midnode."""
 
         mid_str = '"{}" [label=""'.format(midid)
         mid_str += ', shape=circle'
         mid_str += ', style=filled'
-        mid_str += ', fillcolor=black'
-        mid_str += ', width=0.1'
-        mid_str += ', height=0.1'
+        mid_str += ', fillcolor={}, color={}'.format(color, color)
+        mid_str += ', width={}'.format(0.1*math.sqrt(scale))
+        mid_str += ', height={}'.format(0.1*math.sqrt(scale))
         mid_str += '] ;\n'
 
         return mid_str
@@ -2683,7 +2688,7 @@ class CausalGraph(object):
         # Write labels.
         if params["addedgelabels"] == True:
             if edge.labelcarrier == True:
-                edge_str += ', label=" {}\n'.format(edge.number)
+                edge_str += ', label=" {}\\n'.format(edge.number)
                 edge_str += ' {}"'.format(edge.weight)
             if params["showedgelabels"] == True:
                 edge_str += ', fontcolor={}'.format(edge.color)
@@ -2732,7 +2737,8 @@ class CausalGraph(object):
         elif len(hyperedge.edgelist) > 1:
             # Write mid node.
             midid_str = "mid{}".format(midid)
-            hyper_str = self.write_midnode(midid_str)
+            hyper_str = self.write_midnode(midid_str, hyperedge.midcolor,
+                                           params["edgewidthscale"])
             # Write subedges without arrow.
             all_conflict = True
             for subedge in hyperedge.edgelist:
@@ -3660,27 +3666,28 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
                                     cumul_to_remove.insert(0, i)
                     for i in cumul_to_remove:
                         del(statenode.cumulnodes[i])
-                    # Remove cumul nodes that are no more useful for future.
-                    cumul_to_remove = []
-                    for i in range(len(statenode.cumulnodes)):
-                        cumulnode = statenode.cumulnodes[i]
-                        # Find all target event nodes.
-                        target_events = []
-                        for edge in story.causaledges:
-                            if edge.source == cumulnode:
-                                target_events.append(edge.target)
-                        # Check if there is at least one of the target nodes
-                        # which is in the future of current state node
-                        # (has an upstream path).
-                        downstream_paths = story.follow_edges("down",
-                            statenode, target_events, ignore_conflict=True,
-                            stop_at_first=True)
-                        if len(downstream_paths) == 0:
-                            cumul_to_remove.insert(0, i)
-                    for i in cumul_to_remove:
-                        del(statenode.cumulnodes[i])
-                    # Add neighbors nodes. This part can probably be removed
-                    # once parallel context is implemented.
+                    ## Remove cumul nodes that are no more useful for future.
+                    ## AKA keep only relevant context.
+                    #cumul_to_remove = []
+                    #for i in range(len(statenode.cumulnodes)):
+                    #    cumulnode = statenode.cumulnodes[i]
+                    #    # Find all target event nodes.
+                    #    target_events = []
+                    #    for edge in story.causaledges:
+                    #        if edge.source == cumulnode:
+                    #            target_events.append(edge.target)
+                    #    # Check if there is at least one of the target nodes
+                    #    # which is in the future of current state node
+                    #    # (has an upstream path).
+                    #    downstream_paths = story.follow_edges("down",
+                    #        statenode, target_events, ignore_conflict=True,
+                    #        stop_at_first=True)
+                    #    if len(downstream_paths) == 0:
+                    #        cumul_to_remove.insert(0, i)
+                    #for i in cumul_to_remove:
+                    #    del(statenode.cumulnodes[i])
+                    ## Add neighbors nodes. This part can probably be removed
+                    ## once parallel context is implemented.
                     #neighbors = []
                     #for edge in story.causaledges:
                     #    if edge.source == src_rule:
@@ -4163,6 +4170,36 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
         outfile = open(output_path, "w")
         outfile.write(story.dot_file)
         outfile.close()
+
+    # Make a copy of dual stories.
+    dualstoriescopy = copy.deepcopy(stories)
+
+    # ==========
+
+    # Build a first pathway to see if it produces transitive
+    # (non-immediate) causality.
+
+    for story in dualstoriescopy:
+        story.occurrence = 1
+    uniquestories = mergedualstories(eoi, "dualstory",
+                                     causalgraphs=dualstoriescopy,
+                                     writedot=False)
+    tmpquotient = foldpathway(eoi, "dualstory", causalgraphs=uniquestories,
+                              writedot=False, computenum=False)
+    tmpquotient.filename = "tmpquotient.dot"
+    tmpquotient.build_dot_file(False, addedgelabels, showedgelabels,
+                               edgeid, edgeocc, edgeprob, statstype,
+                               weightedges)
+    output_path = "{}/{}".format(eoi, tmpquotient.filename)
+    outfile = open(output_path, "w")
+    outfile.write(tmpquotient.dot_file)
+    outfile.close()
+
+    # Find transitive hyperedges that were added by quotienting.
+    #for hyperedge in tmpquotient.hyperedges:
+        
+
+    # ==========
 
     # Modify original stories with event labels that distinguish context.
     # (Will need to modify this part if the order of nodes get changed
@@ -5611,15 +5648,18 @@ def mergedualstories(eoi, prefix, causalgraphs=None, siphon=False, showintro=Tru
     # Write merged dual stories.
     for i in range(len(sorted_stories)):
         sorted_stories[i].filename = "{}-{}.dot".format(prefix, i+1)
-    for story in sorted_stories:
-        #story.compute_relstats()
-        #story.compute_visuals(showintro, color)
-        story.build_dot_file(showintro, addedgelabels, showedgelabels,
-                             edgeid, edgeocc, edgeprob, statstype, weightedges)
-        output_path = "{}/unique/{}".format(eoi, story.filename)
-        outfile = open(output_path, "w")
-        outfile.write(story.dot_file)
-        outfile.close()
+    if writedot == True:
+        for story in sorted_stories:
+            #story.compute_relstats()
+            #story.compute_visuals(showintro, color)
+            story.build_dot_file(showintro, addedgelabels, showedgelabels,
+                                 edgeid, edgeocc, edgeprob, statstype, weightedges)
+            output_path = "{}/unique/{}".format(eoi, story.filename)
+            outfile = open(output_path, "w")
+            outfile.write(story.dot_file)
+            outfile.close()
+
+    return sorted_stories
 
 
 def get_dot_files(eoi, prefix=None):
@@ -6116,7 +6156,7 @@ def foldpathway(eoi, prefix, causalgraphs=None, siphon=False, ignorelist=[],
                 showintro=False, addedgelabels=True, showedgelabels=True,
                 edgeid=True, edgeocc=False, edgeprob=True, statstype="rel",
                 weightedges=True, color=True, writedot=True, rmprev=False,
-                intropos="top", rulepos="top"):
+                intropos="top", rulepos="top", computenum=True):
     """ Build dual pathway by folding (quotienting) all the stories. """
 
     # Reading section.
@@ -6150,43 +6190,45 @@ def foldpathway(eoi, prefix, causalgraphs=None, siphon=False, ignorelist=[],
     pathway.rank_sequentially(intropos=intropos, rulepos=rulepos)
 
     # Compute the number of unique instances of precedence relationships.
-    initial_files = get_dot_files("{}/tmp".format(eoi), prefix)
-    initial_stories = []
-    for initial_file in initial_files:
-        initial_path = "{}/tmp/{}".format(eoi, initial_file)
-        initial_stories.append(CausalGraph(initial_path, eoi))
-    hyperedge_instances = []
-    for i in range(len(pathway.hyperedges)):
-        hyperedge_instances.append([])
-    for initial_story in initial_stories:
-        for story_hedge in initial_story.hyperedges:
-            corresponding_hedge = None
-            for i in range(len(pathway.hyperedges)):
-                pathway_hedge = pathway.hyperedges[i]
-                are_equi = equivalent_hyperedges(story_hedge,
-                                                 pathway_hedge,
-                                                 False, False, True)
-                if are_equi == True:
-                    corresponding_hedge = i
-                    break
-            # Check if the precedence relationship denoted by the story
-            # hyperedge is an instance that is not already present in
-            # hyperedge_instances[i]
-            story_hedge_is_unique = True
-            for seen_instance in hyperedge_instances[i]:
-                # Check if story_hedge is the same instance as seen_instance.
-                is_same = same_instance(story_hedge, seen_instance)
-                if is_same == True:
-                    story_hedge_is_unique = False
-                    break
-            if story_hedge_is_unique == True:
-                hyperedge_instances[i].append(story_hedge)
-    for i in range(len(pathway.hyperedges)):
-        pathway_hedge = pathway.hyperedges[i]
-        n = len(hyperedge_instances[i])
-        pathway_hedge.number = n
-        for subedge in pathway_hedge.edgelist:
-            subedge.number = n
+    if computenum == True:
+        initial_files = get_dot_files("{}/tmp".format(eoi), prefix)
+        initial_stories = []
+        for initial_file in initial_files:
+            initial_path = "{}/tmp/{}".format(eoi, initial_file)
+            initial_stories.append(CausalGraph(initial_path, eoi))
+        hyperedge_instances = []
+        for i in range(len(pathway.hyperedges)):
+            hyperedge_instances.append([])
+        for initial_story in initial_stories:
+            for story_hedge in initial_story.hyperedges:
+                corresponding_hedge = None
+                for i in range(len(pathway.hyperedges)):
+                    pathway_hedge = pathway.hyperedges[i]
+                    are_equi = equivalent_hyperedges(story_hedge,
+                                                     pathway_hedge,
+                                                     False, False, True)
+                    if are_equi == True:
+                        corresponding_hedge = i
+                        break
+                # Check if the precedence relationship denoted by the story
+                # hyperedge is an instance that is not already present in
+                # hyperedge_instances[i]
+                story_hedge_is_unique = True
+                for seen_instance in hyperedge_instances[i]:
+                    # Check if story_hedge is the same instance as
+                    # seen_instance.
+                    is_same = same_instance(story_hedge, seen_instance)
+                    if is_same == True:
+                        story_hedge_is_unique = False
+                        break
+                if story_hedge_is_unique == True:
+                    hyperedge_instances[i].append(story_hedge)
+        for i in range(len(pathway.hyperedges)):
+            pathway_hedge = pathway.hyperedges[i]
+            n = len(hyperedge_instances[i])
+            pathway_hedge.number = n
+            for subedge in pathway_hedge.edgelist:
+                subedge.number = n
 
     # Resequentialize node ids. This is required because otherwise the method
     # build_dot_file will draw nodes with same id as if they were merged.
@@ -6294,22 +6336,267 @@ def foldpathway(eoi, prefix, causalgraphs=None, siphon=False, ignorelist=[],
     #        #                pathway.hyperedges)
 
     # Write dual pathway.
+    if writedot == True:
+        if prefix == "modstory":
+            pathway.filename = "eventpathway.dot"
+        if prefix == "dualstory":
+            pathway.filename = "dualpathway.dot"
+        if prefix == "statestory":
+            pathway.filename = "statepathway.dot"
+        pathway.build_dot_file(showintro, addedgelabels, showedgelabels,
+                               edgeid, edgeocc, edgeprob, statstype,
+                               weightedges)
+        output_path = "{}/{}".format(eoi, pathway.filename)
+        outfile = open(output_path, "w")
+        outfile.write(pathway.dot_file)
+        outfile.close()
+
+    if prefix == "modstory" or prefix == "dualstory":
+        # Color pathways to distiguish admissible paths.
+        if prefix == "modstory":
+            pathway.filename = "eventpathway-color.dot"
+        if prefix == "dualstory":
+            pathway.filename = "dualpathway-color.dot"
+        #if prefix == "statestory":
+        #    pathway.filename = "statepathway-color.dot"
+        #selectedlabel = "C binds D"
+        selectedlabel = "D binds G"
+        # Initalize color id lists.
+        next_col_id = 1
+        selectednodes = []
+        for hyperedge in pathway.hyperedges:
+            if selectedlabel in hyperedge.target.label:
+                hyperedge.color_ids = [next_col_id]
+                next_col_id += 1
+                if hyperedge.target not in selectednodes:
+                    selectednodes.append(hyperedge.target)
+            else:
+                hyperedge.color_ids = []
+        # Propagate color ids downward 1 step (or two steps if dual story).
+        next_nodes = []
+        for selectednode in selectednodes:
+            incoming_edges = []
+            outgoing_edges = []
+            for hyperedge in pathway.hyperedges:
+                if hyperedge.target == selectednode:
+                    incoming_edges.append(hyperedge)
+                if selectednode in hyperedge.sources:
+                    outgoing_edges.append(hyperedge)
+                    if hyperedge.target not in next_nodes:
+                        next_nodes.append(hyperedge.target)
+            # Find color ids from incoming edges.
+            new_ids = []
+            for inedge in incoming_edges:
+                new_ids.append(inedge.color_ids[0])
+            # Assign new color ids to outgoing edges.
+            # Every outgoing edge takes up all the colors from incoming edges.
+            for outedge in outgoing_edges:
+                outedge.color_ids += new_ids
+        if prefix == "dualstory":
+            current_nodes = next_nodes
+            next_nodes = []
+            for selectednode in current_nodes:
+                incoming_edges = []
+                outgoing_edges = []
+                for hyperedge in pathway.hyperedges:
+                    if hyperedge.target == selectednode:
+                        incoming_edges.append(hyperedge)
+                    if selectednode in hyperedge.sources:
+                        outgoing_edges.append(hyperedge)
+                        if hyperedge.target not in next_nodes:
+                            next_nodes.append(hyperedge.target)
+                # Find color ids from incoming edges.
+                new_ids = []
+                for inedge in incoming_edges:
+                    new_ids.append(inedge.color_ids[0])
+                # Assign new color ids to outgoing edges.
+                # Every outgoing edge takes up all the colors from incoming edges.
+                for outedge in outgoing_edges:
+                    outedge.color_ids += new_ids            
+        startingnodes = next_nodes
+        # Propagate color ids upward. Breadth-first.
+        #for startingnode in startingnodes:
+        current_nodes = startingnodes
+        while len(current_nodes) > 0:
+            next_nodes = []
+            for node in current_nodes:
+                incoming_edges = []
+                outgoing_edges = []
+                for hyperedge in pathway.hyperedges:
+                    if hyperedge.target == node:
+                        incoming_edges.append(hyperedge)
+                        for source in hyperedge.sources:
+                            if source not in next_nodes:
+                                next_nodes.append(source)
+                    if node in hyperedge.sources:
+                        outgoing_edges.append(hyperedge)
+                # Find new color ids from outgoing edges.
+                existing_ids = []
+                for inedge in incoming_edges:
+                    existing_ids += inedge.color_ids
+                new_ids = []
+                for outedge in outgoing_edges:
+                    for color_id in outedge.color_ids:
+                        if color_id not in existing_ids:
+                            if color_id not in new_ids:
+                                new_ids.append(color_id)
+                # Assign new color ids to incoming edges.
+                if len(incoming_edges) > 0:
+                    incoming_edges[0].color_ids += new_ids
+                    for i in range(1, len(incoming_edges)):
+                        for j in range(len(new_ids)):
+                            incoming_edges[i].color_ids.append(next_col_id)
+                            next_col_id += 1
+            current_nodes = next_nodes
+        # Make a final passage from top to bottom.
+        current_nodes = []
+        for node in pathway.eventnodes:
+            if node.first == True:
+                current_nodes.append(node)
+        while len(current_nodes) > 0:
+            next_nodes = []
+            for node in current_nodes:
+                incoming_edges = []
+                outgoing_edges = []
+                for hyperedge in pathway.hyperedges:
+                    if hyperedge.target == node:
+                        incoming_edges.append(hyperedge)
+                    if node in hyperedge.sources:
+                        outgoing_edges.append(hyperedge)
+                        if hyperedge.target not in next_nodes:
+                            if hyperedge.target not in startingnodes:
+                                next_nodes.append(hyperedge.target)
+                # Find new color ids from outgoing edges.
+                existing_ids = []
+                for outedge in outgoing_edges:
+                    existing_ids += outedge.color_ids
+                new_ids = []
+                for inedge in incoming_edges:
+                    for color_id in inedge.color_ids:
+                        if color_id not in existing_ids:
+                            if color_id not in new_ids:
+                                new_ids.append(color_id)
+                # Add suplementary colors to outgoing edges.
+                if len(outgoing_edges) > 0:
+                    for outedge in outgoing_edges:
+                        outedge.color_ids += new_ids
+            current_nodes = next_nodes
+        # Remove color from any edge that has all the colors.
+        a = list(range(1, next_col_id))
+        for hyperedge in pathway.hyperedges:
+            c = hyperedge.color_ids
+            if collections.Counter(c) == collections.Counter(a):
+                hyperedge.color_ids = []
+        # Color edges according their color ids and some color palette.
+        assign_colors(pathway)
+        #color_palette = ["black", "blue1", "firebrick2", "chartreuse3",
+        #                 "gold2", "darkviolet", "darkorange1", "deepskyblue1",
+        #                 "springgreen", "brown2", "magenta", "orange"]
+        #for hyperedge in pathway.hyperedges:
+        #    l = len(hyperedge.color_ids)
+        #    if l > 0:
+        #        if l == 1:
+        #            color_str = color_palette[hyperedge.color_ids[0]]
+        #        else:
+        #            col = color_palette[hyperedge.color_ids[0]]
+        #            color_str = '"{}'.format(col)
+        #            for i in range(1, l):
+        #                col = color_palette[hyperedge.color_ids[i]]
+        #                color_str += ':{}'.format(col)
+        #            color_str += ';{:.2}"'.format(1/float(l))
+        #        hyperedge.color = color_str
+        #        hyperedge.midcolor = color_palette[hyperedge.color_ids[0]]
+        #        for subedge in hyperedge.edgelist:
+        #            subedge.color = color_str
+
+        pathway.build_dot_file(showintro, addedgelabels, showedgelabels,
+                               edgeid, edgeocc, edgeprob, statstype,
+                               weightedges, edgewidthscale=1.5)
+        output_path = "{}/{}".format(eoi, pathway.filename)
+        outfile = open(output_path, "w")
+        outfile.write(pathway.dot_file)
+        outfile.close()
+
     if prefix == "modstory":
-        pathway.filename = "eventpathway.dot"
-    if prefix == "dualstory":
-        pathway.filename = "dualpathway.dot"
-    if prefix == "statestory":
-        pathway.filename = "statepathway.dot"
-    pathway.build_dot_file(showintro, addedgelabels, showedgelabels,
-                           edgeid, edgeocc, edgeprob, statstype,
-                           weightedges)
-    output_path = "{}/{}".format(eoi, pathway.filename)
-    outfile = open(output_path, "w")
-    outfile.write(pathway.dot_file)
-    outfile.close()
+        for eventnode in pathway.eventnodes:       
+            eventnode.label = eventnode.label.replace("'", "").strip()
+        foldstory(pathway, fusedges=False)
+        # Fuse identical hyperedges take colors into account.
+        pair_found = True
+        while pair_found == True:
+            pair_found = False
+            for i in range(len(pathway.hyperedges)):
+                h1 = pathway.hyperedges[i]
+                for j in range(i+1, len(pathway.hyperedges)):
+                    h2 = pathway.hyperedges[j]
+                    are_equi, corr = equivalent_hyperedges(h1, h2, False, True)
+                    if are_equi == True:
+                        for k in range(len(h1.edgelist)):
+                            main_edge = h1.edgelist[k]
+                            other_edge = h2.edgelist[corr[k]]
+                            main_edge.weight += other_edge.weight
+                        h1.color_ids += h2.color_ids
+                        del(pathway.hyperedges[j])
+                        pair_found = True
+                        break
+                if pair_found == True:
+                    break
+        pathway.build_nointro()
+        assign_colors(pathway)
+        pathway.filename = "eventpathway-merged.dot"
+        pathway.build_dot_file(showintro, addedgelabels, showedgelabels,
+                               edgeid, edgeocc, edgeprob, statstype,
+                               weightedges, edgewidthscale=1.5)
+        output_path = "{}/{}".format(eoi, pathway.filename)
+        outfile = open(output_path, "w")
+        outfile.write(pathway.dot_file)
+        outfile.close()
+        # Colorless version of the merged event pathway.
+        for hyperedge in pathway.hyperedges:
+            hyperedge.color = "black"
+            hyperedge.midcolor = "black"
+            for subedge in hyperedge.edgelist:
+                subedge.color = "black"
+        pathway.filename = "eventpathway-merged-black.dot"
+        pathway.build_dot_file(showintro, addedgelabels, showedgelabels,
+                               edgeid, edgeocc, edgeprob, statstype,
+                               weightedges, edgewidthscale=1.5)
+        output_path = "{}/{}".format(eoi, pathway.filename)
+        outfile = open(output_path, "w")
+        outfile.write(pathway.dot_file)
+        outfile.close()
+
+    return pathway
 
 
-def foldstory(story):
+def assign_colors(pathway):
+    """
+    Assign edge colors according to their color ids and some color palette.
+    """
+
+    # Color edges according their color ids and some color palette.
+    color_palette = ["black", "blue1", "firebrick2", "chartreuse3",
+                     "gold2", "darkviolet", "darkorange1", "deepskyblue1",
+                     "springgreen", "brown2", "magenta", "orange"]
+    for hyperedge in pathway.hyperedges:
+        l = len(hyperedge.color_ids)
+        if l > 0:
+            if l == 1:
+                color_str = color_palette[hyperedge.color_ids[0]]
+            else:
+                col = color_palette[hyperedge.color_ids[0]]
+                color_str = '"{}'.format(col)
+                for i in range(1, l):
+                    col = color_palette[hyperedge.color_ids[i]]
+                    color_str += ':{}'.format(col)
+                color_str += ';{:.2}"'.format(1/float(l))
+            hyperedge.color = color_str
+            hyperedge.midcolor = color_palette[hyperedge.color_ids[0]]
+            for subedge in hyperedge.edgelist:
+                subedge.color = color_str
+
+
+def foldstory(story, fusedges=True):
     """
     Fold (quotient) a dual story based on the label of its nodes. Also
     accumulate the weight of the hyperedges that overlap. 
@@ -6362,24 +6649,25 @@ def foldstory(story):
                     break
         hyperedge.update()
     # Fuse hyperedges that are identical.
-    pair_found = True
-    while pair_found == True:
-        pair_found = False
-        for i in range(len(story.hyperedges)):
-            for j in range(i+1, len(story.hyperedges)):
-                are_equi, corr = equivalent_hyperedges(story.hyperedges[i],
-                                                       story.hyperedges[j],
-                                                       False, True)
-                if are_equi == True:
-                    for k in range(len(story.hyperedges[i].edgelist)):
-                        main_edge = story.hyperedges[i].edgelist[k]
-                        other_edge = story.hyperedges[j].edgelist[corr[k]]
-                        main_edge.weight += other_edge.weight
-                    del(story.hyperedges[j])
-                    pair_found = True
+    if fusedges == True:
+        pair_found = True
+        while pair_found == True:
+            pair_found = False
+            for i in range(len(story.hyperedges)):
+                for j in range(i+1, len(story.hyperedges)):
+                    are_equi, corr = equivalent_hyperedges(story.hyperedges[i],
+                                                           story.hyperedges[j],
+                                                           False, True)
+                    if are_equi == True:
+                        for k in range(len(story.hyperedges[i].edgelist)):
+                            main_edge = story.hyperedges[i].edgelist[k]
+                            other_edge = story.hyperedges[j].edgelist[corr[k]]
+                            main_edge.weight += other_edge.weight
+                        del(story.hyperedges[j])
+                        pair_found = True
+                        break
+                if pair_found == True:
                     break
-            if pair_found == True:
-                break
     for hyperedge in story.hyperedges:
         hyperedge.update()
 
