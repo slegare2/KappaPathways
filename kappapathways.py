@@ -2946,31 +2946,32 @@ def get_field(field, read_str, default):
 
 # -------------------- Causal Cores Generation Section ------------------------
 
-def getcausalcores(eoi, kappamodel, kasimpath, kaflowpath, simtime=1000,
-                   simseed=None, precedenceonly=True, ignorelist=[]):
+def getcausalcores(eoi, kappamodel, kasimpath, kaflowpath,
+                   simtime=1000, simseed=None, precedenceonly=True,
+                   ignorelist=[], eoi_def=None):
     """ 
     Generate initial causal cores of given event of interest by running KaSim 
     and then KaFlow.
     """
 
-    new_model = add_eoi(eoi, kappamodel)
+    new_model = add_eoi(eoi, kappamodel, eoi_def)
     trace_path = run_kasim(new_model, kasimpath, simtime, simseed)
     run_kaflow(eoi, trace_path, kaflowpath, precedenceonly, ignorelist)
 
 
-def getstories(eoi, kappamodel, kasimpath, kastorpath, simtime=1000,
-               simseed=None, compression=None):
+def getstories(eoi, kappamodel, kasimpath, kastorpath,
+               simtime=1000, simseed=None, compression=None, eoi_def=None):
     """
     Generate stories using the fill_siphon function of KaStor,
     and optionally weak compression.
     """
 
-    new_model = add_eoi(eoi, kappamodel)
+    new_model = add_eoi(eoi, kappamodel, eoi_def)
     trace_path = run_kasim(new_model, kasimpath, simtime, simseed)
     run_kastor(eoi, trace_path, kastorpath, compression)
 
 
-def add_eoi(eoi, kappamodel):
+def add_eoi(eoi, kappamodel, eoi_def=None):
     """ Create a new Kappa model where the EOI is added. """
 
     if not os.path.exists(eoi):
@@ -2984,7 +2985,8 @@ def add_eoi(eoi, kappamodel):
     new_path = "{}/{}-eoi.ka".format(eoi, prefix)
     shutil.copyfile(kappamodel, new_path)
     new_file = open(new_path, "a")
-    new_file.write("%obs: '{}' |{}|\n".format(eoi, eoi))
+    if eoi_def != None:
+        new_file.write("%obs: '{}' {}\n".format(eoi, eoi_def))
     new_file.write("%mod: [true] do $TRACK '{}' [true];\n".format(eoi))
     ## Ask for DIN.
     #din_file = "{}/din.json".format(eoi)
@@ -3631,8 +3633,21 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
                             break
                     upstream_nodes = []
                     for edge in story.causaledges:
-                        if edge.target == src_rule:
-                            upstream_nodes.append(edge.source)
+                        if edge.secondary == False:
+                            if edge.target == src_rule:
+                                upstream_nodes.append(edge.source)
+                    # Add neighbors state nodes.
+                    up_rules = []
+                    for edge in story.causaledges:
+                        if edge.target in upstream_nodes:
+                            if edge.source not in up_rules:
+                                up_rules.append(edge.source)
+                    neighbors = []
+                    for edge in story.causaledges:
+                        if edge.source in up_rules:
+                            if edge.target not in upstream_nodes:
+                                neighbors.append(edge.target)
+                    upstream_nodes += neighbors
                     # Add the immediate upstream nodes and their cumulnodes
                     # to the cumulnodes of the current statenode.
                     for upstream_node in upstream_nodes:
@@ -3666,26 +3681,55 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
                                     cumul_to_remove.insert(0, i)
                     for i in cumul_to_remove:
                         del(statenode.cumulnodes[i])
-                    ## Remove cumul nodes that are no more useful for future.
-                    ## AKA keep only relevant context.
-                    #cumul_to_remove = []
-                    #for i in range(len(statenode.cumulnodes)):
-                    #    cumulnode = statenode.cumulnodes[i]
-                    #    # Find all target event nodes.
-                    #    target_events = []
-                    #    for edge in story.causaledges:
-                    #        if edge.source == cumulnode:
-                    #            target_events.append(edge.target)
-                    #    # Check if there is at least one of the target nodes
-                    #    # which is in the future of current state node
-                    #    # (has an upstream path).
-                    #    downstream_paths = story.follow_edges("down",
-                    #        statenode, target_events, ignore_conflict=True,
-                    #        stop_at_first=True)
-                    #    if len(downstream_paths) == 0:
-                    #        cumul_to_remove.insert(0, i)
-                    #for i in cumul_to_remove:
-                    #    del(statenode.cumulnodes[i])
+
+                    # Remove cumul nodes that are no more useful for future.
+                    # AKA keep only relevant context.
+                    cumul_to_remove = []
+                    for i in range(len(statenode.cumulnodes)):
+                        cumulnode = statenode.cumulnodes[i]
+
+
+                        ## Find all target event nodes.
+                        #target_events = []
+                        #for edge in story.causaledges:
+                        #    if edge.source == cumulnode:
+                        #        target_events.append(edge.target)
+                        ## Check if there is at least one of the target nodes
+                        ## which is in the future of current state node
+                        ## (has an upstream path).
+                        #downstream_paths = []
+                        #if len(target_events) > 0:
+                        #    downstream_paths = story.follow_edges("down",
+                        #        statenode, target_events, ignore_conflict=True,
+                        #        stop_at_first=True)
+                        #if len(downstream_paths) == 0:
+                        #    cumul_to_remove.insert(0, i)
+
+
+                        # Check if cumul node is relevant for the future of
+                        # statenode. Relevant cumul nodes have at least one
+                        # path to the EOI that does not pass through the
+                        # statenode.
+                        downstream_paths = story.follow_edges("down",
+                            cumulnode, ignore_conflict=True, stop_at_first=False)
+                        one_path_down = False
+                        for path in downstream_paths:
+                            if len(path) > 0:
+                                path_reaches_down = True
+                                for node in path:
+                                    if node == statenode:
+                                        path_reaches_down = False
+                                        break
+                                if path_reaches_down == True:
+                                    one_path_down = True
+                                    break
+                        if one_path_down == False:
+                            cumul_to_remove.insert(0, i)
+
+
+                    for i in cumul_to_remove:
+                        del(statenode.cumulnodes[i])
+
                     ## Add neighbors nodes. This part can probably be removed
                     ## once parallel context is implemented.
                     #neighbors = []
@@ -3724,6 +3768,157 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
     # Write stories with upstream context on state nodes.
     for i in range(len(stories)):
         stories[i].filename = "state-{}.dot".format(i+1)
+    for story in stories:
+        story.build_dot_file(showintro, addedgelabels, showedgelabels,
+                             edgeid, edgeocc, edgeprob, statstype, weightedges)
+        output_path = "{}/tmp/{}".format(eoi, story.filename)
+        outfile = open(output_path, "w")
+        outfile.write(story.dot_file)
+        outfile.close()
+
+    # If a given context is relevant in one story, it must be set as
+    # relevant in all stories.
+    all_cumuls = {}
+    for story in stories:
+        for statenode in story.rule_outputs:
+            edit_lbl = write_context_expression(statenode.edit, hideid=True)
+            if edit_lbl not in all_cumuls.keys():
+                all_cumuls[edit_lbl] = statenode.cumulnodes
+            else:
+                # Add cumul nodes that contain an edit (ignoring agent id) that
+                # is not already present in the cumul of current statenode.
+                additional_cumul = []
+                for currentcumul in statenode.cumulnodes:
+                    cumul_found = False
+                    for prevcumul in all_cumuls[edit_lbl]:
+                        are_same = compare_states(currentcumul.edit,
+                                                  prevcumul.edit,
+                                                  ignorevalue=False,
+                                                  ignoreid=True)
+                        if are_same == True:
+                            cumul_found = True
+                            break
+                    if cumul_found == False:
+                        additional_cumul.append(currentcumul)
+                all_cumuls[edit_lbl] += additional_cumul
+    # Rebuild states with relevant upstream context from all stories.
+    for story in stories:
+        story.hyperedges = []
+        # Reset cumulnodes for each state node.
+        for statenode in story.statenodes:
+            statenode.cumulnodes = []
+        for cr in range(1, story.maxrank):
+            current_rank = cr + 0.5
+            for statenode in story.rule_outputs:
+                if statenode.rank == current_rank:
+                    # Find immediate upstream state nodes.
+                    for edge in story.causaledges:
+                        if edge.target == statenode:
+                            src_rule = edge.source
+                            break
+                    upstream_nodes = []
+                    for edge in story.causaledges:
+                        if edge.secondary == False:
+                            if edge.target == src_rule:
+                                upstream_nodes.append(edge.source)
+                    # Add neighbors state nodes.
+                    up_rules = []
+                    for edge in story.causaledges:
+                        if edge.target in upstream_nodes:
+                            if edge.source not in up_rules:
+                                up_rules.append(edge.source)
+                    neighbors = []
+                    for edge in story.causaledges:
+                        if edge.source in up_rules:
+                            if edge.target not in upstream_nodes:
+                                neighbors.append(edge.target)
+                    upstream_nodes += neighbors
+                    # Add the immediate upstream nodes and their cumulnodes
+                    # to the cumulnodes of the current statenode.
+                    for upstream_node in upstream_nodes:
+                        statenode.cumulnodes.append(upstream_node)
+                        for up_cumulnode in upstream_node.cumulnodes:
+                            if up_cumulnode not in statenode.cumulnodes:
+                                statenode.cumulnodes.append(up_cumulnode)
+                    # Remove from cumulnodes any node that has at least one
+                    # edit site in common with the current node edit sites
+                    current_sites = []
+                    for agent in statenode.edit:
+                        if agent["sites"] != None:
+                            for site in agent["sites"]:
+                                site_str = write_kappa_site(site, "num", True)
+                                current_sites.append(site_str)
+                        else:
+                            agent_str = write_kappa_agent(agent, "num", True)
+                            current_sites.append(agent_str)
+                    cumul_to_remove = []
+                    for i in range(len(statenode.cumulnodes)):
+                        prevnode = statenode.cumulnodes[i]
+                        for agent in prevnode.edit:
+                            if agent["sites"] != None:
+                                for site in agent["sites"]:
+                                    site_str = write_kappa_site(site, "num", True)
+                                    if site_str in current_sites:
+                                        cumul_to_remove.insert(0, i)
+                            else:
+                                agent_str = write_kappa_agent(agent, "num", True)
+                                if agent_str in current_sites:
+                                    cumul_to_remove.insert(0, i)
+                    for i in cumul_to_remove:
+                        del(statenode.cumulnodes[i])
+
+                    # Remove cumul nodes that are not in all_cumuls.
+                    edit_lbl = write_context_expression(statenode.edit, hideid=True)
+                    cumul_to_remove = []
+                    for i in range(len(statenode.cumulnodes)):
+                        cumulnode = statenode.cumulnodes[i]
+                        # Remove cumulnode if not in all_cumuls[edit_lbl].
+                        cumul_found = False
+                        for possible_cumul in all_cumuls[edit_lbl]:
+                            are_same = compare_states(possible_cumul.edit,
+                                                      cumulnode.edit,
+                                                      ignorevalue=False,
+                                                      ignoreid=True)
+                            if are_same == True:
+                                cumul_found = True
+                                break
+                        if cumul_found == False:
+                            cumul_to_remove.insert(0, i)
+                    for i in cumul_to_remove:
+                        del(statenode.cumulnodes[i])
+                    # Build current state node context from the state of
+                    # all the relevant_nodes.
+                    full_state = copy.deepcopy(statenode.edit)
+                    for cumulnode in statenode.cumulnodes: # + neighbors:
+                        for agent in cumulnode.edit:
+                            context_agent = copy.deepcopy(agent)
+                            if context_agent["type"] == None:
+                                for context_site in context_agent["sites"]:
+                                    context_site["type"] = "context"
+                            elif context_agent["type"] != None:
+                                context_agent["type"] = "context"
+                            full_state.append(context_agent)
+                    statenode.state = group_sites_by_agent(full_state)
+                    lbl = write_context_expression(statenode.state)
+                    statenode.label = lbl
+        for statenode in story.statenodes:
+            if statenode in story.rule_outputs:
+                statenode.introstate = False
+            #if statenode not in story.rule_outputs:
+            else:
+                statenode.state = statenode.edit
+                statenode.introstate = True         
+        story.create_hyperedges()
+        story.align_vertical()
+
+    #for k in all_cumuls.keys():
+    #    print(k)
+    #for node in all_cumuls["<b>D(</b><b>z[1]</b><b>)</b>, <b>C(</b><b>z[1]</b><b>)</b>"]:
+    #    print(node)
+
+    # Write stories with harmonized context on state nodes.
+    for i in range(len(stories)):
+        stories[i].filename = "harmonized-{}.dot".format(i+1)
     for story in stories:
         story.build_dot_file(showintro, addedgelabels, showedgelabels,
                              edgeid, edgeocc, edgeprob, statstype, weightedges)
@@ -6345,7 +6540,7 @@ def foldpathway(eoi, prefix, causalgraphs=None, siphon=False, ignorelist=[],
             pathway.filename = "statepathway.dot"
         pathway.build_dot_file(showintro, addedgelabels, showedgelabels,
                                edgeid, edgeocc, edgeprob, statstype,
-                               weightedges)
+                               weightedges, edgewidthscale=1.5)
         output_path = "{}/{}".format(eoi, pathway.filename)
         outfile = open(output_path, "w")
         outfile.write(pathway.dot_file)
@@ -6359,8 +6554,10 @@ def foldpathway(eoi, prefix, causalgraphs=None, siphon=False, ignorelist=[],
             pathway.filename = "dualpathway-color.dot"
         #if prefix == "statestory":
         #    pathway.filename = "statepathway-color.dot"
-        #selectedlabel = "C binds D"
-        selectedlabel = "D binds G"
+        selectedlabel = "C binds D"
+        #selectedlabel = "D binds G"
+        #selectedlabel = "E binds F"
+        #selectedlabel = "A binds B"
         # Initalize color id lists.
         next_col_id = 1
         selectednodes = []
@@ -6466,7 +6663,7 @@ def foldpathway(eoi, prefix, causalgraphs=None, siphon=False, ignorelist=[],
                         if hyperedge.target not in next_nodes:
                             if hyperedge.target not in startingnodes:
                                 next_nodes.append(hyperedge.target)
-                # Find new color ids from outgoing edges.
+                # Find new color ids from incoming edges.
                 existing_ids = []
                 for outedge in outgoing_edges:
                     existing_ids += outedge.color_ids
@@ -6481,12 +6678,14 @@ def foldpathway(eoi, prefix, causalgraphs=None, siphon=False, ignorelist=[],
                     for outedge in outgoing_edges:
                         outedge.color_ids += new_ids
             current_nodes = next_nodes
+
         # Remove color from any edge that has all the colors.
         a = list(range(1, next_col_id))
         for hyperedge in pathway.hyperedges:
             c = hyperedge.color_ids
             if collections.Counter(c) == collections.Counter(a):
                 hyperedge.color_ids = []
+
         # Color edges according their color ids and some color palette.
         assign_colors(pathway)
         #color_palette = ["black", "blue1", "firebrick2", "chartreuse3",
