@@ -1477,7 +1477,7 @@ class CausalGraph(object):
                             edge.layout_weight = 0
 
 
-    def follow_edges(self, direction, from_node, to_nodes=[],
+    def follow_edges(self, direction, from_node, to_nodes=[], block=None,
                      ignore_conflict=False, stop_at_first=False):
         """
         Return a list of all acyclic paths from a given node to the top of the
@@ -1521,6 +1521,11 @@ class CausalGraph(object):
             for i in range(len(all_paths)-1, -1, -1):
                 if len(all_paths[i]) != len(set(all_paths[i])):
                     del(all_paths[i])
+            # Remove paths that end with blocking node if defined.
+            if block != None:
+                for i in range(len(all_paths)-1, -1, -1):
+                    if all_paths[i][-1] == block:
+                        del(all_paths[i])
             # Exit prematurely if only one path is sufficient.
             if stop_at_first == True:
                 for path in all_paths:
@@ -3185,11 +3190,11 @@ def tweakstories(eoi, showintro=True, addedgelabels=False,
         stories[i].filename = "story-{}.dot".format(i+1)
         stories[i].producedby = "KappaPathways"
 
-    # Optionally keep only short stories for faster calculation.
+    ## Optionally keep only short stories for faster calculation.
     #num = 1
     #stories_tmp = []
     #for story in stories:
-    #    if story.maxrank < 30:
+    #    if story.maxrank < 20:
     #        story.filename = "story-{}.dot".format(num)
     #        story.producedby = "KappaPathways"
     #        stories_tmp.append(story)
@@ -3622,113 +3627,153 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
                         story.rule_outputs.append(edge.target)
         for statenode in story.statenodes:
             statenode.cumulnodes = []
+        for eventnode in story.eventnodes:
+            if eventnode.label == eoi:
+                eoi_node = eventnode
         for cr in range(1, story.maxrank):
             current_rank = cr + 0.5
             for statenode in story.rule_outputs:
                 if statenode.rank == current_rank:
-                    # Find immediate upstream state nodes.
-                    for edge in story.causaledges:
-                        if edge.target == statenode:
-                            src_rule = edge.source
-                            break
-                    upstream_nodes = []
-                    for edge in story.causaledges:
-                        if edge.secondary == False:
-                            if edge.target == src_rule:
-                                upstream_nodes.append(edge.source)
-                    # Add neighbors state nodes.
-                    up_rules = []
-                    for edge in story.causaledges:
-                        if edge.target in upstream_nodes:
-                            if edge.source not in up_rules:
-                                up_rules.append(edge.source)
-                    neighbors = []
-                    for edge in story.causaledges:
-                        if edge.source in up_rules:
-                            if edge.target not in upstream_nodes:
-                                neighbors.append(edge.target)
-                    upstream_nodes += neighbors
-                    # Add the immediate upstream nodes and their cumulnodes
-                    # to the cumulnodes of the current statenode.
-                    for upstream_node in upstream_nodes:
-                        statenode.cumulnodes.append(upstream_node)
-                        for up_cumulnode in upstream_node.cumulnodes:
-                            if up_cumulnode not in statenode.cumulnodes:
-                                statenode.cumulnodes.append(up_cumulnode)
-                    # Remove from cumulnodes any node that has at least one
-                    # edit site in common with the current node edit sites
-                    current_sites = []
-                    for agent in statenode.edit:
-                        if agent["sites"] != None:
-                            for site in agent["sites"]:
-                                site_str = write_kappa_site(site, "num", True)
-                                current_sites.append(site_str)
-                        else:
-                            agent_str = write_kappa_agent(agent, "num", True)
-                            current_sites.append(agent_str)
-                    cumul_to_remove = []
-                    for i in range(len(statenode.cumulnodes)):
-                        prevnode = statenode.cumulnodes[i]
-                        for agent in prevnode.edit:
-                            if agent["sites"] != None:
-                                for site in agent["sites"]:
-                                    site_str = write_kappa_site(site, "num", True)
-                                    if site_str in current_sites:
-                                        cumul_to_remove.insert(0, i)
-                            else:
-                                agent_str = write_kappa_agent(agent, "num", True)
-                                if agent_str in current_sites:
-                                    cumul_to_remove.insert(0, i)
-                    for i in cumul_to_remove:
-                        del(statenode.cumulnodes[i])
-
-                    # Remove cumul nodes that are no more useful for future.
-                    # AKA keep only relevant context.
-                    cumul_to_remove = []
-                    for i in range(len(statenode.cumulnodes)):
-                        cumulnode = statenode.cumulnodes[i]
-
-
-                        ## Find all target event nodes.
-                        #target_events = []
-                        #for edge in story.causaledges:
-                        #    if edge.source == cumulnode:
-                        #        target_events.append(edge.target)
-                        ## Check if there is at least one of the target nodes
-                        ## which is in the future of current state node
-                        ## (has an upstream path).
-                        #downstream_paths = []
-                        #if len(target_events) > 0:
-                        #    downstream_paths = story.follow_edges("down",
-                        #        statenode, target_events, ignore_conflict=True,
-                        #        stop_at_first=True)
-                        #if len(downstream_paths) == 0:
-                        #    cumul_to_remove.insert(0, i)
-
-
-                        # Check if cumul node is relevant for the future of
-                        # statenode. Relevant cumul nodes have at least one
-                        # path to the EOI that does not pass through the
-                        # statenode.
+                    fullcumul, src_rule = get_fullcumul(statenode, story)
+                    # Check if cumul node is relevant for the future of
+                    # statenode. Relevant cumul nodes have at least one
+                    # path to the EOI that does not pass through the
+                    # statenode.
+                    relevantcumul = []
+                    remainingcumul = []
+                    for cumulnode in fullcumul:
                         downstream_paths = story.follow_edges("down",
-                            cumulnode, ignore_conflict=True, stop_at_first=False)
-                        one_path_down = False
-                        for path in downstream_paths:
-                            if len(path) > 0:
-                                path_reaches_down = True
-                                for node in path:
-                                    if node == statenode:
-                                        path_reaches_down = False
-                                        break
-                                if path_reaches_down == True:
-                                    one_path_down = True
-                                    break
-                        if one_path_down == False:
-                            cumul_to_remove.insert(0, i)
+                            cumulnode, [eoi_node], block=src_rule,
+                            ignore_conflict=True, stop_at_first=False)
+                        # If there is no path, then downstream_paths = [].
+                        if len(downstream_paths) > 0:
+                            relevantcumul.append(cumulnode)
+                    statenode.cumulnodes = relevantcumul
+
+                    ## Find immediate upstream state nodes.
+                    ## Also get neighbors of state node.
+                    #for edge in story.causaledges:
+                    #    if edge.target == statenode:
+                    #        src_rule = edge.source
+                    #        break
+                    #upstream_nodes = []
+                    #neighbors = []
+                    #for edge in story.causaledges:
+                    #    if edge.secondary == False:
+                    #        if edge.target == src_rule:
+                    #            upstream_nodes.append(edge.source)
+                    #        if edge.source == src_rule:
+                    #            if edge.target != statenode:
+                    #                neighbors.append(edge.target)
+                    ## Add neighbors of upstream state nodes.
+                    #up_rules = []
+                    #for edge in story.causaledges:
+                    #    if edge.target in upstream_nodes:
+                    #        if edge.source not in up_rules:
+                    #            up_rules.append(edge.source)
+                    #upstream_neighbors = []
+                    #for edge in story.causaledges:
+                    #    if edge.source in up_rules:
+                    #        if edge.target not in upstream_nodes:
+                    #            upstream_neighbors.append(edge.target)
+                    #upstream_nodes += upstream_neighbors
+                    ## Add the immediate upstream nodes and their cumulnodes
+                    ## to the cumulnodes of the current statenode.
+                    #for upstream_node in upstream_nodes:
+                    #    statenode.cumulnodes.append(upstream_node)
+                    #    for up_cumulnode in upstream_node.cumulnodes:
+                    #        if up_cumulnode not in statenode.cumulnodes:
+                    #            statenode.cumulnodes.append(up_cumulnode)
 
 
-                    for i in cumul_to_remove:
-                        del(statenode.cumulnodes[i])
+                    ## Not even needed if I remove irrelevant cumul correctly.
+                    ##
+                    ## ! Wrong ! 
+                    ## ! Remove from cumulnodes any node that has at least one !
+                    ## ! edit site in common with the current node edit sites !
+                    ##
+                    ## Remove from cumulnodes any node that has at least one
+                    ## edit site in common with the current node edit sites or
+                    ## a neighbor node edit sites.
+                    #current_sites = []
+                    #for node in [statenode] + neighbors:
+                    #    for agent in node.edit:
+                    #        if agent["sites"] != None:
+                    #            for site in agent["sites"]:
+                    #                site_str = write_kappa_site(site, "num", True)
+                    #                current_sites.append(site_str)
+                    #        else:
+                    #            agent_str = write_kappa_agent(agent, "num", True)
+                    #            current_sites.append(agent_str)
+                    #if statenode.nodeid == "state53":
+                    #    for s in current_sites:
+                    #        print(s)
+                    #    print("---")
+                    #cumul_to_remove = []
+                    #for i in range(len(statenode.cumulnodes)):
+                    #    prevnode = statenode.cumulnodes[i]
+                    #    #if statenode.nodeid == "state53":
+                    #    #    print(prevnode)
+                    #    for agent in prevnode.edit:
+                    #        if agent["sites"] != None:
+                    #            for site in agent["sites"]:
+                    #                site_str = write_kappa_site(site, "num", True)
+                    #                #if statenode.nodeid == "state30":
+                    #                #    print(">>", site_str)
+                    #                if site_str in current_sites:
+                    #                    if i not in cumul_to_remove:
+                    #                        cumul_to_remove.insert(0, i)
+                    #        else:
+                    #            agent_str = write_kappa_agent(agent, "num", True)
+                    #            if agent_str in current_sites:
+                    #                if i not in cumul_to_remove:
+                    #                    cumul_to_remove.insert(0, i)
+                    ##if statenode.nodeid == "state30":
+                    ##    print(cumul_to_remove)
+                    #for i in cumul_to_remove:
+                    #    del(statenode.cumulnodes[i])
+
+
+                    ## Remove cumul nodes that are no more useful for future.
+                    ## AKA keep only relevant context.
+                    #cumul_to_remove = []
+                    #for i in range(len(statenode.cumulnodes)):
+                    #    cumulnode = statenode.cumulnodes[i]
+
+
+                    #    ## Find all target event nodes.
+                    #    #target_events = []
+                    #    #for edge in story.causaledges:
+                    #    #    if edge.source == cumulnode:
+                    #    #        target_events.append(edge.target)
+                    #    ## Check if there is at least one of the target nodes
+                    #    ## which is in the future of current state node
+                    #    ## (has an upstream path).
+                    #    #downstream_paths = []
+                    #    #if len(target_events) > 0:
+                    #    #    downstream_paths = story.follow_edges("down",
+                    #    #        statenode, target_events, ignore_conflict=True,
+                    #    #        stop_at_first=True)
+                    #    #if len(downstream_paths) == 0:
+                    #    #    cumul_to_remove.insert(0, i)
+
+
+                    #    # Check if cumul node is relevant for the future of
+                    #    # statenode. Relevant cumul nodes have at least one
+                    #    # path to the EOI that does not pass through the
+                    #    # statenode.
+                    #    downstream_paths = story.follow_edges("down",
+                    #        cumulnode, [eoi_node], block=src_rule,
+                    #        ignore_conflict=True, stop_at_first=False)
+                    #    one_path_down = False
+                    #    for path in downstream_paths:
+                    #        if len(path) > 0:
+                    #            one_path_down = True
+                    #            break
+                    #    if one_path_down == False:
+                    #        cumul_to_remove.insert(0, i)
+                    #for i in cumul_to_remove:
+                    #    del(statenode.cumulnodes[i])
 
                     ## Add neighbors nodes. This part can probably be removed
                     ## once parallel context is implemented.
@@ -3807,85 +3852,83 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
         # Reset cumulnodes for each state node.
         for statenode in story.statenodes:
             statenode.cumulnodes = []
+        for eventnode in story.eventnodes:
+            if eventnode.label == eoi:
+                eoi_node = eventnode
         for cr in range(1, story.maxrank):
             current_rank = cr + 0.5
             for statenode in story.rule_outputs:
                 if statenode.rank == current_rank:
-                    # Find immediate upstream state nodes.
-                    for edge in story.causaledges:
-                        if edge.target == statenode:
-                            src_rule = edge.source
-                            break
-                    upstream_nodes = []
-                    for edge in story.causaledges:
-                        if edge.secondary == False:
-                            if edge.target == src_rule:
-                                upstream_nodes.append(edge.source)
-                    # Add neighbors state nodes.
-                    up_rules = []
-                    for edge in story.causaledges:
-                        if edge.target in upstream_nodes:
-                            if edge.source not in up_rules:
-                                up_rules.append(edge.source)
-                    neighbors = []
-                    for edge in story.causaledges:
-                        if edge.source in up_rules:
-                            if edge.target not in upstream_nodes:
-                                neighbors.append(edge.target)
-                    upstream_nodes += neighbors
-                    # Add the immediate upstream nodes and their cumulnodes
-                    # to the cumulnodes of the current statenode.
-                    for upstream_node in upstream_nodes:
-                        statenode.cumulnodes.append(upstream_node)
-                        for up_cumulnode in upstream_node.cumulnodes:
-                            if up_cumulnode not in statenode.cumulnodes:
-                                statenode.cumulnodes.append(up_cumulnode)
-                    # Remove from cumulnodes any node that has at least one
-                    # edit site in common with the current node edit sites
-                    current_sites = []
-                    for agent in statenode.edit:
-                        if agent["sites"] != None:
-                            for site in agent["sites"]:
-                                site_str = write_kappa_site(site, "num", True)
-                                current_sites.append(site_str)
-                        else:
-                            agent_str = write_kappa_agent(agent, "num", True)
-                            current_sites.append(agent_str)
-                    cumul_to_remove = []
-                    for i in range(len(statenode.cumulnodes)):
-                        prevnode = statenode.cumulnodes[i]
-                        for agent in prevnode.edit:
-                            if agent["sites"] != None:
-                                for site in agent["sites"]:
-                                    site_str = write_kappa_site(site, "num", True)
-                                    if site_str in current_sites:
-                                        cumul_to_remove.insert(0, i)
-                            else:
-                                agent_str = write_kappa_agent(agent, "num", True)
-                                if agent_str in current_sites:
-                                    cumul_to_remove.insert(0, i)
-                    for i in cumul_to_remove:
-                        del(statenode.cumulnodes[i])
-
-                    # Remove cumul nodes that are not in all_cumuls.
+                    fullcumul, src_rule = get_fullcumul(statenode, story)
                     edit_lbl = write_context_expression(statenode.edit, hideid=True)
-                    cumul_to_remove = []
-                    for i in range(len(statenode.cumulnodes)):
-                        cumulnode = statenode.cumulnodes[i]
-                        # Remove cumulnode if not in all_cumuls[edit_lbl].
-                        cumul_found = False
-                        for possible_cumul in all_cumuls[edit_lbl]:
-                            are_same = compare_states(possible_cumul.edit,
-                                                      cumulnode.edit,
+                    allcumulcopy = copy.deepcopy(all_cumuls[edit_lbl])
+                    # Recheck relevance. I have to redo it instead of taking
+                    # back the results from the previous round because adding
+                    # nodes from allcumulcopy after will change the cumul of
+                    # the next rank.
+                    relevantcumul = []
+                    remainingcumul = []
+                    for cumulnode in fullcumul:
+                        downstream_paths = story.follow_edges("down",
+                            cumulnode, [eoi_node], block=src_rule,
+                            ignore_conflict=True, stop_at_first=False)
+                        # If there is no path, then downstream_paths = [[]].
+                        if len(downstream_paths) > 0:
+                            relevantcumul.append(cumulnode)
+                            # Remove one cumulnode type from allcumulcopy.
+                            # This is because I have to keep track of cumul
+                            # nodes that are relevant in the current stories
+                            # and remove them from allcumulcopy. Otherwise, any
+                            # duplicate in fullcumul that is of a type found in
+                            # allcumulcopy will be both kept as relevant.
+                            for i in range(len(allcumulcopy)):
+                                are_same = compare_states(allcumulcopy[i].edit,
+                                                          cumulnode.edit,
+                                                          ignorevalue=False,
+                                                          ignoreid=True)
+                                if are_same == True:
+                                    del(allcumulcopy[i])
+                                    break
+                        else:
+                            remainingcumul.append(cumulnode)
+                    # Put remaining nodes in relevant nodes if they are found
+                    # in allcumulcopy.
+                    for remainingnode in remainingcumul:
+                        for i in range(len(allcumulcopy)):
+                            are_same = compare_states(allcumulcopy[i].edit,
+                                                      remainingnode.edit,
                                                       ignorevalue=False,
                                                       ignoreid=True)
                             if are_same == True:
-                                cumul_found = True
+                                relevantcumul.append(remainingnode)
+                                del(allcumulcopy[i])
                                 break
-                        if cumul_found == False:
-                            cumul_to_remove.insert(0, i)
-                    for i in cumul_to_remove:
-                        del(statenode.cumulnodes[i])
+                    statenode.cumulnodes = relevantcumul
+                    
+                    #if statenode.nodeid == "state55":
+                    #    for n in statenode.cumulnodes:
+                    #        print(n)
+ 
+                    ## Remove cumul nodes that are not in all_cumuls.
+                    #edit_lbl = write_context_expression(statenode.edit, hideid=True)
+                    #cumul_to_remove = []
+                    #for i in range(len(statenode.cumulnodes)):
+                    #    cumulnode = statenode.cumulnodes[i]
+                    #    # Remove cumulnode if not in all_cumuls[edit_lbl].
+                    #    cumul_found = False
+                    #    for possible_cumul in all_cumuls[edit_lbl]:
+                    #        are_same = compare_states(possible_cumul.edit,
+                    #                                  cumulnode.edit,
+                    #                                  ignorevalue=False,
+                    #                                  ignoreid=True)
+                    #        if are_same == True:
+                    #            cumul_found = True
+                    #            break
+                    #    if cumul_found == False:
+                    #        cumul_to_remove.insert(0, i)
+                    #for i in cumul_to_remove:
+                    #    del(statenode.cumulnodes[i])
+
                     # Build current state node context from the state of
                     # all the relevant_nodes.
                     full_state = copy.deepcopy(statenode.edit)
@@ -4366,35 +4409,35 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
         outfile.write(story.dot_file)
         outfile.close()
 
-    # Make a copy of dual stories.
-    dualstoriescopy = copy.deepcopy(stories)
+    ## ==========
 
-    # ==========
+    ## Make a copy of dual stories.
+    #dualstoriescopy = copy.deepcopy(stories)
 
-    # Build a first pathway to see if it produces transitive
-    # (non-immediate) causality.
+    ## Build a first pathway to see if it produces transitive
+    ## (non-immediate) causality.
 
-    for story in dualstoriescopy:
-        story.occurrence = 1
-    uniquestories = mergedualstories(eoi, "dualstory",
-                                     causalgraphs=dualstoriescopy,
-                                     writedot=False)
-    tmpquotient = foldpathway(eoi, "dualstory", causalgraphs=uniquestories,
-                              writedot=False, computenum=False)
-    tmpquotient.filename = "tmpquotient.dot"
-    tmpquotient.build_dot_file(False, addedgelabels, showedgelabels,
-                               edgeid, edgeocc, edgeprob, statstype,
-                               weightedges)
-    output_path = "{}/{}".format(eoi, tmpquotient.filename)
-    outfile = open(output_path, "w")
-    outfile.write(tmpquotient.dot_file)
-    outfile.close()
+    #for story in dualstoriescopy:
+    #    story.occurrence = 1
+    #uniquestories = mergedualstories(eoi, "dualstory",
+    #                                 causalgraphs=dualstoriescopy,
+    #                                 writedot=False)
+    #tmpquotient = foldpathway(eoi, "dualstory", causalgraphs=uniquestories,
+    #                          writedot=False, computenum=False)
+    #tmpquotient.filename = "tmpquotient.dot"
+    #tmpquotient.build_dot_file(False, addedgelabels, showedgelabels,
+    #                           edgeid, edgeocc, edgeprob, statstype,
+    #                           weightedges)
+    #output_path = "{}/{}".format(eoi, tmpquotient.filename)
+    #outfile = open(output_path, "w")
+    #outfile.write(tmpquotient.dot_file)
+    #outfile.close()
 
-    # Find transitive hyperedges that were added by quotienting.
-    #for hyperedge in tmpquotient.hyperedges:
-        
+    ## Find transitive hyperedges that were added by quotienting.
+    ##for hyperedge in tmpquotient.hyperedges:
+    #    
 
-    # ==========
+    ## ==========
 
     # Modify original stories with event labels that distinguish context.
     # (Will need to modify this part if the order of nodes get changed
@@ -4520,6 +4563,48 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
         outfile.write(story.dot_file)
         outfile.close()
 
+
+def get_fullcumul(statenode, story):
+    """ Assign the cumulative context from the past to given state node. """
+
+    # Find immediate upstream state nodes.
+    # Also get neighbors of state node.
+    for edge in story.causaledges:
+        if edge.target == statenode:
+            src_rule = edge.source
+            break
+    upstream_nodes = []
+    neighbors = []
+    for edge in story.causaledges:
+        if edge.secondary == False:
+            if edge.target == src_rule:
+                upstream_nodes.append(edge.source)
+            if edge.source == src_rule:
+                if edge.target != statenode:
+                    neighbors.append(edge.target)
+    # Add neighbors of upstream state nodes.
+    up_rules = []
+    for edge in story.causaledges:
+        if edge.target in upstream_nodes:
+            if edge.source not in up_rules:
+                up_rules.append(edge.source)
+    upstream_neighbors = []
+    for edge in story.causaledges:
+        if edge.source in up_rules:
+            if edge.target not in upstream_nodes:
+                upstream_neighbors.append(edge.target)
+    upstream_nodes += upstream_neighbors
+    # Add the immediate upstream nodes and their cumulnodes
+    # to the cumulnodes of the current statenode.
+    fullcumul = []
+    for upstream_node in upstream_nodes:
+        fullcumul.append(upstream_node)
+        for up_cumulnode in upstream_node.cumulnodes:
+            if up_cumulnode not in fullcumul:
+                fullcumul.append(up_cumulnode)
+
+    return fullcumul, src_rule
+   
 
 def remove_shrank_nodes(story):
     """
@@ -6546,6 +6631,7 @@ def foldpathway(eoi, prefix, causalgraphs=None, siphon=False, ignorelist=[],
         outfile.write(pathway.dot_file)
         outfile.close()
 
+# Color and merge section.
     if prefix == "modstory" or prefix == "dualstory":
         # Color pathways to distiguish admissible paths.
         if prefix == "modstory":
@@ -6554,10 +6640,11 @@ def foldpathway(eoi, prefix, causalgraphs=None, siphon=False, ignorelist=[],
             pathway.filename = "dualpathway-color.dot"
         #if prefix == "statestory":
         #    pathway.filename = "statepathway-color.dot"
-        selectedlabel = "C binds D"
+        #selectedlabel = "C binds D"
         #selectedlabel = "D binds G"
         #selectedlabel = "E binds F"
-        #selectedlabel = "A binds B"
+        selectedlabel = "A binds B"
+        #selectedlabel = "ABL1 act"
         # Initalize color id lists.
         next_col_id = 1
         selectednodes = []
@@ -6612,8 +6699,10 @@ def foldpathway(eoi, prefix, causalgraphs=None, siphon=False, ignorelist=[],
                     outedge.color_ids += new_ids            
         startingnodes = next_nodes
         # Propagate color ids upward. Breadth-first.
-        #for startingnode in startingnodes:
+
+
         current_nodes = startingnodes
+        seen_nodes = startingnodes
         while len(current_nodes) > 0:
             next_nodes = []
             for node in current_nodes:
@@ -6623,8 +6712,10 @@ def foldpathway(eoi, prefix, causalgraphs=None, siphon=False, ignorelist=[],
                     if hyperedge.target == node:
                         incoming_edges.append(hyperedge)
                         for source in hyperedge.sources:
-                            if source not in next_nodes:
-                                next_nodes.append(source)
+                            if source not in seen_nodes:
+                                if source not in next_nodes:
+                                    next_nodes.append(source)
+                                    seen_nodes.append(source)
                     if node in hyperedge.sources:
                         outgoing_edges.append(hyperedge)
                 # Find new color ids from outgoing edges.
@@ -6645,6 +6736,8 @@ def foldpathway(eoi, prefix, causalgraphs=None, siphon=False, ignorelist=[],
                             incoming_edges[i].color_ids.append(next_col_id)
                             next_col_id += 1
             current_nodes = next_nodes
+
+
         # Make a final passage from top to bottom.
         current_nodes = []
         for node in pathway.eventnodes:
@@ -6687,7 +6780,7 @@ def foldpathway(eoi, prefix, causalgraphs=None, siphon=False, ignorelist=[],
                 hyperedge.color_ids = []
 
         # Color edges according their color ids and some color palette.
-        assign_colors(pathway)
+        assign_colors(pathway, next_col_id)
         #color_palette = ["black", "blue1", "firebrick2", "chartreuse3",
         #                 "gold2", "darkviolet", "darkorange1", "deepskyblue1",
         #                 "springgreen", "brown2", "magenta", "orange"]
@@ -6741,7 +6834,7 @@ def foldpathway(eoi, prefix, causalgraphs=None, siphon=False, ignorelist=[],
                 if pair_found == True:
                     break
         pathway.build_nointro()
-        assign_colors(pathway)
+        assign_colors(pathway, next_col_id)
         pathway.filename = "eventpathway-merged.dot"
         pathway.build_dot_file(showintro, addedgelabels, showedgelabels,
                                edgeid, edgeocc, edgeprob, statstype,
@@ -6768,7 +6861,7 @@ def foldpathway(eoi, prefix, causalgraphs=None, siphon=False, ignorelist=[],
     return pathway
 
 
-def assign_colors(pathway):
+def assign_colors(pathway, num_colors):
     """
     Assign edge colors according to their color ids and some color palette.
     """
@@ -6777,17 +6870,26 @@ def assign_colors(pathway):
     color_palette = ["black", "blue1", "firebrick2", "chartreuse3",
                      "gold2", "darkviolet", "darkorange1", "deepskyblue1",
                      "springgreen", "brown2", "magenta", "orange"]
+    maxcol = num_colors - len(color_palette) + 1
     for hyperedge in pathway.hyperedges:
         l = len(hyperedge.color_ids)
         if l > 0:
             if l == 1:
-                color_str = color_palette[hyperedge.color_ids[0]]
+                if hyperedge.color_ids[0] < len(color_palette):
+                    color_str = color_palette[hyperedge.color_ids[0]]
+                else:
+                    colsec = hyperedge.color_ids[0] - len(color_palette) + 1
+                    color_str = ':{:.3f} 1 1'.format(float(col_sec/maxcol))
             else:
                 col = color_palette[hyperedge.color_ids[0]]
                 color_str = '"{}'.format(col)
                 for i in range(1, l):
-                    col = color_palette[hyperedge.color_ids[i]]
-                    color_str += ':{}'.format(col)
+                    if hyperedge.color_ids[i] < len(color_palette):
+                        col = color_palette[hyperedge.color_ids[i]]
+                        color_str += ':{}'.format(col)
+                    else:
+                        colsec = hyperedge.color_ids[0]-len(color_palette)+1
+                        color_str += ':{:.3f} 1 1'.format(float(colsec/maxcol))
                 color_str += ';{:.2}"'.format(1/float(l))
             hyperedge.color = color_str
             hyperedge.midcolor = color_palette[hyperedge.color_ids[0]]
