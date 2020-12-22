@@ -27,7 +27,8 @@ class EventNode(object):
 
     def __init__(self, nodeid, label, rank=None, weight=1, rel_wei=1.0,
                  occurrence=1, rel_occ=1.0, intro=False, first=False,
-                 highlighted=False, pos=None, eventid=None, shrink=False):
+                 highlighted=False, pos=None, eventid=None, shrink=False,
+                 incoming=[], outgoing=[], pdh=False):
         """ Initialize class EventNode. """
 
         self.nodeid = nodeid
@@ -43,6 +44,9 @@ class EventNode(object):
         self.pos = pos
         self.eventid = eventid
         self.shrink = shrink
+        self.incoming = incoming
+        self.outgoing = outgoing
+        self.pdh = pdh
         self.check_types()
         self.edits = []
 
@@ -86,7 +90,8 @@ class StateNode(object):
     def __init__(self, nodeid, label, rank=None, weight=1, rel_wei=1.0,
                  occurrence=1, rel_occ=1.0, intro=False, first=False,
                  highlighted=False, pos=None, eventid=None, edit=None,
-                 context=[], shrink=False):
+                 context=[], shrink=False, incoming=[], outgoing=[],
+                 pdh=False):
         """ Initialize class StateNode. """
 
         self.nodeid = nodeid
@@ -104,6 +109,9 @@ class StateNode(object):
         self.edit = edit
         self.context = context
         self.shrink = shrink
+        self.incoming = incoming
+        self.outgoing = outgoing
+        self.pdh = pdh
         self.check_types()
 
 
@@ -2311,6 +2319,21 @@ class CausalGraph(object):
             covermesh.assign_label_carrier()
 
 
+    def build_adjacency(self):
+        """
+        For each node, build the lists of incoming and outgoing hyperedges.
+        """
+        
+        for node in self.eventnodes + self.statenodes:
+            node.incoming = []
+            node.outgoing = []
+            for hyperedge in self.hyperedges:
+                if node == hyperedge.target:
+                    node.incoming.append(hyperedge)
+                if node in hyperedge.sources:
+                    node.outgoing.append(hyperedge)
+
+
     def build_dot_file(self, showintro=True, addedgelabels=True,
                        showedgelabels=True, edgeid=True, edgeocc=False,
                        edgeuse=True, statstype="rel", weightedges=False,
@@ -2414,7 +2437,11 @@ class CausalGraph(object):
                         else:
                             node_str += "<br/> {} ".format(node_lines[i])
                     dot_str += '[label=<{}>'.format(node_str)
-                    dot_str += ', shape={}, style=filled'.format(node_shape)
+                    dot_str += ', shape={}, style="filled'.format(node_shape)
+                    if node.pdh == False:
+                        dot_str += '"'
+                    elif node.pdh == True:
+                        dot_str += ',dashed"'
                     if node.highlighted == True:
                        dot_str += ', fillcolor=gold, penwidth=2'
                     else:
@@ -6418,18 +6445,18 @@ def buildpathways(eoi, causalgraphs=None, siphon=False, ignorelist=[],
                 edgeid=edgeid, edgeocc=edgeocc, edgeprob=edgeprob,
                 weightedges=weightedges, color=color, writedot=writedot,
                 rmprev=rmprev, intropos=intropos, rulepos=rulepos)
-    print("dualstory")
-    foldpathway(eoi, "dualstory", showintro=showintro,
-                addedgelabels=addedgelabels, showedgelabels=showedgelabels,
-                edgeid=edgeid, edgeocc=edgeocc, edgeprob=edgeprob,
-                weightedges=weightedges, color=color, writedot=writedot,
-                rmprev=rmprev, intropos=intropos, rulepos=rulepos)
-    print("statestory")
-    foldpathway(eoi, "statestory", showintro=showintro,
-                addedgelabels=addedgelabels, showedgelabels=showedgelabels,
-                edgeid=edgeid, edgeocc=edgeocc, edgeprob=edgeprob,
-                weightedges=weightedges, color=color, writedot=writedot,
-                rmprev=rmprev, intropos=intropos, rulepos=rulepos)
+    #print("dualstory")
+    #foldpathway(eoi, "dualstory", showintro=showintro,
+    #            addedgelabels=addedgelabels, showedgelabels=showedgelabels,
+    #            edgeid=edgeid, edgeocc=edgeocc, edgeprob=edgeprob,
+    #            weightedges=weightedges, color=color, writedot=writedot,
+    #            rmprev=rmprev, intropos=intropos, rulepos=rulepos)
+    #print("statestory")
+    #foldpathway(eoi, "statestory", showintro=showintro,
+    #            addedgelabels=addedgelabels, showedgelabels=showedgelabels,
+    #            edgeid=edgeid, edgeocc=edgeocc, edgeprob=edgeprob,
+    #            weightedges=weightedges, color=color, writedot=writedot,
+    #            rmprev=rmprev, intropos=intropos, rulepos=rulepos)
 
 
 def foldpathway(eoi, prefix, causalgraphs=None, siphon=False, ignorelist=[],
@@ -6466,7 +6493,8 @@ def foldpathway(eoi, prefix, causalgraphs=None, siphon=False, ignorelist=[],
     #pathway.rank_sequentially(intropos="top", rulepos="bot")
     #pathway.rank_sequentially(intropos="bot", rulepos="top") # <--
     #pathway.rank_sequentially(intropos="bot", rulepos="bot")
-    #pathway.get_maxrank() 
+    #pathway.get_maxrank()
+    pathway.build_adjacency()
     pathway.rank_sequentially(intropos=intropos, rulepos=rulepos)
 
     # Compute the number of unique instances of precedence relationships.
@@ -6615,14 +6643,84 @@ def foldpathway(eoi, prefix, causalgraphs=None, siphon=False, ignorelist=[],
     #        #    merge_nodes(unique_merge_inds, pathway.statenodes,
     #        #                pathway.hyperedges)
 
-    # Write dual pathway.
+    # Find path dependent hubs (PDH). Path dependent hubs have different
+    # contexts (rule node with 's), with each context having outgoing
+    # hyperedges with different rules as sources or targets.
+    primed_rules = []
+    for eventnode in pathway.eventnodes:
+        if eventnode.label[-1] == "'":
+            rule = eventnode.label.replace("'", "").strip()
+            if rule not in primed_rules:
+                primed_rules.append(rule)
+    # For each primed_rule, find the group of outgoing edges of each node
+    # that correspond to that primed_rule.
+    outedge_dict = {}
+    for eventnode in pathway.eventnodes:
+        primed_rule = None
+        for rule in primed_rules:
+            if rule in eventnode.label:
+                primed_rule = rule
+                break
+        eventnode.rule = primed_rule
+        if primed_rule != None:
+            hgroup = []
+            for hyperedge in eventnode.outgoing:
+                slbls = []
+                for s in hyperedge.sources:
+                    slbls.append(s.label.replace("'", "").strip())
+                tlbl = hyperedge.target.label.replace("'", "").strip()
+                h = {"sources": slbls, "target": tlbl}
+                hgroup.append(h)
+            if primed_rule not in outedge_dict.keys():
+                outedge_dict[primed_rule] = [hgroup]
+            else:
+                outedge_dict[primed_rule].append(hgroup)
+    # For a given primed_rule, if all the groups of outgoing edges are the
+    # same (ignoring 's), then the primed_rule is NOT a path dependent hub.
+    # It is a PDH otherwise.
+    pdhs = {}
+    for primed_rule in outedge_dict.keys():
+        firstgroup = outedge_dict[primed_rule][0]
+        all_same = True
+        for i in range(1, len(outedge_dict[primed_rule])):
+            # Compare firstgroup with the edge group i.
+            secondgroup = outedge_dict[primed_rule][i]
+            same_hedge_group = True
+            list2_indexes = list(range(len(secondgroup)))
+            for h1 in firstgroup:
+                same_h = False
+                src_cnt1 = collections.Counter(h1["sources"])
+                for j in list2_indexes:
+                    h2 = secondgroup[j]
+                    src_cnt2 = collections.Counter(h2["sources"])
+                    if h1["target"] == h2["target"] and src_cnt1 == src_cnt2:
+                        list2_indexes.remove(j)
+                        same_h = True
+                        break
+                if same_h == False:
+                    same_hedge_group = False
+                    break
+            if len(list2_indexes) > 0:
+                same_hedge_group = False
+            if same_hedge_group == False:
+                all_same = False
+                break
+        if all_same == True:
+            pdhs[primed_rule] = False
+        else:
+            pdhs[primed_rule] = True       
+    for eventnode in pathway.eventnodes:
+        if eventnode.rule != None:
+            eventnode.pdh = pdhs[eventnode.rule]
+
+    # Write pathway with splited nodes when they have different context.
     if writedot == True:
         if prefix == "modstory":
-            pathway.filename = "eventpathway.dot"
+            pathway.filename = "eventpathway-split.dot"
         if prefix == "dualstory":
-            pathway.filename = "dualpathway.dot"
+            pathway.filename = "dualpathway-split.dot"
         if prefix == "statestory":
-            pathway.filename = "statepathway.dot"
+            pathway.filename = "statepathway-split.dot"
         pathway.build_dot_file(showintro, addedgelabels, showedgelabels,
                                edgeid, edgeocc, edgeprob, statstype,
                                weightedges, edgewidthscale=1.5)
@@ -6631,211 +6729,18 @@ def foldpathway(eoi, prefix, causalgraphs=None, siphon=False, ignorelist=[],
         outfile.write(pathway.dot_file)
         outfile.close()
 
-# Color and merge section.
-    if prefix == "modstory" or prefix == "dualstory":
-        # Color pathways to distiguish admissible paths.
-        if prefix == "modstory":
-            pathway.filename = "eventpathway-color.dot"
-        if prefix == "dualstory":
-            pathway.filename = "dualpathway-color.dot"
-        #if prefix == "statestory":
-        #    pathway.filename = "statepathway-color.dot"
-        #selectedlabel = "C binds D"
-        #selectedlabel = "D binds G"
-        #selectedlabel = "E binds F"
-        selectedlabel = "A binds B"
-        #selectedlabel = "ABL1 act"
-        # Initalize color id lists.
-        next_col_id = 1
-        selectednodes = []
-        for hyperedge in pathway.hyperedges:
-            if selectedlabel in hyperedge.target.label:
-                hyperedge.color_ids = [next_col_id]
-                next_col_id += 1
-                if hyperedge.target not in selectednodes:
-                    selectednodes.append(hyperedge.target)
-            else:
-                hyperedge.color_ids = []
-        # Propagate color ids downward 1 step (or two steps if dual story).
-        next_nodes = []
-        for selectednode in selectednodes:
-            incoming_edges = []
-            outgoing_edges = []
-            for hyperedge in pathway.hyperedges:
-                if hyperedge.target == selectednode:
-                    incoming_edges.append(hyperedge)
-                if selectednode in hyperedge.sources:
-                    outgoing_edges.append(hyperedge)
-                    if hyperedge.target not in next_nodes:
-                        next_nodes.append(hyperedge.target)
-            # Find color ids from incoming edges.
-            new_ids = []
-            for inedge in incoming_edges:
-                new_ids.append(inedge.color_ids[0])
-            # Assign new color ids to outgoing edges.
-            # Every outgoing edge takes up all the colors from incoming edges.
-            for outedge in outgoing_edges:
-                outedge.color_ids += new_ids
-        if prefix == "dualstory":
-            current_nodes = next_nodes
-            next_nodes = []
-            for selectednode in current_nodes:
-                incoming_edges = []
-                outgoing_edges = []
-                for hyperedge in pathway.hyperedges:
-                    if hyperedge.target == selectednode:
-                        incoming_edges.append(hyperedge)
-                    if selectednode in hyperedge.sources:
-                        outgoing_edges.append(hyperedge)
-                        if hyperedge.target not in next_nodes:
-                            next_nodes.append(hyperedge.target)
-                # Find color ids from incoming edges.
-                new_ids = []
-                for inedge in incoming_edges:
-                    new_ids.append(inedge.color_ids[0])
-                # Assign new color ids to outgoing edges.
-                # Every outgoing edge takes up all the colors from incoming edges.
-                for outedge in outgoing_edges:
-                    outedge.color_ids += new_ids            
-        startingnodes = next_nodes
-        # Propagate color ids upward. Breadth-first.
-
-
-        current_nodes = startingnodes
-        seen_nodes = startingnodes
-        while len(current_nodes) > 0:
-            next_nodes = []
-            for node in current_nodes:
-                incoming_edges = []
-                outgoing_edges = []
-                for hyperedge in pathway.hyperedges:
-                    if hyperedge.target == node:
-                        incoming_edges.append(hyperedge)
-                        for source in hyperedge.sources:
-                            if source not in seen_nodes:
-                                if source not in next_nodes:
-                                    next_nodes.append(source)
-                                    seen_nodes.append(source)
-                    if node in hyperedge.sources:
-                        outgoing_edges.append(hyperedge)
-                # Find new color ids from outgoing edges.
-                existing_ids = []
-                for inedge in incoming_edges:
-                    existing_ids += inedge.color_ids
-                new_ids = []
-                for outedge in outgoing_edges:
-                    for color_id in outedge.color_ids:
-                        if color_id not in existing_ids:
-                            if color_id not in new_ids:
-                                new_ids.append(color_id)
-                # Assign new color ids to incoming edges.
-                if len(incoming_edges) > 0:
-                    incoming_edges[0].color_ids += new_ids
-                    for i in range(1, len(incoming_edges)):
-                        for j in range(len(new_ids)):
-                            incoming_edges[i].color_ids.append(next_col_id)
-                            next_col_id += 1
-            current_nodes = next_nodes
-
-
-        # Make a final passage from top to bottom.
-        current_nodes = []
-        for node in pathway.eventnodes:
-            if node.first == True:
-                current_nodes.append(node)
-        while len(current_nodes) > 0:
-            next_nodes = []
-            for node in current_nodes:
-                incoming_edges = []
-                outgoing_edges = []
-                for hyperedge in pathway.hyperedges:
-                    if hyperedge.target == node:
-                        incoming_edges.append(hyperedge)
-                    if node in hyperedge.sources:
-                        outgoing_edges.append(hyperedge)
-                        if hyperedge.target not in next_nodes:
-                            if hyperedge.target not in startingnodes:
-                                next_nodes.append(hyperedge.target)
-                # Find new color ids from incoming edges.
-                existing_ids = []
-                for outedge in outgoing_edges:
-                    existing_ids += outedge.color_ids
-                new_ids = []
-                for inedge in incoming_edges:
-                    for color_id in inedge.color_ids:
-                        if color_id not in existing_ids:
-                            if color_id not in new_ids:
-                                new_ids.append(color_id)
-                # Add suplementary colors to outgoing edges.
-                if len(outgoing_edges) > 0:
-                    for outedge in outgoing_edges:
-                        outedge.color_ids += new_ids
-            current_nodes = next_nodes
-
-        # Remove color from any edge that has all the colors.
-        a = list(range(1, next_col_id))
-        for hyperedge in pathway.hyperedges:
-            c = hyperedge.color_ids
-            if collections.Counter(c) == collections.Counter(a):
-                hyperedge.color_ids = []
-
-        # Color edges according their color ids and some color palette.
-        assign_colors(pathway, next_col_id)
-        #color_palette = ["black", "blue1", "firebrick2", "chartreuse3",
-        #                 "gold2", "darkviolet", "darkorange1", "deepskyblue1",
-        #                 "springgreen", "brown2", "magenta", "orange"]
-        #for hyperedge in pathway.hyperedges:
-        #    l = len(hyperedge.color_ids)
-        #    if l > 0:
-        #        if l == 1:
-        #            color_str = color_palette[hyperedge.color_ids[0]]
-        #        else:
-        #            col = color_palette[hyperedge.color_ids[0]]
-        #            color_str = '"{}'.format(col)
-        #            for i in range(1, l):
-        #                col = color_palette[hyperedge.color_ids[i]]
-        #                color_str += ':{}'.format(col)
-        #            color_str += ';{:.2}"'.format(1/float(l))
-        #        hyperedge.color = color_str
-        #        hyperedge.midcolor = color_palette[hyperedge.color_ids[0]]
-        #        for subedge in hyperedge.edgelist:
-        #            subedge.color = color_str
-
-        pathway.build_dot_file(showintro, addedgelabels, showedgelabels,
-                               edgeid, edgeocc, edgeprob, statstype,
-                               weightedges, edgewidthscale=1.5)
-        output_path = "{}/{}".format(eoi, pathway.filename)
-        outfile = open(output_path, "w")
-        outfile.write(pathway.dot_file)
-        outfile.close()
-
+    # Merge nodes corresponding to a same rule (now ignoring 's).
     if prefix == "modstory":
         for eventnode in pathway.eventnodes:       
             eventnode.label = eventnode.label.replace("'", "").strip()
-        foldstory(pathway, fusedges=False)
-        # Fuse identical hyperedges take colors into account.
-        pair_found = True
-        while pair_found == True:
-            pair_found = False
-            for i in range(len(pathway.hyperedges)):
-                h1 = pathway.hyperedges[i]
-                for j in range(i+1, len(pathway.hyperedges)):
-                    h2 = pathway.hyperedges[j]
-                    are_equi, corr = equivalent_hyperedges(h1, h2, False, True)
-                    if are_equi == True:
-                        for k in range(len(h1.edgelist)):
-                            main_edge = h1.edgelist[k]
-                            other_edge = h2.edgelist[corr[k]]
-                            main_edge.weight += other_edge.weight
-                        h1.color_ids += h2.color_ids
-                        del(pathway.hyperedges[j])
-                        pair_found = True
-                        break
-                if pair_found == True:
-                    break
+        foldstory(pathway)
+        pathway.build_adjacency()
+        pathway.rank_sequentially(intropos=intropos, rulepos=rulepos)
         pathway.build_nointro()
-        assign_colors(pathway, next_col_id)
-        pathway.filename = "eventpathway-merged.dot"
+        pathway.reverse_subedges()
+        pathway.assign_label_carriers(showintro)
+        pathway.align_vertical()
+        pathway.filename = "eventpathway.dot"
         pathway.build_dot_file(showintro, addedgelabels, showedgelabels,
                                edgeid, edgeocc, edgeprob, statstype,
                                weightedges, edgewidthscale=1.5)
@@ -6843,20 +6748,240 @@ def foldpathway(eoi, prefix, causalgraphs=None, siphon=False, ignorelist=[],
         outfile = open(output_path, "w")
         outfile.write(pathway.dot_file)
         outfile.close()
-        # Colorless version of the merged event pathway.
-        for hyperedge in pathway.hyperedges:
-            hyperedge.color = "black"
-            hyperedge.midcolor = "black"
-            for subedge in hyperedge.edgelist:
-                subedge.color = "black"
-        pathway.filename = "eventpathway-merged-black.dot"
-        pathway.build_dot_file(showintro, addedgelabels, showedgelabels,
-                               edgeid, edgeocc, edgeprob, statstype,
-                               weightedges, edgewidthscale=1.5)
-        output_path = "{}/{}".format(eoi, pathway.filename)
-        outfile = open(output_path, "w")
-        outfile.write(pathway.dot_file)
-        outfile.close()
+
+
+## Color and merge section.
+#    if prefix == "modstory" or prefix == "dualstory":
+#        # Color pathways to distiguish admissible paths.
+#        if prefix == "modstory":
+#            pathway.filename = "eventpathway-color.dot"
+#        if prefix == "dualstory":
+#            pathway.filename = "dualpathway-color.dot"
+#        #if prefix == "statestory":
+#        #    pathway.filename = "statepathway-color.dot"
+#        #selectedlabel = "C binds D"
+#        selectedlabel = "D binds G"
+#        #selectedlabel = "E binds F"
+#        #selectedlabel = "A binds B"
+#        #selectedlabel = "ABL1 act"
+#
+#        # !!! THIS IS THE BEGINNIGN OF THE PART TO CHANGE !!!
+#
+#        # Initalize color id lists.
+#        next_col_id = 1
+#        selectednodes = []
+#        for hyperedge in pathway.hyperedges:
+#            if selectedlabel in hyperedge.target.label:
+#                hyperedge.color_ids = [next_col_id]
+#                next_col_id += 1
+#                if hyperedge.target not in selectednodes:
+#                    selectednodes.append(hyperedge.target)
+#            else:
+#                hyperedge.color_ids = []
+#        # Propagate color ids downward 1 step (or two steps if dual story).
+#        next_nodes = []
+#        for selectednode in selectednodes:
+#            incoming_edges = []
+#            outgoing_edges = []
+#            for hyperedge in pathway.hyperedges:
+#                if hyperedge.target == selectednode:
+#                    incoming_edges.append(hyperedge)
+#                if selectednode in hyperedge.sources:
+#                    outgoing_edges.append(hyperedge)
+#                    if hyperedge.target not in next_nodes:
+#                        next_nodes.append(hyperedge.target)
+#            # Find color ids from incoming edges.
+#            new_ids = []
+#            for inedge in incoming_edges:
+#                new_ids.append(inedge.color_ids[0])
+#            # Assign new color ids to outgoing edges.
+#            # Every outgoing edge takes up all the colors from incoming edges.
+#            for outedge in outgoing_edges:
+#                outedge.color_ids += new_ids
+#        if prefix == "dualstory":
+#            current_nodes = next_nodes
+#            next_nodes = []
+#            for selectednode in current_nodes:
+#                incoming_edges = []
+#                outgoing_edges = []
+#                for hyperedge in pathway.hyperedges:
+#                    if hyperedge.target == selectednode:
+#                        incoming_edges.append(hyperedge)
+#                    if selectednode in hyperedge.sources:
+#                        outgoing_edges.append(hyperedge)
+#                        if hyperedge.target not in next_nodes:
+#                            next_nodes.append(hyperedge.target)
+#                # Find color ids from incoming edges.
+#                new_ids = []
+#                for inedge in incoming_edges:
+#                    new_ids.append(inedge.color_ids[0])
+#                # Assign new color ids to outgoing edges.
+#                # Every outgoing edge takes up all the colors from incoming edges.
+#                for outedge in outgoing_edges:
+#                    outedge.color_ids += new_ids            
+#        startingnodes = next_nodes
+#        # Propagate color ids upward. Breadth-first.
+#
+#
+#        current_nodes = startingnodes
+#        seen_nodes = startingnodes
+#        while len(current_nodes) > 0:
+#            next_nodes = []
+#            for node in current_nodes:
+#                incoming_edges = []
+#                outgoing_edges = []
+#                for hyperedge in pathway.hyperedges:
+#                    if hyperedge.target == node:
+#                        incoming_edges.append(hyperedge)
+#                        for source in hyperedge.sources:
+#                            if source not in seen_nodes:
+#                                if source not in next_nodes:
+#                                    next_nodes.append(source)
+#                                    seen_nodes.append(source)
+#                    if node in hyperedge.sources:
+#                        outgoing_edges.append(hyperedge)
+#                # Find new color ids from outgoing edges.
+#                existing_ids = []
+#                for inedge in incoming_edges:
+#                    existing_ids += inedge.color_ids
+#                new_ids = []
+#                for outedge in outgoing_edges:
+#                    for color_id in outedge.color_ids:
+#                        if color_id not in existing_ids:
+#                            if color_id not in new_ids:
+#                                new_ids.append(color_id)
+#                # Assign new color ids to incoming edges.
+#                if len(incoming_edges) > 0:
+#                    incoming_edges[0].color_ids += new_ids
+#                    for i in range(1, len(incoming_edges)):
+#                        for j in range(len(new_ids)):
+#                            incoming_edges[i].color_ids.append(next_col_id)
+#                            next_col_id += 1
+#            current_nodes = next_nodes
+#
+#
+#        # Make a final passage from top to bottom.
+#        current_nodes = []
+#        for node in pathway.eventnodes:
+#            if node.first == True:
+#                current_nodes.append(node)
+#        while len(current_nodes) > 0:
+#            next_nodes = []
+#            for node in current_nodes:
+#                incoming_edges = []
+#                outgoing_edges = []
+#                for hyperedge in pathway.hyperedges:
+#                    if hyperedge.target == node:
+#                        incoming_edges.append(hyperedge)
+#                    if node in hyperedge.sources:
+#                        outgoing_edges.append(hyperedge)
+#                        if hyperedge.target not in next_nodes:
+#                            if hyperedge.target not in startingnodes:
+#                                next_nodes.append(hyperedge.target)
+#                # Find new color ids from incoming edges.
+#                existing_ids = []
+#                for outedge in outgoing_edges:
+#                    existing_ids += outedge.color_ids
+#                new_ids = []
+#                for inedge in incoming_edges:
+#                    for color_id in inedge.color_ids:
+#                        if color_id not in existing_ids:
+#                            if color_id not in new_ids:
+#                                new_ids.append(color_id)
+#                # Add suplementary colors to outgoing edges.
+#                if len(outgoing_edges) > 0:
+#                    for outedge in outgoing_edges:
+#                        outedge.color_ids += new_ids
+#            current_nodes = next_nodes
+#
+#        # Remove color from any edge that has all the colors.
+#        a = list(range(1, next_col_id))
+#        for hyperedge in pathway.hyperedges:
+#            c = hyperedge.color_ids
+#            if collections.Counter(c) == collections.Counter(a):
+#                hyperedge.color_ids = []
+#
+#        # Color edges according their color ids and some color palette.
+#        assign_colors(pathway, next_col_id)
+#        #color_palette = ["black", "blue1", "firebrick2", "chartreuse3",
+#        #                 "gold2", "darkviolet", "darkorange1", "deepskyblue1",
+#        #                 "springgreen", "brown2", "magenta", "orange"]
+#        #for hyperedge in pathway.hyperedges:
+#        #    l = len(hyperedge.color_ids)
+#        #    if l > 0:
+#        #        if l == 1:
+#        #            color_str = color_palette[hyperedge.color_ids[0]]
+#        #        else:
+#        #            col = color_palette[hyperedge.color_ids[0]]
+#        #            color_str = '"{}'.format(col)
+#        #            for i in range(1, l):
+#        #                col = color_palette[hyperedge.color_ids[i]]
+#        #                color_str += ':{}'.format(col)
+#        #            color_str += ';{:.2}"'.format(1/float(l))
+#        #        hyperedge.color = color_str
+#        #        hyperedge.midcolor = color_palette[hyperedge.color_ids[0]]
+#        #        for subedge in hyperedge.edgelist:
+#        #            subedge.color = color_str
+#
+#        pathway.build_dot_file(showintro, addedgelabels, showedgelabels,
+#                               edgeid, edgeocc, edgeprob, statstype,
+#                               weightedges, edgewidthscale=1.5)
+#        output_path = "{}/{}".format(eoi, pathway.filename)
+#        outfile = open(output_path, "w")
+#        outfile.write(pathway.dot_file)
+#        outfile.close()
+#
+#        # !!! THIS IS THE END OF THE PART TO CHANGE !!!
+#
+#    if prefix == "modstory":
+#        for eventnode in pathway.eventnodes:       
+#            eventnode.label = eventnode.label.replace("'", "").strip()
+#        foldstory(pathway, fusedges=False)
+#        # Fuse identical hyperedges take colors into account.
+#        pair_found = True
+#        while pair_found == True:
+#            pair_found = False
+#            for i in range(len(pathway.hyperedges)):
+#                h1 = pathway.hyperedges[i]
+#                for j in range(i+1, len(pathway.hyperedges)):
+#                    h2 = pathway.hyperedges[j]
+#                    are_equi, corr = equivalent_hyperedges(h1, h2, False, True)
+#                    if are_equi == True:
+#                        for k in range(len(h1.edgelist)):
+#                            main_edge = h1.edgelist[k]
+#                            other_edge = h2.edgelist[corr[k]]
+#                            main_edge.weight += other_edge.weight
+#                            main_edge.number += other_edge.number
+#                        h1.color_ids += h2.color_ids
+#                        del(pathway.hyperedges[j])
+#                        pair_found = True
+#                        break
+#                if pair_found == True:
+#                    break
+#        pathway.build_nointro()
+#        assign_colors(pathway, next_col_id)
+#        pathway.filename = "eventpathway-merged.dot"
+#        pathway.build_dot_file(showintro, addedgelabels, showedgelabels,
+#                               edgeid, edgeocc, edgeprob, statstype,
+#                               weightedges, edgewidthscale=1.5)
+#        output_path = "{}/{}".format(eoi, pathway.filename)
+#        outfile = open(output_path, "w")
+#        outfile.write(pathway.dot_file)
+#        outfile.close()
+#        # Colorless version of the merged event pathway.
+#        for hyperedge in pathway.hyperedges:
+#            hyperedge.color = "black"
+#            hyperedge.midcolor = "black"
+#            for subedge in hyperedge.edgelist:
+#                subedge.color = "black"
+#        pathway.filename = "eventpathway-merged-black.dot"
+#        pathway.build_dot_file(showintro, addedgelabels, showedgelabels,
+#                               edgeid, edgeocc, edgeprob, statstype,
+#                               weightedges, edgewidthscale=1.5)
+#        output_path = "{}/{}".format(eoi, pathway.filename)
+#        outfile = open(output_path, "w")
+#        outfile.write(pathway.dot_file)
+#        outfile.close()
 
     return pathway
 
@@ -6964,6 +7089,7 @@ def foldstory(story, fusedges=True):
                             main_edge = story.hyperedges[i].edgelist[k]
                             other_edge = story.hyperedges[j].edgelist[corr[k]]
                             main_edge.weight += other_edge.weight
+                            main_edge.number += other_edge.number
                         del(story.hyperedges[j])
                         pair_found = True
                         break
