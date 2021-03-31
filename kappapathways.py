@@ -17,6 +17,7 @@ import copy
 import textwrap
 import time
 import collections
+import itertools
 
 
 class EventNode(object):
@@ -758,17 +759,17 @@ class CausalGraph(object):
             if "label=" in line and "Occurrence" not in line:
                 if "->" not in line and "rank = same" not in line:
                     if line[0:2] == "//":
-                       dead_line = line[2:]
+                       read_line = line[2:]
                     else:
                        read_line = line
                     tokens = read_line.split()
                     ori_id = tokens[0]
                     if '"' in ori_id:
                         ori_id = ori_id[1:-1]
-                    if "ev" not in ori_id and "state" not in ori_id:
-                        node_id = "ev{}".format(ori_id)
-                    else:
+                    if any(s in ori_id for s in ["ev", "state", "mid"]):
                         node_id = ori_id
+                    else:
+                        node_id = "ev{}".format(ori_id)
                     lbl_start = read_line.index("label=")+7
                     shrk = False
                     if "hlabel=" in read_line:
@@ -958,7 +959,8 @@ class CausalGraph(object):
                 node.label = node.label[6:]
                 if node.label == "Lig, Lig":
                     node.label = "Lig"
-        self.create_hyperedges()
+        if self.hypergraph == False:
+            self.create_hyperedges()
         if self.producedby != "KappaPathways":
             self.find_first_rules()
             self.rank_sequentially()
@@ -1485,6 +1487,235 @@ class CausalGraph(object):
                             edge.layout_weight = 0
 
 
+    def get_all_reachables(self):
+        """
+        Assign a list of all reachable nodes to each rule_output node. This
+        algorithm seeks to optimize computation time by starting at the bottom
+        of the graph. While gathering the reachable nodes of a current
+        rule_output node, if a previous rule_output node is found, the
+        reachables of that previous rule_output are added to the current
+        rule_output's reachables instead of continuing the search.
+
+        The order of the nodes within the lists of reachable nodes cannot be
+        guaranteed.
+
+        This algorithm does not check for loops, use only on stories, not
+        quotiented pathways.
+        """
+
+        # Initialize lists of reachable nodes.
+        for node in self.statenodes + self.eventnodes:
+            node.reachable = []
+        # Find the last rule_outputs (the ones pointing directly to the EOI).
+        outputs_fringe = []
+        for edge in self.eoi_node.incoming:
+            outputs_fringe.append(edge.source)
+        # Read graph upstream.
+        seen_nodes = []
+        while len(outputs_fringe) > 0:
+            # Find the reachable nodes of each output_fringe node here,
+            # checking previous node.reachable.
+            for output_node in outputs_fringe:
+                self.get_reachables(output_node)
+                #if output_node not in seen_nodes:
+                #    seen_nodes.append(output_node)
+            # Go up once.
+            up_next = []
+            for output_node in outputs_fringe:
+                if len(output_node.incoming) > 0:
+                    for edge in output_node.incoming:
+                        up_next.append(edge.source)
+            outputs_fringe = up_next
+            # Keep going up until all fringe nodes are rule_outputs
+            # (or have not incoming edge).
+            outputs_reached = False
+            while outputs_reached == False:
+                outputs_reached = True
+                up_next = []
+                for up_node in outputs_fringe:
+                    # Keep up_node if it is in rule_outputs.
+                    if up_node in self.rule_outputs:
+                        up_next.append(up_node)
+                    elif len(up_node.incoming) > 0:
+                        for edge in up_node.incoming:
+                            if edge.source not in seen_nodes:
+                                up_next.append(edge.source)
+                                seen_nodes.append(edge.source)
+                #if len(up_next) < 3:
+                #    print(">>>", len(up_next))
+                #    for n in up_next:
+                #        print(n.label)
+                outputs_fringe = up_next
+                # Check if all fringe nodes are rule_outputs.
+                for up_node in outputs_fringe:
+                    if up_node not in self.rule_outputs:
+                        outputs_reached = False
+                        break
+
+
+    def get_reachables(self, from_node):
+        """
+        Return all downstream reachable nodes from given node. If a node is
+        found with already defined reachable list, stop search and add its
+        list of reachables to current node's reachable.
+        """
+
+        # Initialize fringe nodes as the immediate targets of from_node.
+        fringe = []
+        for edge in from_node.outgoing:
+            fringe.append(edge.target)
+        list_of_reachables = []
+        while len(fringe) > 0:
+            # Add fringe nodes to from_node reachables.
+            for node in fringe:
+                if node not in list_of_reachables:
+                    list_of_reachables.append(node)
+            # Also add fringe node's own reachables if it has some.
+            next_fringe = []
+            for node in fringe:
+                if len(node.reachable) > 0:
+                    for rnode in node.reachable:
+                        if rnode not in list_of_reachables:
+                            list_of_reachables.append(rnode)
+                # If the fringe node does not have reachables, put its
+                # immediate target in the next fringe round.
+                else:
+                    for edge in node.outgoing:
+                        if edge.target not in list_of_reachables:
+                            next_fringe.append(edge.target)
+            fringe = next_fringe
+        from_node.reachable = list_of_reachables
+
+
+    def reachability_with_block(self, from_node, to_nodes, block):
+        """
+        Tell if at least one of the to_nodes is reachable from the from_node
+        without passing through the block node.
+        The to_nodes should be the reachable nodes of the blocking node.
+        """
+
+        reachable = False
+        # Initialize fringe nodes as the immediate targets of from_node.
+        fringe = []
+        for edge in from_node.outgoing:
+            fringe.append(edge.target)
+        list_of_reachables = []
+        while len(fringe) > 0:
+            # Check if one of the to_nodes is in the fringe.
+            for node in fringe:
+                if node in to_nodes:
+                    reachable = True
+            if reachable == True:
+                break
+            # Add fringe nodes to from_node's reachables.
+            for node in fringe:
+                if node not in list_of_reachables:
+                    list_of_reachables.append(node)
+            # Follow edges downstream to find next fringe round. Do not add
+            # node if it is a state node that modifies a site found in
+            # from_node's edit.
+            next_fringe = []
+            for node in fringe:
+                if isinstance(node, StateNode):
+                    is_mod = self.modifies_state(from_node.edit, node.edit)
+                else:
+                    is_mod = False
+                if is_mod == False:
+                    if node != block:
+                        for edge in node.outgoing:
+                            if edge.target not in list_of_reachables:
+                                next_fringe.append(edge.target)
+            fringe = next_fringe
+
+        return reachable
+
+
+    def modifies_state(self, state1, state2):
+        """
+        Check if state2 contains at least one site which is a modification of at
+        least one site of state1.
+        """
+
+        is_modification = False
+        for agent1 in state1:
+            n1 = agent1["name"]
+            id1 = agent1["id"]
+            s1 = agent1["sites"]
+            for agent2 in state2:
+                n2 = agent2["name"]
+                id2 = agent2["id"]
+                if n1 == n2 and id1 == id2:
+                    s2 = agent2["sites"]
+                    for site1 in s1:
+                        for site2 in s2:
+                            if site1["name"] == site2["name"]:
+                                is_modification = True
+                                break
+                        if is_modification == True:
+                            break
+                if is_modification == True:
+                    break
+            if is_modification == True:
+                break
+
+        return is_modification
+
+
+#    def oldreachability_with_block(self, from_node, to_nodes, block):
+#        """
+#        Tell if at least one of the to_nodes is reachable from the from_node
+#        without passing through the block node.
+#        The to_nodes should be the reachable nodes of the blocking node.
+#        """
+#
+#        reachable = False
+#        # Initialize fringe nodes as the immediate targets of from_node.
+#        fringe = []
+#        for edge in from_node.outgoing:
+#            fringe.append(edge.target)
+#        list_of_reachables = []
+#        while len(fringe) > 0:
+#            # Check if one of the to_nodes is in the fringe.
+#            for node in fringe:
+#                if node in to_nodes:
+#                    reachable = True
+#            if reachable == True:
+#                break
+#            # Add fringe nodes to from_node reachables if they are not the
+#            # blocking node.
+#            for node in fringe:
+#                if node != block:
+#                    if node not in list_of_reachables:
+#                        list_of_reachables.append(node)
+#            # Follow edges downstream to find next fringe round if fringe node
+#            # is not blocking.
+#            next_fringe = []
+#            for node in fringe:
+#                if node != block:
+#                    for edge in node.outgoing:
+#                        if edge.target not in list_of_reachables:
+#                            next_fringe.append(edge.target)
+#            fringe = next_fringe
+#
+#        return reachable
+
+
+#    def reachable(self, from_node, block_nodes=[])
+#        """
+#        Return all downstream reachable nodes from given node. Optionally
+#        provide a list of blocking nodes. Reachability search stops if a
+#        blocking node is met.
+#
+#        This is faster than finding all paths to the EOI in large graphs
+#        because it does not produce a combinatorial explosion. However, the
+#        order of the nodes within the list of reachable nodes cannot be
+#        guaranteed.
+#
+#        This algorithm does not check for loops, use only on stories, not
+#        quotiented pathways.
+#        """
+
+
     def follow_edges(self, direction, from_node, to_nodes=[], block=None,
                      ignore_conflict=False, stop_at_first=False):
         """
@@ -1712,6 +1943,10 @@ class CausalGraph(object):
         are hidden.
         """
 
+        # Reset adjacency lists to avoid infinit loop when doing deepcopy.
+        for node in self.eventnodes + self.statenodes:
+            node.incoming = []
+            node.outgoing = []
         for hyperedge in self.hyperedges:
             hyperedge.underlying = False
         self.coverhyperedges = []
@@ -2319,7 +2554,7 @@ class CausalGraph(object):
             covermesh.assign_label_carrier()
 
 
-    def build_adjacency(self):
+    def build_adjacency(self, hyper=False):
         """
         For each node, build the lists of incoming and outgoing hyperedges.
         """
@@ -2327,11 +2562,18 @@ class CausalGraph(object):
         for node in self.eventnodes + self.statenodes:
             node.incoming = []
             node.outgoing = []
-            for hyperedge in self.hyperedges:
-                if node == hyperedge.target:
-                    node.incoming.append(hyperedge)
-                if node in hyperedge.sources:
-                    node.outgoing.append(hyperedge)
+            if hyper == False:
+                for edge in self.causaledges:
+                    if node == edge.target:
+                        node.incoming.append(edge)
+                    if node == edge.source:
+                        node.outgoing.append(edge)
+            elif hyper == True:
+                for hyperedge in self.hyperedges:
+                    if node == hyperedge.target:
+                        node.incoming.append(hyperedge)
+                    if node in hyperedge.sources:
+                        node.outgoing.append(hyperedge)
 
 
     def build_dot_file(self, showintro=True, addedgelabels=True,
@@ -2442,10 +2684,12 @@ class CausalGraph(object):
                         dot_str += '"'
                     elif node.pdh == True:
                         dot_str += ',dashed"'
+                    #if node.highlighted == True:
+                    #   dot_str += ', fillcolor=gold, penwidth=2'
+                    #else:
+                    dot_str += ', fillcolor={}'.format(node_color)
                     if node.highlighted == True:
-                       dot_str += ', fillcolor=gold, penwidth=2'
-                    else:
-                       dot_str += ', fillcolor={}'.format(node_color)
+                        dot_str += ', penwidth=4'
                     if node.intro == True:
                         dot_str += ', intro={}'.format(node.intro)
                     if node.first == True:
@@ -2469,10 +2713,12 @@ class CausalGraph(object):
                     dot_str += ('{} [label=<{}>'
                                 .format(node.nodeid, node_str))
                     dot_str += ', shape={}, style=filled'.format(node_shape)
+                    #if node.highlighted == True:
+                    #   dot_str += ', fillcolor=gold, penwidth=2'
+                    #else:
+                    dot_str += ', fillcolor={}'.format(node_color)
                     if node.highlighted == True:
-                       dot_str += ', fillcolor=gold, penwidth=2'
-                    else:
-                       dot_str += ', fillcolor={}'.format(node_color)
+                        dot_str += ', penwidth=4'
                     if node.intro == True:
                         dot_str += ', intro={}'.format(node.intro)
                     if node.first == True:
@@ -3310,8 +3556,8 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
     #stories = tmp_stories
     for story in stories:
         print(story.filename) 
-        # Reset hyperedges.
-        story.hyperedges = []
+        # Reset hyperedges...don't do that
+        #story.hyperedges = []
         # Get actions for each event node.
         for eventnode in story.eventnodes:
             step = steps[int(eventnode.nodeid[2:])]
@@ -3647,21 +3893,24 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
         print(story.filename)
         story.hyperedges = []
         story.rule_outputs = []
+        story.build_adjacency(hyper=False)
         for edge in story.causaledges:
             if isinstance(edge.source, EventNode):
                 if edge.source.intro == False:
                     if isinstance(edge.target, StateNode):
                         story.rule_outputs.append(edge.target)
-        for statenode in story.statenodes:
-            statenode.cumulnodes = []
         for eventnode in story.eventnodes:
             if eventnode.label == eoi:
-                eoi_node = eventnode
+                story.eoi_node = eventnode
+        story.get_all_reachables()
+        for statenode in story.statenodes:
+            statenode.cumulnodes = []
         for cr in range(1, story.maxrank):
             current_rank = cr + 0.5
             for statenode in story.rule_outputs:
                 if statenode.rank == current_rank:
-                    fullcumul, src_rule = get_fullcumul(statenode, story)
+                    #fullcumul, src_rule = get_fullcumul(statenode, story)
+                    fullcumul = get_fullcumul(statenode, story)
                     # Check if cumul node is relevant for the future of
                     # statenode. Relevant cumul nodes have at least one
                     # path to the EOI that does not pass through the
@@ -3669,12 +3918,16 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
                     relevantcumul = []
                     remainingcumul = []
                     for cumulnode in fullcumul:
-                        downstream_paths = story.follow_edges("down",
-                            cumulnode, [eoi_node], block=src_rule,
-                            ignore_conflict=True, stop_at_first=False)
-                        # If there is no path, then downstream_paths = [].
-                        if len(downstream_paths) > 0:
+                        relevant = story.reachability_with_block(cumulnode,
+                            statenode.reachable, statenode)
+                        if relevant == True:
                             relevantcumul.append(cumulnode)
+                        #downstream_paths = story.follow_edges("down",
+                        #    cumulnode, [story.eoi_node], block=src_rule,
+                        #    ignore_conflict=True, stop_at_first=False)
+                        ## If there is no path, then downstream_paths = [].
+                        #if len(downstream_paths) > 0:
+                        #    relevantcumul.append(cumulnode)
                     statenode.cumulnodes = relevantcumul
 
                     ## Find immediate upstream state nodes.
@@ -3849,30 +4102,55 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
         outfile.close()
 
     # If a given context is relevant in one story, it must be set as
-    # relevant in all stories.
-    all_cumuls = {}
+    # relevant in all stories. Must take into account that a same type of
+    # edit may be used several times in the context of a node.
+    all_cumul_edits = {}
     for story in stories:
         for statenode in story.rule_outputs:
+            # Get the edit of each cumul node from the current state node.
+            # Since agent ids will not be considered, there may be many
+            # equivalent edits.
+            cumul_edits = []
+            for cn in statenode.cumulnodes:
+                cumul_edits.append(cn.edit)
+            # Get edit label for the current state node.
             edit_lbl = write_context_expression(statenode.edit, hideid=True)
-            if edit_lbl not in all_cumuls.keys():
-                all_cumuls[edit_lbl] = statenode.cumulnodes
+            # If this edit_lbl was not seen before, assign all cumul_edits.
+            if edit_lbl not in all_cumul_edits.keys():
+                all_cumul_edits[edit_lbl] = cumul_edits
+            # Else, if edit_lbl was already seen, add only new cumul_edits,
+            # including dublicates that were not observed before.
             else:
-                # Add cumul nodes that contain an edit (ignoring agent id) that
-                # is not already present in the cumul of current statenode.
-                additional_cumul = []
-                for currentcumul in statenode.cumulnodes:
+                allcumulcopy = copy.deepcopy(all_cumul_edits[edit_lbl])
+                additional_cumul_edits = []
+                for cumul_edit in cumul_edits:
                     cumul_found = False
-                    for prevcumul in all_cumuls[edit_lbl]:
-                        are_same = compare_states(currentcumul.edit,
-                                                  prevcumul.edit,
+                    for i in range(len(allcumulcopy)):
+                        are_same = compare_states(allcumulcopy[i],
+                                                  cumul_edit,
                                                   ignorevalue=False,
                                                   ignoreid=True)
                         if are_same == True:
                             cumul_found = True
+                            del(allcumulcopy[i])
                             break
                     if cumul_found == False:
-                        additional_cumul.append(currentcumul)
-                all_cumuls[edit_lbl] += additional_cumul
+                        additional_cumul_edits.append(cumul_edit)
+                all_cumul_edits[edit_lbl] += additional_cumul_edits
+                #additional_cumul_edits = []
+                #for currentcumul in statenode.cumulnodes:
+                #    cumul_found = False
+                #    for prevcumul_edit in all_cumul_edits[edit_lbl]:
+                #        are_same = compare_states(currentcumul.edit,
+                #                                  prevcumul_edit,
+                #                                  ignorevalue=False,
+                #                                  ignoreid=True)
+                #        if are_same == True:
+                #            cumul_found = True
+                #            break
+                #    if cumul_found == False:
+                #        additional_cumul_edits.append(currentcumul.edit)
+                #all_cumul_edits[edit_lbl] += additional_cumul_edits
     # Rebuild states with relevant upstream context from all stories.
     for story in stories:
         story.hyperedges = []
@@ -3886,21 +4164,20 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
             current_rank = cr + 0.5
             for statenode in story.rule_outputs:
                 if statenode.rank == current_rank:
-                    fullcumul, src_rule = get_fullcumul(statenode, story)
+                    #fullcumul, src_rule = get_fullcumul(statenode, story)
+                    fullcumul = get_fullcumul(statenode, story)
                     edit_lbl = write_context_expression(statenode.edit, hideid=True)
-                    allcumulcopy = copy.deepcopy(all_cumuls[edit_lbl])
+                    allcumulcopy = copy.deepcopy(all_cumul_edits[edit_lbl])
                     # Recheck relevance. I have to redo it instead of taking
                     # back the results from the previous round because adding
-                    # nodes from allcumulcopy after will change the cumul of
-                    # the next rank.
+                    # nodes from allcumulcopy will change the cumul of the
+                    # next rank.
                     relevantcumul = []
                     remainingcumul = []
                     for cumulnode in fullcumul:
-                        downstream_paths = story.follow_edges("down",
-                            cumulnode, [eoi_node], block=src_rule,
-                            ignore_conflict=True, stop_at_first=False)
-                        # If there is no path, then downstream_paths = [[]].
-                        if len(downstream_paths) > 0:
+                        relevant = story.reachability_with_block(cumulnode,
+                            statenode.reachable, statenode)
+                        if relevant == True:
                             relevantcumul.append(cumulnode)
                             # Remove one cumulnode type from allcumulcopy.
                             # This is because I have to keep track of cumul
@@ -3909,7 +4186,7 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
                             # duplicate in fullcumul that is of a type found in
                             # allcumulcopy will be both kept as relevant.
                             for i in range(len(allcumulcopy)):
-                                are_same = compare_states(allcumulcopy[i].edit,
+                                are_same = compare_states(allcumulcopy[i],
                                                           cumulnode.edit,
                                                           ignorevalue=False,
                                                           ignoreid=True)
@@ -3922,7 +4199,7 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
                     # in allcumulcopy.
                     for remainingnode in remainingcumul:
                         for i in range(len(allcumulcopy)):
-                            are_same = compare_states(allcumulcopy[i].edit,
+                            are_same = compare_states(allcumulcopy[i],
                                                       remainingnode.edit,
                                                       ignorevalue=False,
                                                       ignoreid=True)
@@ -3931,31 +4208,6 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
                                 del(allcumulcopy[i])
                                 break
                     statenode.cumulnodes = relevantcumul
-                    
-                    #if statenode.nodeid == "state55":
-                    #    for n in statenode.cumulnodes:
-                    #        print(n)
- 
-                    ## Remove cumul nodes that are not in all_cumuls.
-                    #edit_lbl = write_context_expression(statenode.edit, hideid=True)
-                    #cumul_to_remove = []
-                    #for i in range(len(statenode.cumulnodes)):
-                    #    cumulnode = statenode.cumulnodes[i]
-                    #    # Remove cumulnode if not in all_cumuls[edit_lbl].
-                    #    cumul_found = False
-                    #    for possible_cumul in all_cumuls[edit_lbl]:
-                    #        are_same = compare_states(possible_cumul.edit,
-                    #                                  cumulnode.edit,
-                    #                                  ignorevalue=False,
-                    #                                  ignoreid=True)
-                    #        if are_same == True:
-                    #            cumul_found = True
-                    #            break
-                    #    if cumul_found == False:
-                    #        cumul_to_remove.insert(0, i)
-                    #for i in cumul_to_remove:
-                    #    del(statenode.cumulnodes[i])
-
                     # Build current state node context from the state of
                     # all the relevant_nodes.
                     full_state = copy.deepcopy(statenode.edit)
@@ -3974,7 +4226,6 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
         for statenode in story.statenodes:
             if statenode in story.rule_outputs:
                 statenode.introstate = False
-            #if statenode not in story.rule_outputs:
             else:
                 statenode.state = statenode.edit
                 statenode.introstate = True         
@@ -4596,30 +4847,27 @@ def get_fullcumul(statenode, story):
 
     # Find immediate upstream state nodes.
     # Also get neighbors of state node.
-    for edge in story.causaledges:
-        if edge.target == statenode:
-            src_rule = edge.source
-            break
+    src_rule = statenode.incoming[0].source
     upstream_nodes = []
     neighbors = []
-    for edge in story.causaledges:
-        if edge.secondary == False:
-            if edge.target == src_rule:
-                upstream_nodes.append(edge.source)
-            if edge.source == src_rule:
-                if edge.target != statenode:
-                    neighbors.append(edge.target)
+    for inedge in src_rule.incoming:
+        if inedge.secondary == False:
+            upstream_nodes.append(inedge.source)
+    for outedge in src_rule.outgoing:
+        if outedge.secondary == False:
+            neighbors.append(outedge.source)
     # Add neighbors of upstream state nodes.
     up_rules = []
-    for edge in story.causaledges:
-        if edge.target in upstream_nodes:
-            if edge.source not in up_rules:
-                up_rules.append(edge.source)
+    for up_node in upstream_nodes:
+        for up_edge in up_node.incoming:
+            if up_edge.source not in up_rules:
+                up_rules.append(up_edge.source)
     upstream_neighbors = []
-    for edge in story.causaledges:
-        if edge.source in up_rules:
-            if edge.target not in upstream_nodes:
-                upstream_neighbors.append(edge.target)
+    for up_rule in up_rules:
+        for down_edge in up_rule.outgoing:
+            if down_edge.target not in upstream_nodes:
+                if down_edge.target not in upstream_neighbors:
+                    upstream_neighbors.append(down_edge.target)
     upstream_nodes += upstream_neighbors
     # Add the immediate upstream nodes and their cumulnodes
     # to the cumulnodes of the current statenode.
@@ -4630,7 +4878,7 @@ def get_fullcumul(statenode, story):
             if up_cumulnode not in fullcumul:
                 fullcumul.append(up_cumulnode)
 
-    return fullcumul, src_rule
+    return fullcumul # , src_rule
    
 
 def remove_shrank_nodes(story):
@@ -4641,6 +4889,10 @@ def remove_shrank_nodes(story):
     shrank node having no incoming edge, remove the shrank node.
     """
 
+    # First, reset incoming and outgoing edges information.
+    for node in story.eventnodes + story.statenodes:
+        node.incoming = []
+        node.outgoing = []
     for hyperedge in story.hyperedges:
         if len(hyperedge.edgelist) == 1:
             if isinstance(hyperedge.target, EventNode):
@@ -5222,10 +5474,6 @@ def compare_states(state1, state2, ignorevalue=False, ignoreid=False,
         are_same = False
 
     return are_same
-
-
-def search_partner_in_state(state, agent, site):
-    """ Search state for the agent and index of partner of given site. """
 
 
 def compare_agents(agent1, agent2, ignorevalue=False, ignoreid=False,
@@ -5906,8 +6154,8 @@ def mergedualstories(eoi, prefix, causalgraphs=None, siphon=False, showintro=Tru
             story_path = "{}/tmp/{}".format(eoi, story_file)
             stories.append(CausalGraph(story_path, eoi))
     else:
-       stories = causalgraphs
-       story_files = None
+        stories = causalgraphs
+        story_files = None
     # Doing the work.
     merged_stories = []
     while len(stories) > 0:
@@ -6445,18 +6693,18 @@ def buildpathways(eoi, causalgraphs=None, siphon=False, ignorelist=[],
                 edgeid=edgeid, edgeocc=edgeocc, edgeprob=edgeprob,
                 weightedges=weightedges, color=color, writedot=writedot,
                 rmprev=rmprev, intropos=intropos, rulepos=rulepos)
-    #print("dualstory")
-    #foldpathway(eoi, "dualstory", showintro=showintro,
-    #            addedgelabels=addedgelabels, showedgelabels=showedgelabels,
-    #            edgeid=edgeid, edgeocc=edgeocc, edgeprob=edgeprob,
-    #            weightedges=weightedges, color=color, writedot=writedot,
-    #            rmprev=rmprev, intropos=intropos, rulepos=rulepos)
-    #print("statestory")
-    #foldpathway(eoi, "statestory", showintro=showintro,
-    #            addedgelabels=addedgelabels, showedgelabels=showedgelabels,
-    #            edgeid=edgeid, edgeocc=edgeocc, edgeprob=edgeprob,
-    #            weightedges=weightedges, color=color, writedot=writedot,
-    #            rmprev=rmprev, intropos=intropos, rulepos=rulepos)
+    print("dualstory")
+    foldpathway(eoi, "dualstory", showintro=showintro,
+                addedgelabels=addedgelabels, showedgelabels=showedgelabels,
+                edgeid=edgeid, edgeocc=edgeocc, edgeprob=edgeprob,
+                weightedges=weightedges, color=color, writedot=writedot,
+                rmprev=rmprev, intropos=intropos, rulepos=rulepos)
+    print("statestory")
+    foldpathway(eoi, "statestory", showintro=showintro,
+                addedgelabels=addedgelabels, showedgelabels=showedgelabels,
+                edgeid=edgeid, edgeocc=edgeocc, edgeprob=edgeprob,
+                weightedges=weightedges, color=color, writedot=writedot,
+                rmprev=rmprev, intropos=intropos, rulepos=rulepos)
 
 
 def foldpathway(eoi, prefix, causalgraphs=None, siphon=False, ignorelist=[],
@@ -6474,8 +6722,8 @@ def foldpathway(eoi, prefix, causalgraphs=None, siphon=False, ignorelist=[],
             story_path = "{}/unique/{}".format(eoi, story_file)
             stories.append(CausalGraph(story_path, eoi))
     else:
-       stories = causalgraphs
-       story_files = None
+        stories = causalgraphs
+        story_files = None
     pathway = stories[0]
     foldstory(pathway)
     for i in range(1, len(stories)):
@@ -6494,7 +6742,7 @@ def foldpathway(eoi, prefix, causalgraphs=None, siphon=False, ignorelist=[],
     #pathway.rank_sequentially(intropos="bot", rulepos="top") # <--
     #pathway.rank_sequentially(intropos="bot", rulepos="bot")
     #pathway.get_maxrank()
-    pathway.build_adjacency()
+    pathway.build_adjacency(hyper=True)
     pathway.rank_sequentially(intropos=intropos, rulepos=rulepos)
 
     # Compute the number of unique instances of precedence relationships.
@@ -6730,17 +6978,232 @@ def foldpathway(eoi, prefix, causalgraphs=None, siphon=False, ignorelist=[],
         outfile.close()
 
     # Merge nodes corresponding to a same rule (now ignoring 's).
+    pathwaycopy = copy.deepcopy(pathway)
     if prefix == "modstory":
+        pathwaycopy.filename = "eventpathway.dot"
+    if prefix == "dualstory":
+        pathwaycopy.filename = "dualpathway.dot"
+    if prefix == "statestory":
+        pathwaycopy.filename = "statepathway.dot"
+    for eventnode in pathwaycopy.eventnodes:
+        eventnode.label = eventnode.label.replace("'", "").strip()
+    foldstory(pathwaycopy)
+    pathwaycopy.build_adjacency(hyper=True)
+    pathwaycopy.rank_sequentially(intropos=intropos, rulepos=rulepos)
+    pathwaycopy.build_nointro()
+    pathwaycopy.reverse_subedges()
+    pathwaycopy.assign_label_carriers(showintro)
+    pathwaycopy.align_vertical()
+    pathwaycopy.build_dot_file(showintro, addedgelabels, showedgelabels,
+                           edgeid, edgeocc, edgeprob, statstype,
+                           weightedges, edgewidthscale=1.5)
+    output_path = "{}/{}".format(eoi, pathwaycopy.filename)
+    outfile = open(output_path, "w")
+    outfile.write(pathwaycopy.dot_file)
+    outfile.close()
+
+
+def colorpaths(eoi, causalgraph=None, siphon=False, ignorelist=[],
+               showintro=False, addedgelabels=True, showedgelabels=True,
+               edgeid=True, edgeocc=False, edgeprob=True, statstype="rel",
+               weightedges=True, color=True, writedot=True, rmprev=False,
+               intropos="top", rulepos="top", sel=None):
+    """
+    Color paths that pass through the chosen PDH (Path Dependent Hub).
+    If sel is not a PDH, give a warning message and do not write colored graph.
+    """
+
+    print("eventpathway")
+    colorgraph(eoi, "eventpathway", showintro=showintro,
+               addedgelabels=addedgelabels, showedgelabels=showedgelabels,
+               edgeid=edgeid, edgeocc=edgeocc, edgeprob=edgeprob,
+               weightedges=weightedges, color=color, writedot=writedot,
+               rmprev=rmprev, intropos=intropos, rulepos=rulepos, sel=sel)
+    #print("dualpathway")
+    #colorgraph(eoi, "dualpathway", showintro=showintro,
+    #           addedgelabels=addedgelabels, showedgelabels=showedgelabels,
+    #           edgeid=edgeid, edgeocc=edgeocc, edgeprob=edgeprob,
+    #           weightedges=weightedges, color=color, writedot=writedot,
+    #           rmprev=rmprev, intropos=intropos, rulepos=rulepos)
+    #print("statepathway")
+    #colorgraph(eoi, "statepathway", showintro=showintro,
+    #           addedgelabels=addedgelabels, showedgelabels=showedgelabels,
+    #           edgeid=edgeid, edgeocc=edgeocc, edgeprob=edgeprob,
+    #           weightedges=weightedges, color=color, writedot=writedot,
+    #           rmprev=rmprev, intropos=intropos, rulepos=rulepos)
+
+
+def colorgraph(eoi, prefix, causalgraph=None, siphon=False, ignorelist=[],
+               showintro=False, addedgelabels=True, showedgelabels=True,
+               edgeid=True, edgeocc=False, edgeprob=True, statstype="rel",
+               weightedges=True, color=True, writedot=True, rmprev=False,
+               intropos="top", rulepos="top", computenum=True, sel=None):
+    """
+    Color paths that pass through the chosen PDH (Path Dependent Hub).
+    If sel is not a PDH, give a warning message and do not write colored graph.
+    """
+
+    # Reading section.
+    if causalgraph == None:
+        pathway_path = "{}/{}-split.dot".format(eoi, prefix)
+        pathway = CausalGraph(pathway_path, eoi)
+    else:
+        pathway = causalgraph
+    # Color pathways to distiguish admissible paths.
+    if prefix == "eventpathway":
+        pathway.filename = "eventpathway-color.dot"
+    if prefix == "dualpathway":
+        pathway.filename = "dualpathway-color.dot"
+    #if prefix == "statestory":
+    #    pathway.filename = "statepathway-color.dot"
+    #selectedlabel = "C binds D"
+    #selectedlabel = "D binds G"
+    #selectedlabel = "E binds F"
+    #selectedlabel = "A binds B"
+    #selectedlabel = "ABL1 act"
+    selectedlabel = sel
+    # Get selected nodes.
+    selectednodes = []
+    for eventnode in pathway.eventnodes:
+        if eventnode.rule == selectedlabel:
+            selectednodes.append(eventnode)
+            eventnode.highlighted = True
+    # Check that all selected nodes are a PDH.
+    all_pdh = True
+    for node in selectednodes:
+        if node.pdh == False:
+            all_pdh = False
+            break
+    if all_pdh == False:
+        raise ValueError("Selected node is not a Path Dependent Hub (PDH), "
+                         "colored graph not written.")
+    else:
+        # For each selected node, get the upstream concurrent path of every
+        # target node. If, while building the upstream path, an other selected
+        # node is reached, remove it from list selectednodes or remove its
+        # corresponding upstream path from paths_nodes if it was already
+        # processed.
+        # Get the targets of selected nodes.
+        selectedtargets = []
+        for node in selectednodes:
+            for hyperedge in node.outgoing:
+                if hyperedge.target not in selectedtargets:
+                    selectedtargets.append(hyperedge.target)
+        # Get upstream paths (concurrent) from selected targets.
+        paths_nodes = []
+        paths_hedges = []
+        for selectedtarget in selectedtargets:
+            up_nodes, up_hedges = concurr_paths_up(pathway, selectedtarget)
+            for pn in up_nodes:
+                paths_nodes.append(pn)
+            for ph in up_hedges:
+                paths_hedges.append(ph)
+        #for path in paths_nodes:
+        #    print("====")
+        #    for n in path:
+        #        print(n)
+        # Make a list of all path dependent hubs present in each path.
+        paths_pdhs = []
+        for path in paths_nodes:
+            path_pdhs = []
+            for node in path:
+                if node.pdh == True:
+                    path_pdhs.append(node)
+            paths_pdhs.append(path_pdhs)
+        for path in paths_pdhs:
+            print("---")
+            for n in path:
+                print(n)
+        #sets_pdhs = list(set(paths_pdhs))
+        #for path in sets_pdhs:
+        #    print("+++")
+        #    for n in path:
+        #        print(n)
+        # Manually build a set of all combinations of pdhs found.
+        sets_pdhs = []
+        for path_pdhs in paths_pdhs:
+            pdhs_already_present = False
+            for set_pdhs in sets_pdhs:
+                same_pdhs = False
+                if len(set_pdhs) == len(path_pdhs):
+                    same_pdhs = True
+                    for i in range(len(path_pdhs)):
+                        if path_pdhs[i].label != set_pdhs[i].label:
+                            same_pdhs = False
+                            break
+                if same_pdhs == True:
+                    pdhs_already_present = True
+                    break
+            if pdhs_already_present == False:
+                sets_pdhs.append(path_pdhs)
+        print("")
+        for path in sets_pdhs:
+            print("+++")
+            for n in path:
+                print(n)
+        # Find to which element of sets_pdhs corresponds each element
+        # of paths_pdhs.
+        set_indexes = []
+        for path_pdhs in paths_pdhs:
+            for i in range(len(sets_pdhs)):
+                set_pdhs = sets_pdhs[i]
+                same_pdhs = False
+                if len(set_pdhs) == len(path_pdhs):
+                    same_pdhs = True
+                    for j in range(len(path_pdhs)):
+                        if path_pdhs[j].label != set_pdhs[j].label:
+                            same_pdhs = False
+                            break
+                if same_pdhs == True:
+                    set_indexes.append(i)
+                    break
+        print("")
+        print(set_indexes)
+        # Assign color ids to each hyperedge from each path.
+        for hyperedge in pathway.hyperedges:
+            hyperedge.color_ids = []
+        for i in range(len(paths_hedges)):
+            color_id = set_indexes[i] + 1
+            path_hedges = paths_hedges[i]
+            for hedge in path_hedges:
+                if color_id not in hedge.color_ids:
+                    hedge.color_ids.append(color_id)
+        # Remove color from any hyperedge that has all the colors.
+        a = list(range(1, len(sets_pdhs)+1))
+        for hyperedge in pathway.hyperedges:
+            c = hyperedge.color_ids
+            if collections.Counter(c) == collections.Counter(a):
+                hyperedge.color_ids = []
+        # Redo quotient, but ignoring context.
         for eventnode in pathway.eventnodes:       
             eventnode.label = eventnode.label.replace("'", "").strip()
-        foldstory(pathway)
-        pathway.build_adjacency()
+        foldstory(pathway, fusedges=False)
+        # Fuse identical hyperedges take colors into account.
+        pair_found = True
+        while pair_found == True:
+            pair_found = False
+            for i in range(len(pathway.hyperedges)):
+                h1 = pathway.hyperedges[i]
+                for j in range(i+1, len(pathway.hyperedges)):
+                    h2 = pathway.hyperedges[j]
+                    are_equi, corr = equivalent_hyperedges(h1, h2, False, True)
+                    if are_equi == True:
+                        for k in range(len(h1.edgelist)):
+                            main_edge = h1.edgelist[k]
+                            other_edge = h2.edgelist[corr[k]]
+                            main_edge.weight += other_edge.weight
+                            main_edge.number += other_edge.number
+                        h1.color_ids += h2.color_ids
+                        del(pathway.hyperedges[j])
+                        pair_found = True
+                        break
+                if pair_found == True:
+                    break
         pathway.rank_sequentially(intropos=intropos, rulepos=rulepos)
         pathway.build_nointro()
-        pathway.reverse_subedges()
-        pathway.assign_label_carriers(showintro)
-        pathway.align_vertical()
-        pathway.filename = "eventpathway.dot"
+        # Assign colors.
+        assign_colors(pathway, len(sets_pdhs))
+        # Write colored pathway.
         pathway.build_dot_file(showintro, addedgelabels, showedgelabels,
                                edgeid, edgeocc, edgeprob, statstype,
                                weightedges, edgewidthscale=1.5)
@@ -6750,22 +7213,196 @@ def foldpathway(eoi, prefix, causalgraphs=None, siphon=False, ignorelist=[],
         outfile.close()
 
 
-## Color and merge section.
-#    if prefix == "modstory" or prefix == "dualstory":
-#        # Color pathways to distiguish admissible paths.
-#        if prefix == "modstory":
-#            pathway.filename = "eventpathway-color.dot"
-#        if prefix == "dualstory":
-#            pathway.filename = "dualpathway-color.dot"
-#        #if prefix == "statestory":
-#        #    pathway.filename = "statepathway-color.dot"
-#        #selectedlabel = "C binds D"
-#        selectedlabel = "D binds G"
-#        #selectedlabel = "E binds F"
-#        #selectedlabel = "A binds B"
-#        #selectedlabel = "ABL1 act"
+def concurr_paths_up(graph, from_node):
+    """
+    Return a list of all acyclic upstream concurrent paths from a given node.
+    """
+
+    fringes_nodes = [[from_node]]
+    paths_nodes = [[]]
+    paths_hedges = [[]]
+    #seen_nodes = [] # To detect loops.
+    seen_rules = [] # To stop when a second pdh is reached.
+    ends_reached = False
+    while ends_reached == False:
+        ends_reached = True
+        # Get new fringe hyperedges and keep them nested per path.
+        nested_fringes_hedges = []
+        for path_fringe_nodes in fringes_nodes:
+            hedges = []
+            for node in path_fringe_nodes:
+                if len(node.incoming) > 0:
+                    hedges.append(node.incoming)
+                    if ends_reached == True:
+                        ends_reached = False
+            combinations = list(itertools.product(*hedges))
+            nested_fringes_hedges.append(combinations)
+        # Copy paths up to now if there is more than one fringe_hedges
+        # combination for a given path.
+        offset = 0
+        prev_fringes_nodes = copy.deepcopy(fringes_nodes)
+        l = len(fringes_nodes)
+        for p in range(l):
+            local_hedges = nested_fringes_hedges[p]
+            for i in range(len(local_hedges)-1):
+                fringe_nodes_copy = fringes_nodes[offset].copy()
+                path_nodes_copy = paths_nodes[offset].copy()
+                path_hedges_copy = paths_hedges[offset].copy()
+                fringes_nodes.insert(offset+i, fringe_nodes_copy)
+                paths_nodes.insert(offset+i, path_nodes_copy)
+                paths_hedges.insert(offset+i, path_hedges_copy)
+            offset += len(local_hedges)
+            #if len(local_hedges) > 1:
+            #    fringe_nodes_copy = fringes_nodes[p].copy()
+            #    path_nodes_copy = paths_nodes[p].copy()
+            #    path_hedges_copy = paths_hedges[p].copy()
+            #    for i in range(1, len(local_hedges)):
+            #        fringes_nodes.insert(offset, fringe_nodes_copy)
+            #        paths_nodes.insert(offset, path_nodes_copy)
+            #        paths_hedges.insert(offset, path_hedges_copy)
+        # Unnest fringes_hedges.
+        fringes_hedges = []
+        for path_fringe_hedges in nested_fringes_hedges:
+            for hedges in path_fringe_hedges:
+                fringes_hedges.append(hedges)
+        # Add fringe nodes to path nodes.
+        for p in range(len(fringes_nodes)):
+            path_fringe_nodes = fringes_nodes[p]
+            for node in path_fringe_nodes:
+                paths_nodes[p].append(node)
+        # Find new fringe nodes from fringe hyperedges.
+        # Ignore nodes that are already in path to avoid loops.
+        fringes_nodes = []
+        for p in range(len(fringes_hedges)):
+            path_fringe_hedges = fringes_hedges[p]
+            path_fringe_node = []
+            for hedge in path_fringe_hedges:
+                for source in hedge.sources:
+                    if source not in paths_nodes[p]:
+                        path_fringe_node.append(source)
+            fringes_nodes.append(path_fringe_node)
+        # Add fringe hyperedges to path edges.
+        for p in range(len(fringes_hedges)):
+            path_fringe_hedges = fringes_hedges[p]
+            for hedge in path_fringe_hedges:
+                paths_hedges[p].append(hedge)
+    #    if from_node.label == "A phos G":
+    #        print("Hedges")
+    #        for p in fringes_hedges:
+    #            print(p)
+    #        print("New nodes")
+    #        for p in fringes_nodes:
+    #            print(p)
+    #        print("Path nodes")
+    #        for p in paths_nodes:
+    #            print(p)
+    #        print("Path hedges")
+    #        for p in paths_hedges:
+    #            print(p)
+    #if from_node.label == "A phos G":
+    #    for path in paths_nodes:
+    #        print("====")
+    #        for n in path:
+    #            print(n)
+
+    # Backtracking.
+    # For each concurrent path, backtrack down to next pdh if a second
+    # pdh of the same rule as the selected node was reached while going up.
+
+    return paths_nodes, paths_hedges
+
+
+#def get_path(graph, direction, from_node, stop_one_rule=True, block=None,
+#             ignore_conflict=False, stop_at_first=False):
+#    """ Return a list of all acyclic paths from a given node. """
 #
-#        # !!! THIS IS THE BEGINNIGN OF THE PART TO CHANGE !!!
+#    all_paths = [[from_node]]
+#    seen_rules = [[]]
+#    ends_reached = False
+#    while ends_reached == False:
+#        ends_reached = True
+#        for i in range(len(all_paths)):
+#            path = all_paths[i]
+#            next_nodes = []
+#            if direction == "up":
+#                for hyperedge in path[-1].incoming:
+#                    
+#            elif direction == "down":
+#                for hyperedge in path[-1].outgoing:
+#                    next_nodes.append(hyperedge.target)
+#
+#
+#
+#    # //////////////////////////
+#    def follow_edges(self, direction, from_node, to_nodes=[], block=None,
+#                 ignore_conflict=False, stop_at_first=False):
+#    """
+#    Return a list of all acyclic paths from a given node to the top of the
+#    graph (using direction="up") or to the bottom (using direction="down").
+#    If to_nodes are provided, return only the paths that go from from_node
+#    to any of the to_nodes.
+#    """
+#    # This method takes a lot of time on large graphs and can most probably
+#    # be improved to speed up calculation.
+#    
+#    all_paths = [[from_node]]
+#    ends_reached = False
+#    while ends_reached == False:
+#        ends_reached = True
+#        for i in range(len(all_paths)):
+#            path = all_paths[i]
+#            next_nodes = []
+#            for edge in self.causaledges:
+#                skip = False
+#                if ignore_conflict == True:
+#                    if edge.relationtype == "conflict":
+#                        skip = True
+#                if skip == False:
+#                    if direction == "up":
+#                        if edge.target == path[-1]:
+#                            next_nodes.append(edge.source)
+#                    elif direction == "down":
+#                        if edge.source == path[-1]:
+#                            next_nodes.append(edge.target)
+#            if len(next_nodes) > 0 and path[-1] not in to_nodes:
+#                ends_reached = False
+#                if len(next_nodes) > 0:
+#                    path_copy = path.copy()
+#                path.append(next_nodes[0])
+#                for i in range(1, len(next_nodes)):
+#                    new_path = path_copy.copy()
+#                    new_path.append(next_nodes[i])
+#                    all_paths.append(new_path)
+#        # Remove looping paths.
+#        for i in range(len(all_paths)-1, -1, -1):
+#            if len(all_paths[i]) != len(set(all_paths[i])):
+#                del(all_paths[i])
+#        # Remove paths that end with blocking node if defined.
+#        if block != None:
+#            for i in range(len(all_paths)-1, -1, -1):
+#                if all_paths[i][-1] == block:
+#                    del(all_paths[i])
+#        # Exit prematurely if only one path is sufficient.
+#        if stop_at_first == True:
+#            for path in all_paths:
+#                if path[-1] in to_nodes:
+#                    ends_reached = True
+#    # Remove paths that do not end with one of the to_nodes if to_nodes
+#    # was defined.
+#    if len(to_nodes) > 0:
+#        for i in range(len(all_paths)-1, -1, -1):
+#            if all_paths[i][-1] not in to_nodes:
+#                del(all_paths[i])
+#    # Remove the from_node in each path (the first node).
+#    for i in range(len(all_paths)):
+#        del(all_paths[i][0])
+#    
+#    return all_paths
+#    # ////////////////////////////
+
+
+
+#        # !!! THIS IS THE BEGINNING OF THE PART TO CHANGE !!!
 #
 #        # Initalize color id lists.
 #        next_col_id = 1
@@ -6983,7 +7620,7 @@ def foldpathway(eoi, prefix, causalgraphs=None, siphon=False, ignorelist=[],
 #        outfile.write(pathway.dot_file)
 #        outfile.close()
 
-    return pathway
+    #return pathway
 
 
 def assign_colors(pathway, num_colors):
@@ -8661,75 +9298,75 @@ def simplify_req_res(graph):
                     del(event_node.full_req[i])
 
 
-def complete_req(graph, mod_nodes):
-    """
-    Extend req_species of each mod node with the req of upstream nodes.
-    """
-
-    mod_no_intro = []
-    for mod_node in mod_nodes:
-        if mod_node.intro == False:
-            mod_no_intro.append(mod_node)
-    for mod_node in mod_no_intro:
-        top_nodes = []
-        for top_node in mod_nodes:
-            if top_node != mod_node:
-                top_nodes.append(top_node)
-        paths = graph.follow_edges("up", mod_node, top_nodes)
-        all_reqs = []
-        for path in paths:
-            path_reqs = []
-            for i in range(len(path)-1):
-                current_node = path[i]
-                #for current_req in current_node.req_species:
-                #    if not species_in(current_req, path_reqs):
-                #        path_reqs.append(current_req.copy())
-                for current_req in current_node.req_species:
-                    cur_ag = current_req["agent"]
-                    cur_site = current_req["site"]
-                    cur_bnd = current_req["bound_agent"]
-                    cur_state = current_req["state"]
-                    add_req = True
-                    for path_req in path_reqs:
-                        path_ag = path_req["agent"]
-                        path_site = path_req["site"]
-                        path_bnd = path_req["bound_agent"]
-                        path_state = path_req["state"]
-                        if path_ag == cur_ag and path_site == cur_site:
-                            if path_bnd == None and cur_bnd == None:
-                                add_req = False
-                            if path_state == None and cur_state == None:
-                                add_req = False
-                    if add_req == True:
-                        path_reqs.append(current_req.copy())
-                up_node = path[i+1]
-                for up_res in up_node.res_species:
-                    res_ag = up_res["agent"]
-                    res_site = up_res["site"]
-                    for path_req in path_reqs:
-                        req_ag = path_req["agent"]
-                        req_site = path_req["site"]
-                        if req_ag == res_ag and req_site == res_site:
-                            if up_res["bound_agent"] != None:
-                                if path_req["bound_agent"] == "_":
-                                    bnd_ag = up_res["bound_agent"]
-                                    bnd_site = up_res["bound_site"]
-                                    path_req["bound_agent"] = bnd_ag
-                                    path_req["bound_site"] = bnd_site
-                                    partner = {"agent": bnd_ag,
-                                               "site": bnd_site,
-                                               "bound_agent": req_ag,
-                                               "bound_site": req_site,
-                                               "state": None}
-                                    path_reqs.append(partner)
-            all_reqs.append(path_reqs)
-
-        comp_req_set = []
-        for path_reqs in all_reqs:
-            for path_req in path_reqs:
-                if not species_in(path_req, comp_req_set):
-                    comp_req_set.append(path_req)
-        mod_node.full_req = comp_req_set
+#def complete_req(graph, mod_nodes):
+#    """
+#    Extend req_species of each mod node with the req of upstream nodes.
+#    """
+#
+#    mod_no_intro = []
+#    for mod_node in mod_nodes:
+#        if mod_node.intro == False:
+#            mod_no_intro.append(mod_node)
+#    for mod_node in mod_no_intro:
+#        top_nodes = []
+#        for top_node in mod_nodes:
+#            if top_node != mod_node:
+#                top_nodes.append(top_node)
+#        paths = graph.follow_edges("up", mod_node, top_nodes)
+#        all_reqs = []
+#        for path in paths:
+#            path_reqs = []
+#            for i in range(len(path)-1):
+#                current_node = path[i]
+#                #for current_req in current_node.req_species:
+#                #    if not species_in(current_req, path_reqs):
+#                #        path_reqs.append(current_req.copy())
+#                for current_req in current_node.req_species:
+#                    cur_ag = current_req["agent"]
+#                    cur_site = current_req["site"]
+#                    cur_bnd = current_req["bound_agent"]
+#                    cur_state = current_req["state"]
+#                    add_req = True
+#                    for path_req in path_reqs:
+#                        path_ag = path_req["agent"]
+#                        path_site = path_req["site"]
+#                        path_bnd = path_req["bound_agent"]
+#                        path_state = path_req["state"]
+#                        if path_ag == cur_ag and path_site == cur_site:
+#                            if path_bnd == None and cur_bnd == None:
+#                                add_req = False
+#                            if path_state == None and cur_state == None:
+#                                add_req = False
+#                    if add_req == True:
+#                        path_reqs.append(current_req.copy())
+#                up_node = path[i+1]
+#                for up_res in up_node.res_species:
+#                    res_ag = up_res["agent"]
+#                    res_site = up_res["site"]
+#                    for path_req in path_reqs:
+#                        req_ag = path_req["agent"]
+#                        req_site = path_req["site"]
+#                        if req_ag == res_ag and req_site == res_site:
+#                            if up_res["bound_agent"] != None:
+#                                if path_req["bound_agent"] == "_":
+#                                    bnd_ag = up_res["bound_agent"]
+#                                    bnd_site = up_res["bound_site"]
+#                                    path_req["bound_agent"] = bnd_ag
+#                                    path_req["bound_site"] = bnd_site
+#                                    partner = {"agent": bnd_ag,
+#                                               "site": bnd_site,
+#                                               "bound_agent": req_ag,
+#                                               "bound_site": req_site,
+#                                               "state": None}
+#                                    path_reqs.append(partner)
+#            all_reqs.append(path_reqs)
+#
+#        comp_req_set = []
+#        for path_reqs in all_reqs:
+#            for path_req in path_reqs:
+#                if not species_in(path_req, comp_req_set):
+#                    comp_req_set.append(path_req)
+#        mod_node.full_req = comp_req_set
 
 
 def get_mod_nodes(eoi, graph):
