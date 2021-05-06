@@ -18,6 +18,7 @@ import textwrap
 import time
 import collections
 import itertools
+import string
 
 
 class EventNode(object):
@@ -781,7 +782,7 @@ class CausalGraph(object):
                         lbl_end = read_line[lbl_start:].index('"')+lbl_start
                     label_str = read_line[lbl_start:lbl_end].strip()
                     label = label_str.replace("\\n ", "")
-                    label = label.replace(" <br/>", "")
+                    label = label.replace("<br/>", " ")
                     if "intro=True" in read_line:
                         is_intro = True
                     else:
@@ -1527,28 +1528,31 @@ class CausalGraph(object):
                         up_next.append(edge.source)
             outputs_fringe = up_next
             # Keep going up until all fringe nodes are rule_outputs
-            # (or have not incoming edge).
+            # (or have no incoming edge).
             outputs_reached = False
             while outputs_reached == False:
                 outputs_reached = True
                 up_next = []
                 for up_node in outputs_fringe:
-                    # Keep up_node if it is in rule_outputs.
-                    if up_node in self.rule_outputs:
+                    # Keep up_node if it is a rule.
+                    if isinstance(up_node, EventNode) and up_node.intro == False:
+                        up_next.append(up_node)
+                    # or if it is in rule_outputs.
+                    elif up_node in self.rule_outputs:
                         up_next.append(up_node)
                     elif len(up_node.incoming) > 0:
                         for edge in up_node.incoming:
                             if edge.source not in seen_nodes:
                                 up_next.append(edge.source)
                                 seen_nodes.append(edge.source)
-                #if len(up_next) < 3:
-                #    print(">>>", len(up_next))
-                #    for n in up_next:
-                #        print(n.label)
                 outputs_fringe = up_next
-                # Check if all fringe nodes are rule_outputs.
+                # Check if all fringe nodes are rule_outputs or rule.
                 for up_node in outputs_fringe:
-                    if up_node not in self.rule_outputs:
+                    is_rule = False
+                    if isinstance(up_node, EventNode):
+                        if up_node.intro == False:
+                            is_rule = True
+                    if is_rule == False and up_node not in self.rule_outputs:
                         outputs_reached = False
                         break
 
@@ -1943,7 +1947,7 @@ class CausalGraph(object):
         are hidden.
         """
 
-        # Reset adjacency lists to avoid infinit loop when doing deepcopy.
+        # Reset adjacency lists to avoid infinite loop when doing deepcopy.
         for node in self.eventnodes + self.statenodes:
             node.incoming = []
             node.outgoing = []
@@ -2675,9 +2679,9 @@ class CausalGraph(object):
                     node_str = ""
                     for i in range(len(node_lines)):
                         if i == 0:
-                            node_str += " {} ".format(node_lines[i])
+                            node_str += "{}".format(node_lines[i])
                         else:
-                            node_str += "<br/> {} ".format(node_lines[i])
+                            node_str += "<br/>{}".format(node_lines[i])
                     dot_str += '[label=<{}>'.format(node_str)
                     dot_str += ', shape={}, style="filled'.format(node_shape)
                     if node.pdh == False:
@@ -2707,9 +2711,9 @@ class CausalGraph(object):
                     node_str = ""
                     for i in range(len(node_lines)):
                         if i == 0:
-                            node_str += " {} ".format(node_lines[i])
+                            node_str += "{}".format(node_lines[i])
                         else:
-                            node_str += "<br/> {} ".format(node_lines[i])
+                            node_str += "<br/>{}".format(node_lines[i])
                     dot_str += ('{} [label=<{}>'
                                 .format(node.nodeid, node_str))
                     dot_str += ', shape={}, style=filled'.format(node_shape)
@@ -2762,9 +2766,9 @@ class CausalGraph(object):
                 node_str = ""
                 for i in range(len(node_lines)):
                     if i == 0:
-                        node_str += " {} ".format(node_lines[i])
+                        node_str += "{}".format(node_lines[i])
                     else:
-                        node_str += "<br/> {} ".format(node_lines[i])
+                        node_str += "<br/>{}".format(node_lines[i])
                 if node.shrink == False:
                     node_shape = 'ellipse'
                     node_color = 'white'
@@ -3222,6 +3226,40 @@ def get_field(field, read_str, default):
 
     return value
 
+
+# Converting alphabet strings to base 10 numbers and vice versa.
+# I copied this from an anonymous post (username 301_Moved_Permanently)
+# on StackExchange without trying to understand how it works.
+A_LOWERCASE = ord('a')
+ALPHABET_SIZE = 26
+def _decompose(number):
+    """Generate digits from `number` in base alphabet, least significants
+    bits first.
+
+    Since A is 1 rather than 0 in base alphabet, we are dealing with
+    `number - 1` at each iteration to be able to extract the proper digits.
+    """
+
+    while number:
+        number, remainder = divmod(number - 1, ALPHABET_SIZE)
+        yield remainder
+
+def base_10_to_alphabet(number):
+    """Convert a decimal number to its base alphabet representation"""
+
+    return ''.join(
+            chr(A_LOWERCASE + part)
+            for part in _decompose(number)
+    )[::-1]
+
+def base_alphabet_to_10(letters):
+    """Convert an alphabet number to its decimal representation"""
+
+    return sum(
+            (ord(letter) - A_LOWERCASE + 1) * ALPHABET_SIZE**i
+            for i, letter in enumerate(reversed(letters.lower()))
+    )
+
 # -------------------- Causal Cores Generation Section ------------------------
 
 def getcausalcores(eoi, kappamodel, kasimpath, kaflowpath,
@@ -3622,14 +3660,8 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
             for edit in eventnode.edits:
                 node_id = "state{}".format(state_id)
                 rank = eventnode.rank + 0.5
-                edit_str = ""
-                for i in range(len(edit)):
-                    agent_str = write_kappa_agent(edit[i], "num")
-                    edit_str += agent_str
-                    if i < len(edit)-1:
-                        edit_str += ", "
-                label = edit_str
-                new_state_node = StateNode(node_id, label, rank, edit=edit,
+                lbl = write_context_expression(edit)
+                new_state_node = StateNode(node_id, lbl, rank, edit=edit,
                                            eventid=eventnode.eventid)
                 story.statenodes.append(new_state_node)
                 new_edge = CausalEdge(eventnode, new_state_node)
@@ -3888,6 +3920,161 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
 
     #time_start = time.perf_counter()
 
+    # Add factice agents to do the latter work of agents
+    # which where fortuitously involved in several events.
+    # !!! Will fail if intro events introduce bonds !!!
+    for story in stories:
+        print(story.filename)
+        story.hyperedges = []
+        story.build_adjacency(hyper=False)
+        for eventnode in story.eventnodes:
+            if eventnode.label == eoi:
+                story.eoi_node = eventnode
+        story.get_all_reachables()
+        # Gather intro_outputs and rule_outputs.
+        story.rule_outputs = []
+        story.intro_outputs = []
+        originals = []
+        for event in story.eventnodes:
+            if event.intro == True:
+                for edge in event.outgoing:
+                    story.intro_outputs.append(edge.target)
+                    originals.append(edge.target)
+            elif event.intro == False:
+                for edge in event.outgoing:
+                    story.rule_outputs.append(edge.target)
+        # Gather state nodes that represent an original state.
+        for statenode in story.rule_outputs:
+            for introstate in story.intro_outputs:
+                are_same = compare_states(statenode.edit, introstate.edit,
+                                          ignorevalue=False, ignoreid=True)
+                if are_same == True:
+                    originals.append(statenode)
+                    break
+        # Make a dict of all agent ids in the story.
+        ids_suffix = {}
+        for statenode in story.statenodes:
+            for agent in statenode.edit:
+                idstr = str(agent["id"])
+                if idstr not in ids_suffix.keys():
+                    ids_suffix[idstr] = "b"
+        # And a dict if eventids for the creation of new intro nodes.
+        eventids = {}
+        new_intro_nodes = {}
+        # Events must be ordered by rank (the order of the nodes within a same
+        # rank does not matter). They are already ordered at this point because
+        # read_dot reads the node in the order in which they appear in the
+        # story file.
+        moved_edits = []
+        for eventnode in story.eventnodes:
+            if eventnode.intro == False:
+                # Separate immediate upstream nodes in two groups.
+                # upstream_originals are state nodes part of list originals and
+                # reach the current event through a transitive edge.
+                # upstream_others are all other immediate upstream nodes.
+                upstream_originals = []
+                upstream_others = []
+                for edge in eventnode.incoming:
+                    if edge.secondary == True and edge.source in originals:
+                         upstream_originals.append(edge.source)
+                    else:
+                         upstream_others.append(edge.source)
+                # Gather agent ids from upstream_originals.
+                original_ids = []
+                for upstream_original in upstream_originals:
+                    for agent in upstream_original.edit:
+                        if str(agent["id"]) not in original_ids:
+                            original_ids.append(str(agent["id"]))
+                            # Get eventid of upstream intro node.
+                            intronode = upstream_original.incoming[0].source
+                            eventids[str(agent["id"])] = [intronode.label,
+                                                          intronode.nodeid]
+                # Gather agent ids from upstream_others.
+                other_ids = []
+                for upstream_other in upstream_others:
+                    for agent in upstream_other.edit:
+                        if str(agent["id"]) not in other_ids:
+                            other_ids.append(str(agent["id"]))
+                # original_id suffixes are changed to match corresponding
+                # other_ids. If no other_id matches an original_id, the new
+                # original_id suffix is taken from ids_suffix.
+                id_changes = {}
+                for original_id in original_ids:
+                    original_number = remove_suffix(original_id)
+                    original_found = False
+                    for other_id in other_ids:
+                        other_number = remove_suffix(other_id)
+                        if other_number == original_number:
+                            original_found = True
+                            if other_id != original_id:
+                                id_changes[original_id] = other_id
+                    if original_found == False:
+                        suffix = ids_suffix[original_number]
+                        new_id = "{}{}".format(original_number, suffix)
+                        id_changes[original_id] = new_id
+                        # Create new intro node.
+                        eventids[original_id]
+                        node_id = "{}{}".format(eventids[original_id][1], suffix)
+                        label = eventids[original_id][0]
+                        rank = eventnode.rank - 1
+                        new_node = EventNode(node_id, label, rank, intro=True)
+                        story.eventnodes.append(new_node)
+                        new_intro_nodes[new_id] = new_node
+                        # Increment suffix.
+                        suffix_index = base_alphabet_to_10(suffix)
+                        new_suffix = base_10_to_alphabet(suffix_index+1)
+                        ids_suffix[original_number] = new_suffix
+                # Apply id changes to upstream_originals and downstream state
+                # nodes that are reachable from current event.
+                reachable_statenodes = []
+                for node in eventnode.reachable:
+                    if isinstance(node, StateNode):
+                        reachable_statenodes.append(node)
+                target_nodes = upstream_originals + reachable_statenodes
+                changed_nodes = []
+                for target_node in target_nodes:
+                    for agent in target_node.edit:
+                        is_changed = change_agent_id(agent, id_changes)
+                        if is_changed == True and target_node in upstream_originals:
+                            if target_node not in changed_nodes:
+                                changed_nodes.append(target_node)
+                    lbl = write_context_expression(target_node.edit)
+                    target_node.label = lbl
+                # Detach upstream_originals from their initial intro node and attach
+                # them to the new one.
+                for changed_node in changed_nodes:
+                    agent_id = str(changed_node.edit[0]["id"])
+                    expected_intro = new_intro_nodes[agent_id]
+                    if expected_intro != changed_node.incoming[0].source:
+                        for edge in story.causaledges:
+                            if edge.target == changed_node:
+                                break
+                        story.causaledges.remove(edge)
+                        new_edge = CausalEdge(expected_intro, changed_node)
+                        story.causaledges.append(new_edge) 
+                        changed_node.incoming = [new_edge]
+                        changed_node.rank = eventnode.rank - 0.5
+                        # Set edges as non-transitive.
+                        if changed_node not in moved_edits:
+                            for edge in changed_node.outgoing:
+                                if edge.target == eventnode:
+                                    edge.secondary = False
+                                    edge.color = "black"
+                            moved_edits.append(changed_node)               
+
+        story.create_hyperedges()
+    # Write stories with factice agents.
+    for i in range(len(stories)):
+        stories[i].filename = "facticeagent-{}.dot".format(i+1)
+    for story in stories:
+        story.build_dot_file(showintro, addedgelabels, showedgelabels,
+                             edgeid, edgeocc, edgeprob, statstype, weightedges)
+        output_path = "{}/tmp/{}".format(eoi, story.filename)
+        outfile = open(output_path, "w")
+        outfile.write(story.dot_file)
+        outfile.close()
+
+
     # Build states with upstream context.
     for story in stories:
         print(story.filename)
@@ -3899,9 +4086,6 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
                 if edge.source.intro == False:
                     if isinstance(edge.target, StateNode):
                         story.rule_outputs.append(edge.target)
-        for eventnode in story.eventnodes:
-            if eventnode.label == eoi:
-                story.eoi_node = eventnode
         story.get_all_reachables()
         for statenode in story.statenodes:
             statenode.cumulnodes = []
@@ -4083,7 +4267,7 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
             #if statenode not in story.rule_outputs:
             else:
                 statenode.state = statenode.edit
-                statenode.introstate = True         
+                statenode.introstate = True
         story.create_hyperedges()
         story.align_vertical()
     #time_stop = time.perf_counter()
@@ -4101,6 +4285,7 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
         outfile.write(story.dot_file)
         outfile.close()
 
+    # Globally relevant (harmonize).
     # If a given context is relevant in one story, it must be set as
     # relevant in all stories. Must take into account that a same type of
     # edit may be used several times in the context of a node.
@@ -4137,20 +4322,7 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
                     if cumul_found == False:
                         additional_cumul_edits.append(cumul_edit)
                 all_cumul_edits[edit_lbl] += additional_cumul_edits
-                #additional_cumul_edits = []
-                #for currentcumul in statenode.cumulnodes:
-                #    cumul_found = False
-                #    for prevcumul_edit in all_cumul_edits[edit_lbl]:
-                #        are_same = compare_states(currentcumul.edit,
-                #                                  prevcumul_edit,
-                #                                  ignorevalue=False,
-                #                                  ignoreid=True)
-                #        if are_same == True:
-                #            cumul_found = True
-                #            break
-                #    if cumul_found == False:
-                #        additional_cumul_edits.append(currentcumul.edit)
-                #all_cumul_edits[edit_lbl] += additional_cumul_edits
+    #print(all_cumul_edits["<b>FES(act{t})</b>"])
     # Rebuild states with relevant upstream context from all stories.
     for story in stories:
         story.hyperedges = []
@@ -4174,6 +4346,11 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
                     # next rank.
                     relevantcumul = []
                     remainingcumul = []
+                    #if edit_lbl == "<b>FES(act{t})</b>":
+                    #if edit_lbl == "<b>BCR(Y177[1])</b>, <b>FYN(tyr_kin[1])</b>":
+                    #    print("----")
+                    #    for f in fullcumul:
+                    #        print(f)
                     for cumulnode in fullcumul:
                         relevant = story.reachability_with_block(cumulnode,
                             statenode.reachable, statenode)
@@ -4195,6 +4372,10 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
                                     break
                         else:
                             remainingcumul.append(cumulnode)
+                    #if edit_lbl == "<b>BCR(Y177[1])</b>, <b>FYN(tyr_kin[1])</b>":
+                    #    print("----", story.filename)
+                    #    for r in relevantcumul:
+                    #        print(r)
                     # Put remaining nodes in relevant nodes if they are found
                     # in allcumulcopy.
                     for remainingnode in remainingcumul:
@@ -4228,14 +4409,79 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
                 statenode.introstate = False
             else:
                 statenode.state = statenode.edit
-                statenode.introstate = True         
+                statenode.introstate = True
         story.create_hyperedges()
         story.align_vertical()
-
-    #for k in all_cumuls.keys():
-    #    print(k)
-    #for node in all_cumuls["<b>D(</b><b>z[1]</b><b>)</b>, <b>C(</b><b>z[1]</b><b>)</b>"]:
-    #    print(node)
+    ## Find ubiquitous context sites.
+    #ubiquitous_edits = {}
+    #for story in stories:
+    #    for statenode in story.rule_outputs:
+    #        # Get the edit of each cumul node from the current state node.
+    #        # At that point, statenode.cumulnodes is the relevantcumul computed
+    #        # just before. Since agent ids will not be considered, there may be
+    #        # many equivalent edits.
+    #        cumul_edits = []
+    #        for cn in statenode.cumulnodes:
+    #            cumul_edits.append(cn.edit)
+    #        # Get edit label for the current state node.
+    #        edit_lbl = write_context_expression(statenode.edit, hideid=True)
+    #        # If this edit_lbl was not seen before, assign all cumul_edits.
+    #        if edit_lbl not in ubiquitous_edits.keys():
+    #            ubiquitous_edits[edit_lbl] = cumul_edits
+    #        # Else, if edit_lbl was already seen, remove cumul_edits that are
+    #        # not present in the current statenode.
+    #        else:
+    #            ubi = ubiquitous_edits[edit_lbl]
+    #            if len(ubi) > 0:
+    #                #cumulcopy = copy.deepcopy(cumul_edits)
+    #                ubiquitous_to_remove = []
+    #                for i in range(len(ubi)):
+    #                    ubiquitous_found = False
+    #                    for j in range(len(cumul_edits)):
+    #                        are_same = compare_states(ubi[i],
+    #                                                  cumul_edits[j],
+    #                                                  ignorevalue=False,
+    #                                                  ignoreid=True)
+    #                        if are_same == True:
+    #                            ubiquitous_found = True
+    #                            del(cumul_edits[j])
+    #                            break
+    #                    if ubiquitous_found == False:
+    #                        ubiquitous_to_remove.insert(0, i)
+    #                for i in ubiquitous_to_remove:
+    #                    del(ubiquitous_edits[edit_lbl][i])
+    ## For each statenode, remove cumulnodes that contain ubiquitous context.
+    #for story in stories:
+    #    for statenode in story.rule_outputs:
+    #        edit_lbl = write_context_expression(statenode.edit, hideid=True)
+    #        ubicopy = copy.deepcopy(ubiquitous_edits[edit_lbl])
+    #        cumulnodes_to_remove = []
+    #        for i in range(len(statenode.cumulnodes)):
+    #            for j in range(len(ubicopy)):
+    #                are_same = compare_states(statenode.cumulnodes[i].edit,
+    #                                          ubicopy[j],
+    #                                          ignorevalue=False,
+    #                                          ignoreid=True)
+    #                if are_same == True:
+    #                    cumulnodes_to_remove.insert(0, i)
+    #                    del(ubicopy[j])
+    #                    break
+    #        for i in cumulnodes_to_remove:
+    #            del(statenode.cumulnodes[i])
+    #        # Build current state node context without ubiquitous context. 
+    #        full_state = copy.deepcopy(statenode.edit)
+    #        for cumulnode in statenode.cumulnodes: # + neighbors:
+    #            for agent in cumulnode.edit:
+    #                context_agent = copy.deepcopy(agent)
+    #                if context_agent["type"] == None:
+    #                    for context_site in context_agent["sites"]:
+    #                        context_site["type"] = "context"
+    #                elif context_agent["type"] != None:
+    #                    context_agent["type"] = "context"
+    #                full_state.append(context_agent)
+    #        statenode.state = group_sites_by_agent(full_state)
+    #        lbl = write_context_expression(statenode.state)
+    #        statenode.label = lbl
 
     # Write stories with harmonized context on state nodes.
     for i in range(len(stories)):
@@ -4417,55 +4663,57 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
                         raise ValueError("Output nodes not found for node {}, "
                                          "label '{}'.".format(eventnode.nodeid,
                                          eventnode.label))
-    # Check which state nodes should be distinguished using context
-    # (since they appear in different contexts)
-    editset = []
-    statesets = []
-    for story in stories:
-        story.rule_outputs = []
-        for edge in story.causaledges:
-            if isinstance(edge.source, EventNode):
-                if edge.source.intro == False:
-                    if isinstance(edge.target, StateNode):
-                        story.rule_outputs.append(edge.target)
-        #for statenode in story.statenodes:
-        for statenode in story.rule_outputs:
-            edit_found = False
-            for i in range(len(editset)):
-                are_same = compare_states(statenode.edit, editset[i],
-                                          ignorevalue=False, ignoreid=True)
-                if are_same == True:
-                   edit_found = True
-                   # Check if the full state is in this stateset.
-                   state_found = False
-                   for j in range(len(statesets[i])):
-                       same = compare_states(statenode.state, statesets[i][j],
-                                             ignorevalue=False, ignoreid=True)
-                       if same == True:
-                           state_found = True
-                           break
-                   if state_found == False:
-                       statesets[i].append(statenode.state)
-            if edit_found == False:
-                editset.append(statenode.edit)
-                statesets.append([statenode.state])
-    for story in stories:
-        #story.rule_outputs = []
-        #for edge in story.causaledges:
-        #    if isinstance(edge.source, EventNode):
-        #        if edge.source.intro == False:
-        #            if isinstance(edge.target, StateNode):
-        #                story.rule_outputs.append(edge.target)
-        for statenode in story.rule_outputs:
-            for i in range(len(editset)):
-                are_same = compare_states(statenode.edit, editset[i],
-                                          ignorevalue=False, ignoreid=True)
-                if are_same == True:
-                    if len(statesets[i]) > 1:
-                        statenode.differentiate = True
-                    else:
-                        statenode.differentiate = False
-                    break
+    ## Check which state nodes should be distinguished using context
+    ## (since they appear in different contexts)
+    ## !!! Remove this part once ubiquitous context is removed !!!
+    #editset = []
+    #statesets = []
+    #for story in stories:
+    #    story.rule_outputs = []
+    #    for edge in story.causaledges:
+    #        if isinstance(edge.source, EventNode):
+    #            if edge.source.intro == False:
+    #                if isinstance(edge.target, StateNode):
+    #                    story.rule_outputs.append(edge.target)
+    #    #for statenode in story.statenodes:
+    #    for statenode in story.rule_outputs:
+    #        edit_found = False
+    #        for i in range(len(editset)):
+    #            are_same = compare_states(statenode.edit, editset[i],
+    #                                      ignorevalue=False, ignoreid=True)
+    #            if are_same == True:
+    #               edit_found = True
+    #               # Check if the full state is in this stateset.
+    #               state_found = False
+    #               for j in range(len(statesets[i])):
+    #                   same = compare_states(statenode.state, statesets[i][j],
+    #                                         ignorevalue=False, ignoreid=True)
+    #                   if same == True:
+    #                       state_found = True
+    #                       break
+    #               if state_found == False:
+    #                   statesets[i].append(statenode.state)
+    #        if edit_found == False:
+    #            editset.append(statenode.edit)
+    #            statesets.append([statenode.state])
+    #for story in stories:
+    #    #story.rule_outputs = []
+    #    #for edge in story.causaledges:
+    #    #    if isinstance(edge.source, EventNode):
+    #    #        if edge.source.intro == False:
+    #    #            if isinstance(edge.target, StateNode):
+    #    #                story.rule_outputs.append(edge.target)
+    #    for statenode in story.rule_outputs:
+    #        for i in range(len(editset)):
+    #            are_same = compare_states(statenode.edit, editset[i],
+    #                                      ignorevalue=False, ignoreid=True)
+    #            if are_same == True:
+    #                if len(statesets[i]) > 1:
+    #                    statenode.differentiate = True
+    #                else:
+    #                    statenode.differentiate = False
+    #                break
+
     # Ensure that all state nodes which have the same state have the same
     # label across all stories (since the order in which the agents are
     # written on the label is arbitrary and may depend on the order with
@@ -4494,11 +4742,12 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
             # Define standard label the first time that a state is found.
             if state_index == None:
                 possible_states.append(statenode.state)
-                if statenode.differentiate == True:
-                    state_to_write = statenode.state
-                elif statenode.differentiate == False:
-                    state_to_write = statenode.edit
-                standard_label = write_context_expression(state_to_write,
+                #if statenode.differentiate == True:
+                #    state_to_write = statenode.state
+                #elif statenode.differentiate == False:
+                #    state_to_write = statenode.edit
+                #standard_label = write_context_expression(state_to_write,
+                standard_label = write_context_expression(statenode.state,
                                                           hidevalue=False,
                                                           hideid=True)
                 standard_labels.append(standard_label)
@@ -4604,6 +4853,7 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
 
     # Build dual stories.
     for story in stories:
+        print(story.filename)
         # Remove unused state nodes from intros.
         nodes_to_remove = []
         edges_to_remove = []
@@ -4660,10 +4910,11 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
                                 new_edge = CausalEdge(edge1.source,
                                                       edge2.target)
                                 story.causaledges.append(new_edge)
-        sorted_to_remove = sorted(edges_to_remove, reverse=True)
-        for k in nodes_to_remove:
+        sorted_nodes_to_remove = sorted(nodes_to_remove, reverse=True)
+        sorted_edges_to_remove = sorted(edges_to_remove, reverse=True)
+        for k in sorted_nodes_to_remove:
             del(story.statenodes[k])
-        for j in sorted_to_remove:
+        for j in sorted_edges_to_remove:
             del(story.causaledges[j])
         # Lower the rank of al non-intro nodes by 0.5.
         for eventnode in story.eventnodes:
@@ -4724,7 +4975,8 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
         dualstory = stories[i]
         modstory = storiescopy[i]
         for j in range(len(dualstory.eventnodes)):
-            modstory.eventnodes[j].label = dualstory.eventnodes[j].label
+            if dualstory.eventnodes[j].intro == False:
+                modstory.eventnodes[j].label = dualstory.eventnodes[j].label
     for i in range(len(storiescopy)):
         storiescopy[i].filename = "modstory-{}.dot".format(i+1)
         #storiescopy[i].processed = True
@@ -4828,8 +5080,10 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
                                 subedge.essential = True
                                 break
     # Remove shrank nodes
-    for story in stories:
-        remove_shrank_nodes(story)
+    #for story in stories:
+    for i in range(len(stories)):
+        print("HERE", i+1)
+        remove_shrank_nodes(stories[i])
     for i in range(len(stories)):
         stories[i].filename = "statestory-{}.dot".format(i+1)
         #stories[i].processed = True
@@ -4840,6 +5094,37 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
         outfile = open(output_path, "w")
         outfile.write(story.dot_file)
         outfile.close()
+
+
+def remove_suffix(idstr):
+    """ Remove the trailing letters on a id string. """
+
+    idnum = ""
+    for char in str(idstr):
+        if char.isdigit():
+            idnum += char
+
+    return idnum
+
+
+def change_agent_id(agent, id_changes):
+    """ Change an agent id along with its appearances in sites and partner. """
+
+    is_changed = False
+    if str(agent["id"]) in id_changes.keys():
+        agent["id"] = id_changes[str(agent["id"])]
+        is_changed = True
+    for site in agent["sites"]:
+        if str(site["agentid"]) in id_changes.keys():
+            site["agentid"] = id_changes[str(site["agentid"])]
+            is_changed = True
+        if isinstance(site["bond"], dict):
+            partnerid = str(site["bond"]["partner"]["agentid"])
+            if partnerid in id_changes.keys():
+                site["bond"]["partner"]["agentid"] = id_changes[partnerid]
+                is_changed = True
+
+    return is_changed
 
 
 def get_fullcumul(statenode, story):
@@ -4904,6 +5189,7 @@ def remove_shrank_nodes(story):
                     first = True
                     for shrink_target in shrink_targets:
                         if first == False:
+                            print(hyperedge.target.label)
                             new_hedge = copy.deepcopy(hyperedge)
                             new_hedge.target = shrink_target
                             new_hedge.edgelist[0].target = shrink_target
@@ -5126,7 +5412,7 @@ def group_sites_by_agent(state):
     #    for i in range(len(agent["sites"])):
     #        site = agent["sites"][i]
     #        if site["name"] not in seen_sites:
-    #            seen_sites.append(site["name"])            
+    #            seen_sites.append(site["name"])
 
     return new_state
 
@@ -5146,41 +5432,31 @@ def write_kappa_agent(agent, bond="num", hidevalue=False, hideid=False):
         if site["type"] == "edit":
             edited = True
             break
-    # Check if agent contains only parallel sites.
-    parallel = True
-    if len(agent["sites"]) == 0:
-        if agent["type"] != "parallel":
-            parallel = False
-    else:
-        for site in agent["sites"]:
-            if site["type"] != "parallel":
-                parallel = False
-                break 
     # Write agent.
+    was_edit = False
     if edited == True:
         agent_str += "<b>"
-    if parallel == True:
-        agent_str += "<i>"
+        was_edit = True
     agent_str += "{}".format(agent["name"])
     if hideid == False:
         agent_str += ":{}".format(agent["id"])
     agent_str += "("
-    if edited == True:
-        agent_str += "</b>"
-    if parallel == True:
-        agent_str += "</i>"
-    # Write sites.
+    # Write sites. Bond and value of a same site are written together
+    # (i.e. A(x[.] x{p}) is written as A(x[.]{p}))
     first_site = True
+    seen_sites = []
     for site in agent["sites"]:
-        if first_site == False:
+        if site["type"] == "context" and was_edit == True:
+            agent_str += "</b>"
+            was_edit = False
+        if first_site == False and site["name"] not in seen_sites:
             agent_str += "&nbsp;"
         else:
             first_site = False
-        if site["type"] == "edit":
-            agent_str += "<b>"
-        if site["type"] == "parallel":
-            agent_str += "<i>"
-        agent_str += "{}".format(site["name"])
+        if site["name"] not in seen_sites:
+            agent_str += "{}".format(site["name"])
+            seen_sites.append(site["name"])
+        # If site already seen and was edit, close the edit
         if hidevalue == False:
             if site["bond"] != None:
                 agent_str += "["
@@ -5196,18 +5472,6 @@ def write_kappa_agent(agent, bond="num", hidevalue=False, hideid=False):
                 else:
                     agent_str += site["bond"]
                 agent_str += "]"
-                #if site["bond"] == ".":
-                #    agent_str += "[.]"
-                #else:
-                #    if bond == "num":
-                #        agent_str += "[{}]".format(site["bond"]["num"])
-                #    elif bond == "partner":
-                #        partner = site["bond"]["partner"]
-                #        agent_str += "[{}.{}".format(partner["sitename"],
-                #                                     partner["agentname"])
-                #        if hideid == False:
-                #            agent_str += "{}".format(partner["agentid"])
-                #        agent_str += "]"
             if site["value"] != None:
                 agent_str += "{{{}}}".format(site["value"])
         elif hidevalue == True:
@@ -5215,20 +5479,10 @@ def write_kappa_agent(agent, bond="num", hidevalue=False, hideid=False):
                 agent_str += "[]"
             if site["value"] != None:
                 agent_str += "{}"
-        if site["type"] == "edit":
-            agent_str += "</b>"
-        if site["type"] == "parallel":
-            agent_str += "</i>"
     # Close agent parenthesis.
-    if edited == True:
-        agent_str += "<b>"
-    if parallel == True:
-        agent_str += "<i>"
     agent_str += ")"
-    if edited == True:
+    if edited == True and was_edit == True:
         agent_str += "</b>"
-    if parallel == True:
-        agent_str += "</i>"
 
     return agent_str
 
@@ -5990,7 +6244,22 @@ def write_context_expression(state, hidevalue=False, hideid=False):
                     ordered_context.append(site1)
                 elif site1["type"] == "parallel":
                     ordered_para.append(site1)
-        agent1["sites"] = ordered_edits + ordered_context + ordered_para
+        #agent1["sites"] = ordered_edits + ordered_context + ordered_para
+        # Put ordered_context sites after ordered_edits of a same site.
+        agent1["sites"] = []
+        for eds in ordered_edits:
+            agent1["sites"].append(eds)
+            conts_to_remove = []
+            for i in range(len(ordered_context)):
+                conts = ordered_context[i]
+                if conts["name"] == eds["name"]:
+                    agent1["sites"].append(conts)
+                    conts_to_remove.insert(0, i)
+            for i in conts_to_remove:
+                del(ordered_context[i])
+        for conts in ordered_context:
+            agent1["sites"].append(conts)
+  
 
     # Write string with sites in the order determined by the previous sorting.
     context_str = ""
