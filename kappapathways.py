@@ -693,6 +693,7 @@ class CausalGraph(object):
         # Post-computed variables.
         self.occurrence = 1
         self.maxrank = None
+        self.minrank = None
         self.prevcores = None
         if self.filename != None:
             self.read_dot(self.filename)
@@ -745,6 +746,14 @@ class CausalGraph(object):
                     self.maxrank = float(line[maxrank_index+9:quote])
                 else:
                     self.maxrank = int(line[maxrank_index+9:quote])
+            if "minrank=" in line:
+                minrank_index = line.index("minrank")
+                quote = line.rfind('"')
+                minr_str = line[minrank_index+9:quote]
+                if "." in minr_str:
+                    self.minrank = float(line[minrank_index+9:quote])
+                else:
+                    self.minrank = int(line[minrank_index+9:quote])
             if "rank = same" in line:
                 open_quote = line.index('"')
                 close_quote = line[open_quote+1:].index('"')+open_quote+1
@@ -1020,7 +1029,8 @@ class CausalGraph(object):
             statefile = open(json_path, "r")
             statedict = json.load(statefile)
             for statenode in self.statenodes:
-                statenode.state = statedict[statenode.nodeid]
+                statenode.state = statedict["states"][statenode.nodeid]
+                statenode.edit = statedict["edits"][statenode.nodeid]
 
 
     def create_hyperedges(self):
@@ -1870,6 +1880,13 @@ class CausalGraph(object):
                 all_ranks.append(node.rank)
         if len(all_ranks) > 0:
             self.maxrank = max(all_ranks)
+            self.minrank = min(all_ranks)
+        self.midranks = 1
+        for r in all_ranks:
+            if isinstance(r, float):
+                if r.is_integer() == False:
+                    self.midranks = 3
+                    break
 
 
     def reverse_subedges(self):
@@ -2625,9 +2642,11 @@ class CausalGraph(object):
             dot_str += 'fontsize=28 labelloc="t" ;\n'
         if self.maxrank != None:
             dot_str += '  maxrank="{}" ;\n'.format(self.maxrank)
+        if self.minrank != None:
+            dot_str += '  minrank="{}" ;\n'.format(self.minrank)
         if self.prevcores != None:
             dot_str += '  prevcores="{}" ;\n'.format(self.prevcores)
-        #dot_str += '  ranksep=0.5 ;\n'
+        #dot_str += '  ranksep=1 ;\n'
         #dot_str += '  nodesep=0.2 ;\n' # Default nodesep is 0.25
         dot_str += '  splines=true ;\n'
         dot_str += '  outputorder=nodesfirst ;\n'
@@ -2662,8 +2681,9 @@ class CausalGraph(object):
                   "weightedges": weightedges,
                   "edgewidthscale": edgewidthscale}
         # Draw nodes.
-        midranks = 1
-        for int_rank in range(int((self.maxrank+1)*(midranks+1))):
+        midranks = self.midranks
+        for int_rank in range(int((self.minrank)*(midranks+1)),
+                              int((self.maxrank+1)*(midranks+1))):
             current_rank = int_rank/(midranks+1)
             rank_str = "{}".format(current_rank)
             if showintro == False and current_rank < 1:
@@ -2712,7 +2732,7 @@ class CausalGraph(object):
                     dot_str += ', shape={}, style="filled'.format(node_shape)
                     if node.pdh == False:
                         dot_str += '"'
-                    elif node.pdh == True:
+                    else:
                         dot_str += ',dashed"'
                     #if node.highlighted == True:
                     #   dot_str += ', fillcolor=gold, penwidth=2'
@@ -2740,9 +2760,16 @@ class CausalGraph(object):
                             node_str += "{}".format(node_lines[i])
                         else:
                             node_str += "<br/>{}".format(node_lines[i])
-                    dot_str += ('{} [label=<{}>'
-                                .format(node.nodeid, node_str))
-                    dot_str += ', shape={}, style=filled'.format(node_shape)
+                    prefix_num = ""
+                    if node.pdh != False:
+                        prefix_num = "{}. ".format(node.pdh)
+                    dot_str += ('{} [label=<{}{}>'
+                                .format(node.nodeid, prefix_num, node_str))
+                    dot_str += ', shape={}, style="filled'.format(node_shape)
+                    if node.pdh == False:
+                        dot_str += '"'
+                    else:
+                        dot_str += ',dashed"'
                     #if node.highlighted == True:
                     #   dot_str += ', fillcolor=gold, penwidth=2'
                     #else:
@@ -2845,7 +2872,8 @@ class CausalGraph(object):
         #                    average_use, minpenwidth, medpenwidth, maxpenwidth)
         #                dot_str += ', cover="True"] ;\n'
         # Draw invisible ranking edges.
-        for int_rank in range(int(self.maxrank*(midranks+1))):
+        for int_rank in range(int((self.minrank)*(midranks+1)),
+                              int(self.maxrank*(midranks+1))):
             rank = int_rank/(midranks+1)
             if showintro == False and rank < 1:
                 dot_str += '//'
@@ -3188,6 +3216,16 @@ class CausalGraph(object):
     #        mid_str += ', pos={}'.format(midedge.pos)
     #
     #    return mid_str
+
+
+    def clear_adjacency(self):
+        """
+        Empty adjacency lists to avoid infinit recursions while using deepcopy.
+        """
+
+        for node in self.eventnodes + self.statenodes:
+            node.incoming = []
+            node.outgoing = []
 
 
     def __repr__(self):
@@ -3621,7 +3659,7 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
         story_path = "{}/{}".format(eoi, story_file)
         stories.append(CausalGraph(story_path, eoi))
     # Keep a copy of the stories.
-    storiescopy = copy.deepcopy(stories)
+    #storiescopy = copy.deepcopy(stories)
     # Read trace.
     period = kappamodel.rfind(".")
     modelname = kappamodel[:period]
@@ -3632,12 +3670,10 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
     steps = sim["trace"]
 
     # Find edits produced by each event.
-    #tmp_stories = stories[0:5]
+    #tmp_stories = stories[21:22]
     #stories = tmp_stories
     for story in stories:
-        print(story.filename) 
-        # Reset hyperedges...don't do that
-        #story.hyperedges = []
+        print(story.filename)
         # Get actions for each event node.
         for eventnode in story.eventnodes:
             step = steps[int(eventnode.nodeid[2:])]
@@ -3846,6 +3882,7 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
         stories[i].filename = "edits-{}.dot".format(i+1)
     for story in stories:
         story.occurrence = None
+        story.get_maxrank()
         story.build_dot_file(showintro, addedgelabels, showedgelabels,
                              edgeid, edgeocc, edgeprob, statstype, weightedges)
         output_path = "{}/tmp/{}".format(eoi, story.filename)
@@ -4978,12 +5015,17 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
             del(story.statenodes[k])
         for j in sorted_edges_to_remove:
             del(story.causaledges[j])
-        # Lower the rank of al non-intro nodes by 0.5.
+        ## Lower the rank of al non-intro nodes by 0.5.
+        #for eventnode in story.eventnodes:
+        #    if eventnode.intro == False:
+        #        eventnode.rank = eventnode.rank - 0.5
+        #for statenode in story.statenodes:
+        #    statenode.rank = statenode.rank - 0.5
+
+        # Increase the rank of intro nodes by 0.5
         for eventnode in story.eventnodes:
-            if eventnode.intro == False:
-                eventnode.rank = eventnode.rank - 0.5
-        for statenode in story.statenodes:
-            statenode.rank = statenode.rank - 0.5
+            if eventnode.intro == True:
+                eventnode.rank = eventnode.rank + 0.5
         story.get_maxrank()
         story.create_hyperedges()
         story.align_vertical()
@@ -5000,62 +5042,21 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
         outfile.write(story.dot_file)
         outfile.close()
 
-    # Write state dict in json format.
-    for i in range(len(stories)):
-        statedict = {}
-        for statenode in stories[i].statenodes:
-            statedict[statenode.nodeid] = statenode.state
-        json_path = "{}/tmp/statefile-{}.json".format(eoi, i+1)
-        statefile = open(json_path, "w")
-        json.dump(statedict, statefile)
-        statefile.close()
-
-
-    ## ==========
-
-    ## Make a copy of dual stories.
-    #dualstoriescopy = copy.deepcopy(stories)
-
-    ## Build a first pathway to see if it produces transitive
-    ## (non-immediate) causality.
-
-    #for story in dualstoriescopy:
-    #    story.occurrence = 1
-    #uniquestories = mergedualstories(eoi, "dualstory",
-    #                                 causalgraphs=dualstoriescopy,
-    #                                 writedot=False)
-    #tmpquotient = foldpathway(eoi, "dualstory", causalgraphs=uniquestories,
-    #                          writedot=False, computenum=False)
-    #tmpquotient.filename = "tmpquotient.dot"
-    #tmpquotient.build_dot_file(False, addedgelabels, showedgelabels,
-    #                           edgeid, edgeocc, edgeprob, statstype,
-    #                           weightedges)
-    #output_path = "{}/{}".format(eoi, tmpquotient.filename)
-    #outfile = open(output_path, "w")
-    #outfile.write(tmpquotient.dot_file)
-    #outfile.close()
-
-    ## Find transitive hyperedges that were added by quotienting.
-    ##for hyperedge in tmpquotient.hyperedges:
-    #    
-
-    ## ==========
-
-    # Modify original stories with event labels that distinguish context.
-    # (Will need to modify this part if the order of nodes get changed
-    # while building dual stories.)
-    for i in range(len(stories)):
-        dualstory = stories[i]
-        modstory = storiescopy[i]
-        for j in range(len(dualstory.eventnodes)):
-            if dualstory.eventnodes[j].intro == False:
-                modstory.eventnodes[j].label = dualstory.eventnodes[j].label
+    # Write stories with event nodes only.
+    # Use a copy of stories to leave the original stories for the subsequent
+    # states version.
+    for story in stories:
+        story.clear_adjacency()
+    storiescopy = copy.deepcopy(stories)
+    for story in storiescopy:
+        fuse_multiple_outputs_with_causaledges(story) 
+        keep_events_only(story)
     for i in range(len(storiescopy)):
         storiescopy[i].filename = "modstory-{}.dot".format(i+1)
-        #storiescopy[i].processed = True
     for story in storiescopy:
         story.create_hyperedges()
         story.align_vertical()
+        story.get_maxrank()
         story.build_dot_file(showintro, addedgelabels, showedgelabels,
                              edgeid, edgeocc, edgeprob, statstype, weightedges)
         output_path = "{}/tmp/{}".format(eoi, story.filename)
@@ -5064,100 +5065,11 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
         outfile.close()
 
     # Write stories with state nodes only.
-    # Works only with atomic rules for now.
     for story in stories:
-        # The first nodes become the output of the event
-        # nodes which had first=True.
-        for hyperedge in story.hyperedges:
-            first_in_sources = False
-            for source in hyperedge.sources:
-                if source.first == True:
-                    first_in_sources = True
-                    break
-            if first_in_sources == True:
-                hyperedge.target.first = True
-        # Connect state nodes together, removing event nodes
-        hyperedges_to_remove = []
-        for hyperedge in story.hyperedges:
-            if hyperedge.target.label != story.eoi:
-                if isinstance(hyperedge.target, EventNode):
-                    outgoing_edges = []
-                    for hyperedge2 in story.hyperedges:
-                        if hyperedge.target in hyperedge2.sources:
-                            outgoing_edges.append(hyperedge2)
-                    if len(outgoing_edges) == 1:
-                        # Reconnect the hyperedge targeting the event
-                        # to now target the output state.
-                        for subedge in hyperedge.edgelist:
-                            subedge.target = outgoing_edges[0].target
-                        hyperedge.target = outgoing_edges[0].target
-                        he_index = story.hyperedges.index(outgoing_edges[0])
-                        hyperedges_to_remove.append(he_index)
-                    elif len(outgoing_edges) > 1:
-                        # Shrink the event node. Nodes that are shrank hide
-                        # their label and are shown as a small white circle.
-                        hyperedge.target.shrink = True
-                        # Also change outgoing edges type to conflict of all
-                        # incoming edge are of type conflict.
-                        in_all_conflict = True
-                        for subedge in hyperedge.edgelist:
-                            if subedge.relationtype != "conflict":
-                                in_all_conflict = False
-                                break
-                        if in_all_conflict == True:
-                            for out_hyperedge in outgoing_edges:
-                                for subedge in out_hyperedge.edgelist:
-                                    subedge.relationtype = "conflict"
-        sorted_hyperedges = sorted(hyperedges_to_remove, reverse=True)
-        for i in sorted_hyperedges:
-            del(story.hyperedges[i])
-
-        events_to_remove = []
-        for j in range(len(story.eventnodes)):
-            if story.eventnodes[j].intro == False:
-                lbl = story.eventnodes[j].label
-                shrk = story.eventnodes[j].shrink
-                if lbl != story.eoi and shrk == False:
-                    events_to_remove.insert(0, j)
-                else:
-                    if shrk == False:
-                        story.eventnodes[j].rank = story.eventnodes[j].rank+0.5
-        for j in events_to_remove:
-            del(story.eventnodes[j])
-        #for node in story.eventnodes + story.statenodes:
-        #    node.rank = math.ceil(node.rank/2)
-        story.get_maxrank()
-        # Find essential edges, edges that have an intro as source that
-        # is not mentioned in the edit of the target.
-        for hyperedge in story.hyperedges:
-            for subedge in hyperedge.edgelist:
-                subedge.essential = False
-                if subedge.source.intro == True:
-                    if isinstance(hyperedge.target, EventNode):
-                        target_edits = hyperedge.target.edits
-                    else:
-                        target_edits = [hyperedge.target.edit]
-                    # All agents from the intro edits must be seen in
-                    # the edit of the target.
-                    intro_agent_in_target = True
-                    for intro_edit in subedge.source.edits:
-                        for intro_agent in intro_edit:
-                            agent_found = False
-                            for target_edit in target_edits:
-                                for target_agent in target_edit:
-                                    if target_agent["name"] == intro_agent["name"]:
-                                        if target_agent["id"] == intro_agent["id"]:
-                                            agent_found = True
-                                            break
-                            if agent_found == False:
-                                subedge.essential = True
-                                break
-    # Remove shrank nodes
-    for story in stories:
-        remove_shrank_nodes(story)
+        story.build_adjacency(hyper=True)
+        keep_states_only(story)
     for i in range(len(stories)):
         stories[i].filename = "statestory-{}.dot".format(i+1)
-        #stories[i].processed = True
     for story in stories:
         story.build_dot_file(showintro, addedgelabels, showedgelabels,
                              edgeid, edgeocc, edgeprob, statstype, weightedges)
@@ -5165,6 +5077,146 @@ def getdualstories(eoi, kappamodel, showintro=True, addedgelabels=False,
         outfile = open(output_path, "w")
         outfile.write(story.dot_file)
         outfile.close()
+
+    # Write state dict in json format.
+    for i in range(len(stories)):
+        statedict = {"states": {}, "edits": {}}
+        for statenode in stories[i].statenodes:
+            statedict["states"][statenode.nodeid] = statenode.state
+            statedict["edits"][statenode.nodeid] = statenode.edit
+        json_path = "{}/tmp/statefile-{}.json".format(eoi, i+1)
+        statefile = open(json_path, "w")
+        json.dump(statedict, statefile)
+        statefile.close()
+
+
+def keep_events_only(graph):
+    """
+    Remove state nodes in a causal graph that contains both events and states
+    nodes.
+    This must be done for each story before folding because folding the
+    dualstories loses some information about edge statistics.
+    """
+
+    # Rebuild adjacency lists using causal edges.
+    graph.build_adjacency()
+    # Connect event nodes together.
+    edges_to_remove = []
+    for edge in graph.causaledges:
+        if isinstance(edge.target, EventNode) and edge.source.intro == False:
+            up_edge = edge.source.incoming[0]
+            edge.source = up_edge.source
+            edge_index = graph.causaledges.index(up_edge)
+            if edge_index not in edges_to_remove:
+                edges_to_remove.append(edge_index)
+    sorted_edges = sorted(edges_to_remove, reverse=True)
+    for i in sorted_edges:
+        del(graph.causaledges[i])
+    # Remove all state nodes.
+    graph.statenodes = []
+    # Move intro nodes up half a rank.
+    for eventnode in graph.eventnodes:
+        if eventnode.intro == True:
+            eventnode.rank = eventnode.rank - 0.5           
+
+
+def keep_states_only(graph):
+    """
+    Remove event nodes in a causal graph that contains both events and states
+    nodes.
+    This must be done on the pathway after the folding of dualstories to keep
+    separate edges when they involve different events (rules).
+    """
+
+    # The first nodes become the output of the event
+    # nodes which had first=True.
+    for hyperedge in graph.hyperedges:
+        first_in_sources = False
+        for source in hyperedge.sources:
+            if source.first == True:
+                first_in_sources = True
+                break
+        if first_in_sources == True:
+            hyperedge.target.first = True
+    # Connect state nodes together.
+    hyperedges_to_remove = []
+    for hyperedge in graph.hyperedges:
+        if hyperedge.target.label != graph.eoi:
+            if isinstance(hyperedge.target, EventNode):
+                #outgoing_edges = []
+                #for hyperedge2 in graph.hyperedges:
+                #    if hyperedge.target in hyperedge2.sources:
+                #        outgoing_edges.append(hyperedge2)
+                outgoing_edges = hyperedge.target.outgoing
+                if len(outgoing_edges) == 1:
+                    # Reconnect the hyperedge targeting the event
+                    # to now target the output state.
+                    for subedge in hyperedge.edgelist:
+                        subedge.target = outgoing_edges[0].target
+                    hyperedge.target = outgoing_edges[0].target
+                    he_index = graph.hyperedges.index(outgoing_edges[0])
+                    if he_index not in hyperedges_to_remove:
+                        hyperedges_to_remove.append(he_index)
+                elif len(outgoing_edges) > 1:
+                    # Shrink the event node. Nodes that are shrank hide
+                    # their label and are shown as a small white circle.
+                    hyperedge.target.shrink = True
+                    # Also change outgoing edges type to conflict of all
+                    # incoming edge are of type conflict.
+                    in_all_conflict = True
+                    for subedge in hyperedge.edgelist:
+                        if subedge.relationtype != "conflict":
+                            in_all_conflict = False
+                            break
+                    if in_all_conflict == True:
+                        for out_hyperedge in outgoing_edges:
+                            for subedge in out_hyperedge.edgelist:
+                                subedge.relationtype = "conflict"
+    sorted_hyperedges = sorted(hyperedges_to_remove, reverse=True)
+    for i in sorted_hyperedges:
+        del(graph.hyperedges[i])
+    # Remove events.
+    events_to_remove = []
+    for j in range(len(graph.eventnodes)):
+        if graph.eventnodes[j].intro == False:
+            lbl = graph.eventnodes[j].label
+            shrk = graph.eventnodes[j].shrink
+            if lbl != graph.eoi and shrk == False:
+                events_to_remove.insert(0, j)
+    for j in events_to_remove:
+        del(graph.eventnodes[j])
+    # Move ranks up by one half.
+    for node in graph.eventnodes + graph.statenodes:
+        if node.label != graph.eoi:
+            node.rank = node.rank - 0.5
+    graph.get_maxrank()
+    # Find essential edges, edges that have an intro as source that
+    # is not mentioned in the edit of the target.
+    for hyperedge in graph.hyperedges:
+        for subedge in hyperedge.edgelist:
+            subedge.essential = False
+            if subedge.source.intro == True:
+                if isinstance(hyperedge.target, EventNode):
+                    target_edits = hyperedge.target.edits
+                else:
+                    target_edits = [hyperedge.target.edit]
+                # All agents from the intro edits must be seen in
+                # the edit of the target.
+                intro_agent_in_target = True
+                for intro_edit in subedge.source.edits:
+                    for intro_agent in intro_edit:
+                        agent_found = False
+                        for target_edit in target_edits:
+                            for target_agent in target_edit:
+                                if target_agent["name"] == intro_agent["name"]:
+                                    if target_agent["id"] == intro_agent["id"]:
+                                        agent_found = True
+                                        break
+                        if agent_found == False:
+                            subedge.essential = True
+                            break
+    # Remove shrank nodes if needed.
+    remove_shrank_nodes(graph)
 
 
 def remove_suffix(idstr):
@@ -6576,6 +6628,7 @@ def mergedualstories(eoi, prefix, causalgraphs=None, siphon=False, showintro=Tru
         for story in sorted_stories:
             #story.compute_relstats()
             #story.compute_visuals(showintro, color)
+            story.get_maxrank()
             story.build_dot_file(showintro, addedgelabels, showedgelabels,
                                  edgeid, edgeocc, edgeprob, statstype, weightedges)
             output_path = "{}/unique/{}".format(eoi, story.filename)
@@ -6584,9 +6637,10 @@ def mergedualstories(eoi, prefix, causalgraphs=None, siphon=False, showintro=Tru
             outfile.close()
         # Write state dict in json format.
         for i in range(len(sorted_stories)):
-            statedict = {}
+            statedict = {"states": {}, "edits": {}}
             for statenode in sorted_stories[i].statenodes:
-                statedict[statenode.nodeid] = statenode.state
+                statedict["states"][statenode.nodeid] = statenode.state
+                statedict["edits"][statenode.nodeid] = statenode.edit
             json_path = "{}/unique/statefile-{}.json".format(eoi, i+1)
             statefile = open(json_path, "w")
             json.dump(statedict, statefile)
@@ -7063,26 +7117,28 @@ def buildpathways(eoi, causalgraphs=None, siphon=False, ignorelist=[],
                   edgeid=True, edgeocc=False, edgeprob=True, statstype="rel",
                   weightedges=True, color=True, writedot=True, rmprev=False,
                   intropos="top", rulepos="top"):
-    """ Build event pathway, dual pathway and state pathway. """
+    """
+    Build eventpathway, dualpathway and statepathway.
+    What is actually done is:
+    - Fold stories into an eventpathway that display only events.
+    - Fold dualstories into a dualpathway that displays both events and states.
+    - Remove events in dualpathway for statepathway that displays only states.
+    The eventpathway could not be obtained by removing states in dualpathways
+    because some edge statistics would be lost.
+    """
 
-    #print("modstory")
-    #foldpathway(eoi, "modstory", showintro=showintro,
-    #            addedgelabels=addedgelabels, showedgelabels=showedgelabels,
-    #            edgeid=edgeid, edgeocc=edgeocc, edgeprob=edgeprob,
-    #            weightedges=weightedges, color=color, writedot=writedot,
-    #            rmprev=rmprev, intropos=intropos, rulepos=rulepos)
+    print("modstory")
+    foldpathway(eoi, "modstory", showintro=showintro,
+                addedgelabels=addedgelabels, showedgelabels=showedgelabels,
+                edgeid=edgeid, edgeocc=edgeocc, edgeprob=edgeprob,
+                weightedges=weightedges, color=color, writedot=writedot,
+                rmprev=rmprev, intropos=intropos, rulepos=rulepos)
     print("dualstory")
     foldpathway(eoi, "dualstory", showintro=showintro,
                 addedgelabels=addedgelabels, showedgelabels=showedgelabels,
                 edgeid=edgeid, edgeocc=edgeocc, edgeprob=edgeprob,
                 weightedges=weightedges, color=color, writedot=writedot,
                 rmprev=rmprev, intropos=intropos, rulepos=rulepos)
-    #print("statestory")
-    #foldpathway(eoi, "statestory", showintro=showintro,
-    #            addedgelabels=addedgelabels, showedgelabels=showedgelabels,
-    #            edgeid=edgeid, edgeocc=edgeocc, edgeprob=edgeprob,
-    #            weightedges=weightedges, color=color, writedot=writedot,
-    #            rmprev=rmprev, intropos=intropos, rulepos=rulepos)
 
 
 def foldpathway(eoi, prefix, causalgraphs=None, siphon=False, ignorelist=[],
@@ -7123,6 +7179,10 @@ def foldpathway(eoi, prefix, causalgraphs=None, siphon=False, ignorelist=[],
     #pathway.get_maxrank()
     pathway.build_adjacency(hyper=True)
     pathway.rank_sequentially(intropos=intropos, rulepos=rulepos)
+    # Customize ranks of pathway.
+    for node in pathway.eventnodes + pathway.statenodes:
+        node.rank = node.rank /2 +0.5
+    pathway.get_maxrank()
 
     # Compute the number of unique instances of precedence relationships.
     if computenum == True:
@@ -7249,6 +7309,16 @@ def foldpathway(eoi, prefix, causalgraphs=None, siphon=False, ignorelist=[],
     for eventnode in pathway.eventnodes:
         if eventnode.rule != None:
             eventnode.pdh = pdhs[eventnode.rule]
+    # Set state nodes that are outputs of PDH events as PDH themselves.
+    # Also assign a number to each state PDH so they can be selected later.
+    state_pdh_num = 1
+    for eventnode in pathway.eventnodes:
+        if eventnode.pdh == True:
+            output_state_nodes = []
+            for hyperedge in eventnode.outgoing:
+                if isinstance(hyperedge.target, StateNode):
+                    hyperedge.target.pdh = state_pdh_num
+            state_pdh_num += 1
 
     # Save a copy of the pathway up to that point. Will be used to create
     # the final pathway where context is ignored.
@@ -7262,100 +7332,16 @@ def foldpathway(eoi, prefix, causalgraphs=None, siphon=False, ignorelist=[],
     #pathway.align_vertical()
     ##pathway.compute_relstats()   
 
-    ## Conflate outputs of a same event if they have all the same targets.
-    ## Will take some time to implement, since it requires to write the
-    ## functions to read state from label.
-    #for eventnode in pathway.eventnodes:
-    #    output_nodes = []
-    #    for hyperedge in pathway.hyperedges:
-    #        if isinstance(hyperedge.target, StateNode):
-    #            if eventnode == hyperedge.sources[0]:
-    #                output_nodes.append(hyperedge.target)
-    #    if len(output_nodes) > 1 :
-    #        print(eventnode) 
-    #        # Gather all hyperedges that have an output_node in its sources.
-    #        out_hedges = []
-    #        for hyperedge in pathway.hyperedges:
-    #            if len(hyperedge.sources) > 1:
-    #                for output_node in output_nodes:
-    #                    if output_node in hyperedge.sources:
-    #                        out_hedges.append(hyperedge)
-    #                        break
-    #        # Keep only the sources of hyperedges that are in output_nodes.
-    #        source_groups = []
-    #        for out_hedge in out_hedges:
-    #            sources = []
-    #            for source in out_hedge.sources:
-    #                if source in output_nodes:
-    #                    sources.append(source)
-    #            source_groups.append(sources)
-    #        # Get potential groups of output_nodes to merge.
-    #        potential_merges = []
-    #        for i in range(len(source_groups)):
-    #            sources = source_groups[i]
-    #            node_list = sources
-    #            for j in range(len(source_groups)):
-    #                sources2 = source_groups[j]
-    #                if i != j:
-    #                    # Check if any node from node_list is present in the
-    #                    # sources of out_hedge2.
-    #                    consider_hedge2 = False
-    #                    for node in node_list:
-    #                        if node in sources2:
-    #                            consider_hedge2 = True
-    #                            break
-    #                    if consider_hedge2 == True:
-    #                        # remove from node_list any node that is not in
-    #                        # the sources of out_hedge2.
-    #                        new_nodes = []
-    #                        for node in node_list:
-    #                            if node in sources2:
-    #                                new_nodes.append(node)
-    #                        node_list = new_nodes
-    #            potential_merges.append(node_list)
-    #        # Get the set of merges. Python's set function does not work
-    #        # on a list of lists.
-    #        unique_merges = []
-    #        for potential_merge in potential_merges:
-    #           is_found = False
-    #           for unique_merge in unique_merges:
-    #               same = equivalent_node_lists(unique_merge, potential_merge)
-    #               if same == True:
-    #                   is_found = True
-    #           if is_found == False:
-    #               unique_merges.append(potential_merge)
-    #        for u in unique_merges:
-    #            print("---")
-    #            for n in u:
-    #                print(n.state)
-    #        # Merge the nodes found to be part of the same hyperedges.
-    #        # In practice, put the state of all nodes in the first node and
-    #        # delete nodes and their edges except for the first node.
-    #        
-    #        #for i in range(len(pathway.statenodes)):
-    #        #    pathway.statenodes[i].index = i
-    #        #unique_merges_inds = []
-    #        #for unique_merge in unique_merges:
-    #        #    unique_merge_inds = []
-    #        #    for node in unique_merge:
-    #        #        unique_merge_inds.append(node.index)
-    #        #    unique_merges_inds.append(unique_merge_inds)
-    #        #for unique_merge_inds in unique_merges_inds:
-    #        #    merge_nodes(unique_merge_inds, pathway.statenodes,
-    #        #                pathway.hyperedges)
-
     # Write pathway with splited nodes when they have different context. 
     if prefix == "modstory":
         pathway.filename = "eventpathway-split.dot"
     if prefix == "dualstory":
         pathway.filename = "dualpathway-split.dot"
-    if prefix == "statestory":
-        pathway.filename = "statepathway-split.dot"
-    merge_samerule_outputs(pathway)
+        fuse_multiple_outputs_with_hyperedges(pathway)
     pathway.build_nointro()
     pathway.reverse_subedges()
     pathway.assign_label_carriers(showintro)
-    pathway.align_vertical()
+    #pathway.align_vertical()
     pathway.build_dot_file(showintro, addedgelabels, showedgelabels,
                            edgeid, edgeocc, edgeprob, statstype,
                            weightedges, edgewidthscale=1.5)
@@ -7364,41 +7350,178 @@ def foldpathway(eoi, prefix, causalgraphs=None, siphon=False, ignorelist=[],
     outfile.write(pathway.dot_file)
     outfile.close()
 
+    if prefix == "dualstory":
+        # Write state nodes only on split graph.
+        pathway.filename = "statepathway-split.dot"
+        pathway.build_adjacency(hyper=True)
+        keep_states_only(pathway)
+        pathway.build_dot_file(showintro, addedgelabels, showedgelabels,
+                               edgeid, edgeocc, edgeprob, statstype,
+                               weightedges, edgewidthscale=1.5)
+        output_path = "{}/{}".format(eoi, pathway.filename)
+        outfile = open(output_path, "w")
+        outfile.write(pathway.dot_file)
+        outfile.close()
+
     # Merge nodes corresponding to a same rule (now ignoring 's).
     if prefix == "modstory":
         pathwaycopy.filename = "eventpathway.dot"
     if prefix == "dualstory":
         pathwaycopy.filename = "dualpathway.dot"
-    if prefix == "statestory":
-        pathwaycopy.filename = "statepathway.dot"
+        for statenode in pathwaycopy.statenodes:
+            statenode.label = statenode.stdedit
+            statenode.state = statenode.edit
     for eventnode in pathwaycopy.eventnodes:
         eventnode.label = eventnode.label.replace("'", "").strip()
-    for statenode in pathwaycopy.statenodes:
-        statenode.label = statenode.stdedit
-        statenode.state = statenode.edit
     foldstory(pathwaycopy)
     pathwaycopy.build_adjacency(hyper=True)
     pathwaycopy.rank_sequentially(intropos=intropos, rulepos=rulepos)
-    merge_samerule_outputs(pathwaycopy)
+    if prefix == "dualstory":
+        # Customize ranks of pathway.
+        for node in pathwaycopy.eventnodes + pathwaycopy.statenodes:
+            node.rank = node.rank / 2 + 0.5
+        pathwaycopy.get_maxrank()
+        fuse_multiple_outputs_with_hyperedges(pathwaycopy)
     pathwaycopy.build_nointro()
     pathwaycopy.reverse_subedges()
     pathwaycopy.assign_label_carriers(showintro)
-    pathwaycopy.align_vertical()
+    #pathwaycopy.align_vertical()
     pathwaycopy.build_dot_file(showintro, addedgelabels, showedgelabels,
-                           edgeid, edgeocc, edgeprob, statstype,
-                           weightedges, edgewidthscale=1.5)
+                               edgeid, edgeocc, edgeprob, statstype,
+                               weightedges, edgewidthscale=1.5)
     output_path = "{}/{}".format(eoi, pathwaycopy.filename)
     outfile = open(output_path, "w")
     outfile.write(pathwaycopy.dot_file)
     outfile.close()
 
+    if prefix == "dualstory":
+        # Write state nodes only.
+        pathwaycopy.filename = "statepathway.dot"
+        pathwaycopy.build_adjacency(hyper=True)
+        keep_states_only(pathwaycopy)
+        pathwaycopy.build_dot_file(showintro, addedgelabels, showedgelabels,
+                                   edgeid, edgeocc, edgeprob, statstype,
+                                   weightedges, edgewidthscale=1.5)
+        output_path = "{}/{}".format(eoi, pathwaycopy.filename)
+        outfile = open(output_path, "w")
+        outfile.write(pathwaycopy.dot_file)
+        outfile.close()
 
-def merge_samerule_outputs(graph):
+
+def fuse_multiple_outputs_with_causaledges(graph):
     """
-    Merge state nodes that come from a same rule if they are together in all
-    their hyperedges.
+    Merge state nodes that come from a same rule if they have all the same
+    target events. To use on a graph with causaledges.
     """
 
+    # Rebuild adjacency lists using causal edges.
+    graph.build_adjacency()
+    # Get all the groups of nodes coming from a same event.
+    node_groups = []
+    for eventnode in graph.eventnodes:
+        if eventnode.intro == False:
+            new_group = []
+            if len(eventnode.outgoing) > 1:
+                for edge in eventnode.outgoing:
+                    new_group.append(edge.target)
+            if len(new_group) > 0:
+                # Check if this new node_group is already present.
+                already_present = False
+                for node_group in node_groups:
+                    same_nodes = same_objects(node_group, new_group)
+                    if same_nodes == True:
+                        already_present = True
+                        break
+                if already_present == False:
+                    node_groups.append(new_group)
+    # Check if each node within a group have all the upstream events.
+    groups_to_remove = []
+    for i in range(len(node_groups)):
+        node_group = node_groups[i]
+        # Get all upstream events from each node within the group.
+        all_up_events = []
+        for node in node_group:
+            for edge in node.incoming:
+                if edge.source not in all_up_events:
+                    all_up_events.append(edge.source)
+        # Check if each node has an edge from each upstream event.
+        for node in node_group:
+            all_sources = []
+            for edge in node.incoming:
+                if edge.source not in all_sources:
+                    all_sources.append(edge.source)
+            are_same = same_objects(all_sources, all_up_events)
+            if are_same == False:
+                groups_to_remove.insert(0, i)
+                break
+    for i in groups_to_remove:
+        del(node_groups[i])
+    # Check if each node within a group have all the downstream events.
+    groups_to_remove2 = []
+    for j in range(len(node_groups)):
+        node_group = node_groups[j]
+        # Get all downstream events from each node within the group.
+        all_down_events = []
+        for node in node_group:
+            for edge in node.outgoing:
+                if edge.target not in all_down_events:
+                    all_down_events.append(edge.target)
+        # Check if each node has an edge to each downstream event.
+        for node in node_group:
+            all_targets = []
+            for edge in node.outgoing:
+                if edge.target not in all_targets:
+                    all_targets.append(edge.target)
+            are_same = same_objects(all_targets, all_down_events)
+            if are_same == False:
+                groups_to_remove2.insert(0, j)
+                break
+    for j in groups_to_remove2:
+        del(node_groups[j])
+    # Merge all the nodes within a group.
+    # Effectively, put all states in first node and delete all other
+    # nodes along with edges that touch them.
+    nodes_to_remove = []
+    for node_group in node_groups:
+        #first_edit = copy.deepcopy(node_group[0].edit)
+        first_state = copy.deepcopy(node_group[0].state)
+        for i in range(1, len(node_group)):
+            nodes_to_remove.append(node_group[i])
+            #for agent in node_group[i].edit:
+            #    agentcopy = copy.deepcopy(agent)
+            #    first_edit.append(agentcopy)
+            for agent in node_group[i].state:
+                agentcopy = copy.deepcopy(agent)
+                first_state.append(agentcopy)
+        #node_group[0].edit = group_sites_by_agent(first_edit)
+        node_group[0].state = group_sites_by_agent(first_state)
+        lbl = write_context_expression(node_group[0].state, hideid=True)
+        node_group[0].label = lbl
+    # Delete edges that touch a node to remove.
+    edge_indexes = []
+    for i in range(len(graph.causaledges)):
+        edge = graph.causaledges[i]
+        if edge.target in nodes_to_remove or edge.source in nodes_to_remove:
+            edge_indexes.insert(0, i)
+    for i in edge_indexes:
+        del(graph.causaledges[i])
+    # Remove nodes.
+    node_indexes = []
+    for k in range(len(graph.statenodes)):
+        if graph.statenodes[k] in nodes_to_remove:
+            node_indexes.insert(0, k)
+    for k in node_indexes:
+        del(graph.statenodes[k])
+
+
+def fuse_multiple_outputs_with_hyperedges(graph):
+    """
+    Merge state nodes that come from a same rule if they have all the same
+    target events. To use on a graph with hyperedges.
+    """
+
+    # Rebuild adjacency lists using hyperedges.
+    graph.build_adjacency(hyper=True)
     # Get all the groups of nodes coming from a same event.
     node_groups = []
     for eventnode in graph.eventnodes:
@@ -7417,7 +7540,7 @@ def merge_samerule_outputs(graph):
                         break
                 if already_present == False:
                     node_groups.append(new_group)
-    # Check if each node within a group have all the upstream event.
+    # Check if each node within a group have all the upstream events.
     groups_to_remove = []
     for i in range(len(node_groups)):
         node_group = node_groups[i]
@@ -7428,7 +7551,7 @@ def merge_samerule_outputs(graph):
                 for source in hyperedge.sources:
                     if source not in all_up_events:
                         all_up_events.append(source)
-        # Check if each node has a edge from each upstream event.
+        # Check if each node has an edge from each upstream event.
         for node in node_group:
             all_sources = []
             for hyperedge in node.incoming:
@@ -7441,25 +7564,48 @@ def merge_samerule_outputs(graph):
                 break
     for i in groups_to_remove:
         del(node_groups[i])
-    # Check if each node within a group are together in all their
-    # outgoing hyperedges.
+    # Check if each node within a group have all the downstream events.
     groups_to_remove2 = []
     for j in range(len(node_groups)):
         node_group = node_groups[j]
-        # Get all outgoing hyperedges from each node within the group.
-        all_outgoing = []
+        # Get all downstream events from each node within the group.
+        all_down_events = []
         for node in node_group:
             for hyperedge in node.outgoing:
-                if hyperedge not in all_outgoing:
-                    all_outgoing.append(hyperedge)
-        # Check if each node has all outgoing hyperedges.
+                if hyperedge.target not in all_down_events:
+                    all_down_events.append(hyperedge.target)
+        # Check if each node has an edge to each downstream event.
         for node in node_group:
-            are_same = same_objects(node.outgoing, all_outgoing)
+            all_targets = []
+            for hyperedge in node.outgoing:
+                if hyperedge.target not in all_targets:
+                    all_targets.append(hyperedge.target)
+            are_same = same_objects(all_targets, all_down_events)
             if are_same == False:
                 groups_to_remove2.insert(0, j)
                 break
     for j in groups_to_remove2:
         del(node_groups[j])
+
+    ## Check if each node within a group are together in all their
+    ## outgoing hyperedges.
+    #groups_to_remove2 = []
+    #for j in range(len(node_groups)):
+    #    node_group = node_groups[j]
+    #    # Get all outgoing hyperedges from each node within the group.
+    #    all_outgoing = []
+    #    for node in node_group:
+    #        for hyperedge in node.outgoing:
+    #            if hyperedge not in all_outgoing:
+    #                all_outgoing.append(hyperedge)
+    #    # Check if each node has all outgoing hyperedges.
+    #    for node in node_group:
+    #        are_same = same_objects(node.outgoing, all_outgoing)
+    #        if are_same == False:
+    #            groups_to_remove2.insert(0, j)
+    #            break
+    #for j in groups_to_remove2:
+    #    del(node_groups[j])
 
     # Merge all the nodes within a group.
     # Effectively, put all states in first node and delete all other
@@ -7480,7 +7626,7 @@ def merge_samerule_outputs(graph):
         node_group[0].state = group_sites_by_agent(first_state)
         lbl = write_context_expression(node_group[0].state, hideid=True)
         node_group[0].label = lbl
-    # Remove edges to hyperedge branches that touch a node to remove.
+    # Delete hyperedge branches that touch a node to remove.
     hyperedge_indexes = []
     for i in range(len(graph.hyperedges)):
         hyperedge = graph.hyperedges[i]
@@ -7607,7 +7753,7 @@ def colorgraph(eoi, prefix, causalgraph=None, siphon=False, ignorelist=[],
         for path in paths_nodes:
             path_pdhs = []
             for node in path:
-                if node.pdh == True:
+                if node.pdh != False:
                     path_pdhs.append(node)
             paths_pdhs.append(path_pdhs)
         for path in paths_pdhs:
