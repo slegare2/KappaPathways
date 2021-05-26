@@ -193,10 +193,14 @@ class CausalEdge(object):
 
         if not isinstance(self.source, EventNode):
             if not isinstance(self.source, StateNode):
-                raise TypeError("source should be an EventNode or StateNode.")
+                if not isinstance(self.source, MidNode):
+                    raise TypeError("Source should be an EventNode, StateNode "
+                                    "or MidNode.")
         if not isinstance(self.target, EventNode):
             if not isinstance(self.target, StateNode):
-                raise TypeError("target should be an EventNode or StateNode.")
+                if not isinstance(self.target, MidNode):
+                    raise TypeError("Target should be an EventNode, StateNode "
+                                    "or MidNode.")
         if self.weight != None:
             if not isinstance(self.weight, int):
                 raise TypeError("uses should be an integer.")
@@ -232,7 +236,7 @@ class HyperEdge(object):
                  secondary=False, underlying=False, reverse=False,
                  labelcarrier=True, indicator=False, hyperid=None, pos=None,
                  labelpos=None, overridewidth=None, overridelabel=None,
-                 essential=False):
+                 essential=False, cover=False):
         """ Initialize class CausalEdge. """
 
         self.edgelist = edgelist
@@ -257,6 +261,7 @@ class HyperEdge(object):
         self.overridewidth = overridewidth
         self.overridelabel = overridelabel
         self.essential = essential
+        self.cover = cover
         self.check_types()
         self.update()
 
@@ -310,6 +315,32 @@ class HyperEdge(object):
         res = "HyperEdge:\n"
         for edge in self.edgelist:
             res+="{}\n".format(edge.__repr__())
+
+        return res
+
+
+class MidNode(object):
+    """ Intermediary node to build hyperedges. """
+    
+    def __init__(self, nodeid):
+        """ Initialize class MidNode. """
+
+        self.nodeid = nodeid
+        self.check_types()
+
+
+    def check_types(self):
+        """ Check that MidNode attributes have proper types. """
+
+        if not isinstance(self.nodeid, str):
+            raise TypeError("nodeid should be a string.")
+
+
+    def __repr__(self):
+        """ Representation of the MidNode object. """
+
+        res =  "MidNode "
+        res += 'id: "{}", '.format(self.nodeid)
 
         return res
 
@@ -676,6 +707,7 @@ class CausalGraph(object):
         # Main variables.
         self.eventnodes = []
         self.statenodes = []
+        self.midnodes = []
         self.causaledges = []
         self.hyperedges = []
         #self.midnodes = []
@@ -767,89 +799,99 @@ class CausalGraph(object):
             if line[0] == "}":
                 rank = None
             # Read nodes.
+            read_it = False
             if "label=" in line and "Occurrence" not in line:
                 if "->" not in line and "rank = same" not in line:
-                    if line[0:2] == "//":
-                       read_line = line[2:]
-                    else:
-                       read_line = line
-                    tokens = read_line.split()
-                    ori_id = tokens[0]
-                    if '"' in ori_id:
-                        ori_id = ori_id[1:-1]
-                    if any(s in ori_id for s in ["ev", "state", "mid"]):
-                        node_id = ori_id
-                    else:
-                        node_id = "ev{}".format(ori_id)
-                    lbl_start = read_line.index("label=")+7
-                    stded_start = -1
-                    if "stded=" in read_line:
-                        stded_start = read_line.index("stded=")
-                    shrk = False
-                    if "hlabel=" in read_line:
-                        lbl_start = read_line.index("hlabel=")+8
-                        shrk = True
-                    if ">" in read_line:
-                        lbl_end = (read_line[lbl_start:stded_start]
-                                      .rfind('>')+lbl_start)
-                    else:
-                        lbl_end = (read_line[lbl_start:stded_start]
-                                      .index('"')+lbl_start)
-                    label_str = read_line[lbl_start:lbl_end].strip()
-                    label = label_str.replace("\\n ", "")
-                    label = label.replace("<br/>", " ")
-                    if "intro=True" in read_line:
-                        is_intro = True
-                    else:
-                        is_intro = False
-                    if "first=True" in read_line:
-                        is_first = True
-                    else:
-                        is_first = False
-                    stdedit = get_stded(read_line)
-                    if "midtype" in read_line:
-                        mid_start = read_line.index('midtype')+8
-                        mid_end = read_line[mid_start:].index(',')+mid_start
-                        midtype = read_line[mid_start:mid_end]
-                        if "style=dotted" in read_line:
-                            ghost = True
-                        else:
-                            ghost = False
-                        fillcolor = get_field("fillcolor=", read_line, "black")
-                        bordercolor = get_field(" color=", read_line, "black")
-                        new_midnode = MidNode(ori_id, rank, midtype,
-                                              ghost=ghost, fillcolor=fillcolor,
-                                              bordercolor=bordercolor)
-                        if 'cover="True"' not in line:
-                            self.midnodes.append(new_midnode)
-                        elif 'cover="True"' in line:
-                            self.covermidnodes.append(new_midnode)
-                    else:
-                        if "state" in node_id:
-                            eventid = get_field("ev=", read_line, None)
-                            self.statenodes.append(StateNode(node_id, label,
-                                                             rank,
-                                                             intro=is_intro,
-                                                             first=is_first,
-                                                             eventid=eventid,
-                                                             stdedit=stdedit))
-                            self.label_mapping[node_id] = label
-                        elif "ev" in node_id:
-                            eventid = node_id[2:]
-                            self.eventnodes.append(EventNode(node_id, label,
-                                                             rank,
-                                                             intro=is_intro,
-                                                             first=is_first,
-                                                             shrink=shrk,
-                                                             eventid=eventid))
-                            self.label_mapping[node_id] = label
+                    if "cover=True" not in line:
+                        read_it = True
+            if read_it == True:
+                if line[0:2] == "//":
+                   read_line = line[2:]
+                else:
+                   read_line = line
+                tokens = read_line.split()
+                ori_id = tokens[0]
+                if '"' in ori_id:
+                    ori_id = ori_id[1:-1]
+                if any(s in ori_id for s in ["ev", "state", "mid"]):
+                    node_id = ori_id
+                else:
+                    node_id = "ev{}".format(ori_id)
+                lbl_start = read_line.index("label=")+7
+                stded_start = -1
+                if "stded=" in read_line:
+                    stded_start = read_line.index("stded=")
+                shrk = False
+                if "hlabel=" in read_line:
+                    lbl_start = read_line.index("hlabel=")+8
+                    shrk = True
+                if ">" in read_line:
+                    lbl_end = (read_line[lbl_start:stded_start]
+                                  .rfind('>')+lbl_start)
+                else:
+                    lbl_end = (read_line[lbl_start:stded_start]
+                                  .index('"')+lbl_start)
+                label_str = read_line[lbl_start:lbl_end].strip()
+                label = label_str.replace("\\n ", "")
+                label = label.replace("<br/>", " ")
+                if "intro=True" in read_line:
+                    is_intro = True
+                else:
+                    is_intro = False
+                if "first=True" in read_line:
+                    is_first = True
+                else:
+                    is_first = False
+                stdedit = get_stded(read_line)
+                #if "midtype" in read_line:
+                #    mid_start = read_line.index('midtype')+8
+                #    mid_end = read_line[mid_start:].index(',')+mid_start
+                #    midtype = read_line[mid_start:mid_end]
+                #    if "style=dotted" in read_line:
+                #        ghost = True
+                #    else:
+                #        ghost = False
+                #    fillcolor = get_field("fillcolor=", read_line, "black")
+                #    bordercolor = get_field(" color=", read_line, "black")
+                #    new_midnode = MidNode(ori_id, rank, midtype,
+                #                          ghost=ghost, fillcolor=fillcolor,
+                #                          bordercolor=bordercolor)
+                #    if 'cover=True' not in line:
+                #        self.midnodes.append(new_midnode)
+                #    elif 'cover=True' in line:
+                #        self.covermidnodes.append(new_midnode)
+                if "ev" in node_id:
+                    eventid = node_id[2:]
+                    self.eventnodes.append(EventNode(node_id, label,
+                                                     rank,
+                                                     intro=is_intro,
+                                                     first=is_first,
+                                                     shrink=shrk,
+                                                     eventid=eventid))
+                    self.label_mapping[node_id] = label
+
+                elif "state" in node_id:
+                    eventid = get_field("ev=", read_line, None)
+                    self.statenodes.append(StateNode(node_id, label,
+                                                     rank,
+                                                     intro=is_intro,
+                                                     first=is_first,
+                                                     eventid=eventid,
+                                                     stdedit=stdedit))
+                    self.label_mapping[node_id] = label
+                elif "mid" in node_id:
+                    self.midnodes.append(MidNode(node_id))
         # Read edges.
         tmp_edges = []
-        tmp_midedges = []
-        tmp_cedges = []
-        tmp_cmidedges = []
+        #tmp_midedges = []
+        #tmp_cedges = []
+        #tmp_cmidedges = []
         for line in dotfile:
+            read_it = False
             if "->" in line and '[style="invis"]' not in line:
+                if "cover=True" not in line:
+                    read_it = True
+            if read_it == True:
                 if line[0:2] == "//":
                     read_line = line[2:]
                     underlying = True
@@ -881,18 +923,18 @@ class CausalGraph(object):
                         source = statenode
                     if statenode.nodeid == target_id:
                         target = statenode
-                #for node in self.midnodes:
-                #    if node.nodeid == source_id:
-                #        source = node
-                #    if node.nodeid == target_id:
-                #        target = node
+                for node in self.midnodes:
+                    if node.nodeid == source_id:
+                        source = node
+                    if node.nodeid == target_id:
+                        target = node
                 #for node in self.covermidnodes:
                 #    if node.nodeid == source_id:
                 #        source = node
                 #    if node.nodeid == target_id:
                 #        target = node
-                meshid = get_field("meshid=", read_line, 1)
-                meshid = int(meshid)
+                #meshid = get_field("meshid=", read_line, 1)
+                #meshid = int(meshid)
                 weight = get_field("w=", read_line, 1)
                 weight = int(weight)
                 layout_weight = get_field("weight=", read_line, 1)
@@ -948,20 +990,19 @@ class CausalGraph(object):
                     ess = True
                 new_edge = CausalEdge(source, target, weight=weight,
                                       number=weight, relationtype=edgetype,
-                                      meshid=meshid, underlying=underlying,
+                                      underlying=underlying,
                                       color=color, essential=ess)
-                if 'cover="True"' not in line:
-                    tmp_edges.append(new_edge)
-                elif 'cover="True"' in line:
-                    tmp_cedges.append(new_edge)
+                tmp_edges.append(new_edge)
+                #elif 'cover=True' in line:
+                #    tmp_cedges.append(new_edge)
         for edge in tmp_edges:
             self.causaledges.insert(0, edge)
-        for midedge in tmp_midedges:
-            self.midedges.insert(0, midedge)
-        for cedge in tmp_cedges:
-            self.coveredges.insert(0, cedge)
-        for cmidedge in tmp_cmidedges:
-            self.covermidedges.insert(0, cmidedge)
+        #for midedge in tmp_midedges:
+        #    self.midedges.insert(0, midedge)
+        #for cedge in tmp_cedges:
+        #    self.coveredges.insert(0, cedge)
+        #for cmidedge in tmp_cmidedges:
+        #    self.covermidedges.insert(0, cmidedge)
         self.postprocess()
 
 
@@ -979,41 +1020,19 @@ class CausalGraph(object):
                     node.label = "Lig"
         if self.hypergraph == False:
             self.create_hyperedges()
+            self.read_states_from_file()
+        elif self.hypergraph == True:
+            self.read_hyperedges()
         if self.producedby != "KappaPathways":
             self.find_first_rules()
             self.rank_sequentially()
             self.rm_superfluous_causal_edges()
             self.align_vertical()
-
-        #if self.meshedgraph == False:
-        #    self.create_hyperedges()
-        #    #self.find_edgegroups()
-        #    #self.create_meshes(self.edgegroups, 1)
-        #    for node in self.eventnodes:
-        #        if "Intro" in node.label:
-        #            node.intro = True
-        #            node.label = node.label[6:]
-        #            if node.label == "Lig, Lig":
-        #                node.label = "Lig"
-        #    self.find_first_rules()
-        #    self.rank_sequentially()
-        #    self.rm_superfluous_causal_edges()
-        #    self.align_vertical()
-        #elif self.meshedgraph == True:
-        #   self.find_midnodegroups(cover=False)
-        #   self.find_midnodegroups(cover=True)
-        #   self.read_meshes(cover=False)
-        #   self.read_meshes(cover=True)
-        #   sorted_meshes = sorted(self.meshes, key=lambda x: x.meshid)
-        #   sorted_covermeshes = sorted(self.covermeshes, key=lambda x: x.meshid)
-        #   self.meshes = sorted_meshes
-        #   self.covermeshes = sorted_covermeshes
         if self.eoi == None:
             self.get_maxrank()
             for node in self.nodes:
                 if node.rank == self.maxrank:
                     self.eoi = node.label
-        self.read_states_from_file()
 
 
     def read_states_from_file(self):
@@ -1046,6 +1065,40 @@ class CausalGraph(object):
             if edge_found == False:
                 self.hyperedges.append(HyperEdge([edge]))
 
+
+    def read_hyperedges(self):
+        """
+        Create hyperedges by grouping edges pointing to a same midnode.
+        """
+
+        self.hyperedges = []
+        hyperdict = {}
+        targetdict = {}
+        # Find the target of each midnode.
+        for edge in self.causaledges:
+            if isinstance(edge.source, MidNode):
+                for midnode in self.midnodes:
+                    if edge.source == midnode:
+                        targetdict[midnode.nodeid] = edge.target
+        # Create a hyperedge with a single source for causal edges that
+        # directly link events and states without passing thougth midnodes.
+        for edge in self.causaledges:
+            if not isinstance(edge.source, MidNode):
+                if not isinstance(edge.target, MidNode):
+                    self.hyperedges.append(HyperEdge([edge]))
+        # Create a hyperedge with many sources for each midnode.
+        for edge in self.causaledges:
+            if isinstance(edge.target, MidNode):
+                for midnode in self.midnodes:
+                    if edge.target == midnode:
+                        new_target = targetdict[midnode.nodeid]
+                        edge.target = new_target
+                        if midnode.nodeid not in hyperdict.keys():
+                            hyperdict[midnode.nodeid] = HyperEdge([edge])
+                        else:
+                            hyperdict[midnode.nodeid].addedge(edge)
+        for midid in hyperdict.keys():
+            self.hyperedges.append(hyperdict[midid])
 
 #    def find_edgegroups(self):
 #        """
@@ -2035,6 +2088,7 @@ class CausalGraph(object):
                     hedge.underlying = True
                 nointro_hedge.weight = weight_summ
                 if len(nointro_hedge.edgelist) > 0:
+                    nointro_hedge.cover = True
                     self.coverhyperedges.append(nointro_hedge)
 
 
@@ -2065,55 +2119,55 @@ class CausalGraph(object):
         return nointro_hedge, underlying_list, correspondances
 
 
-    def build_nointro_for_meshes(self):
-        """
-        Create new meshes for the version of the graph that hides
-        intro nodes.
-        """
-
-        # Reset information about cover edges. 
-        for mesh in self.meshes:
-            mesh.underlying = False
-        self.covermeshes = []
-        nointro_groups = []
-        midid = self.find_max_midid()+1
-        for mesh1 in self.meshes:
-            mesh_list = []
-            if mesh1.underlying == False:
-                has_intro1, all_intro1 = self.check_intro(mesh1)
-                if has_intro1 == True:
-                    if all_intro1 == True:
-                        mesh1.underlying = True
-                    else:
-                        mesh_list.append(mesh1)
-                        noin1 = self.nointro_mesh(mesh1, midid)
-                        midid += len(noin1.midnodes)
-                        if len(noin1.midedges) > 0:
-                            # Check all other meshes that have the same
-                            # midedges when ignoring edges with intro nodes as
-                            # source. They will all be grouped inside a single
-                            # mesh without intro nodes as sources.
-                            for mesh2 in self.meshes:
-                                if mesh2.color == mesh1.color:
-                                    if mesh2 != mesh1:
-                                        if mesh2.underlying == False:
-                                            noin2 = self.nointro_mesh(mesh2,
-                                                                      midid)
-                                            if self.equivalent_meshes(noin1,
-                                                                      noin2):
-                                                mesh_list.append(mesh2)
-            if len(mesh_list) > 0:
-                # Compute occurence of nointro mesh as the sum of all its
-                # underlying meshes. Also mark meshes that were used as
-                # underlying.
-                uses_summ = 0
-                for mesh in mesh_list:
-                    uses_summ += mesh.uses
-                    mesh.underlying = True
-                noin1.uses = uses_summ
-                noin1.weight = uses_summ
-                if len(noin1.midedges) > 0:
-                    self.covermeshes.append(noin1)
+#    def build_nointro_for_meshes(self):
+#        """
+#        Create new meshes for the version of the graph that hides
+#        intro nodes.
+#        """
+#
+#        # Reset information about cover edges. 
+#        for mesh in self.meshes:
+#            mesh.underlying = False
+#        self.covermeshes = []
+#        nointro_groups = []
+#        midid = self.find_max_midid()+1
+#        for mesh1 in self.meshes:
+#            mesh_list = []
+#            if mesh1.underlying == False:
+#                has_intro1, all_intro1 = self.check_intro(mesh1)
+#                if has_intro1 == True:
+#                    if all_intro1 == True:
+#                        mesh1.underlying = True
+#                    else:
+#                        mesh_list.append(mesh1)
+#                        noin1 = self.nointro_mesh(mesh1, midid)
+#                        midid += len(noin1.midnodes)
+#                        if len(noin1.midedges) > 0:
+#                            # Check all other meshes that have the same
+#                            # midedges when ignoring edges with intro nodes as
+#                            # source. They will all be grouped inside a single
+#                            # mesh without intro nodes as sources.
+#                            for mesh2 in self.meshes:
+#                                if mesh2.color == mesh1.color:
+#                                    if mesh2 != mesh1:
+#                                        if mesh2.underlying == False:
+#                                            noin2 = self.nointro_mesh(mesh2,
+#                                                                      midid)
+#                                            if self.equivalent_meshes(noin1,
+#                                                                      noin2):
+#                                                mesh_list.append(mesh2)
+#            if len(mesh_list) > 0:
+#                # Compute occurence of nointro mesh as the sum of all its
+#                # underlying meshes. Also mark meshes that were used as
+#                # underlying.
+#                uses_summ = 0
+#                for mesh in mesh_list:
+#                    uses_summ += mesh.uses
+#                    mesh.underlying = True
+#                noin1.uses = uses_summ
+#                noin1.weight = uses_summ
+#                if len(noin1.midedges) > 0:
+#                    self.covermeshes.append(noin1)
 
 
     def find_max_midid(self, cover=False):
@@ -2132,18 +2186,18 @@ class CausalGraph(object):
         return max_midid
 
 
-    def find_max_meshid(self, cover=False):
-        """ Find the highest mesh id in the graph. """
-
-        meshids = []
-        for mesh in self.meshes:
-            meshids.append(mesh.meshid)
-        if cover == True:
-            for mesh in self.covermeshes:
-                meshids.append(mesh.meshid)
-        max_meshid = max(meshids)
-
-        return max_meshid
+#    def find_max_meshid(self, cover=False):
+#        """ Find the highest mesh id in the graph. """
+#
+#        meshids = []
+#        for mesh in self.meshes:
+#            meshids.append(mesh.meshid)
+#        if cover == True:
+#            for mesh in self.covermeshes:
+#                meshids.append(mesh.meshid)
+#        max_meshid = max(meshids)
+#
+#        return max_meshid
 
 
     def check_intro(self, hyperedge):
@@ -2728,7 +2782,12 @@ class CausalGraph(object):
                             node_str += "{}".format(node_lines[i])
                         else:
                             node_str += "<br/>{}".format(node_lines[i])
-                    dot_str += '[label=<{}>'.format(node_str)
+                    # Add PDH information if not already present.
+                    prefix_num = ""
+                    if node.pdh != False and ":" not in node_str:
+                        prefix_num = " : {}".format(node.pdh)
+                    dot_str += ('[label=<{}{}>'
+                                .format(node_str, prefix_num))
                     dot_str += ', shape={}, style="filled'.format(node_shape)
                     if node.pdh == False:
                         dot_str += '"'
@@ -2761,10 +2820,10 @@ class CausalGraph(object):
                         else:
                             node_str += "<br/>{}".format(node_lines[i])
                     prefix_num = ""
-                    if node.pdh != False:
-                        prefix_num = "{}. ".format(node.pdh)
+                    if node.pdh != False and ":" not in node_str:
+                        prefix_num = " : {}".format(node.pdh)
                     dot_str += ('{} [label=<{}{}>'
-                                .format(node.nodeid, prefix_num, node_str))
+                                .format(node.nodeid, node_str, prefix_num))
                     dot_str += ', shape={}, style="filled'.format(node_shape)
                     if node.pdh == False:
                         dot_str += '"'
@@ -2894,97 +2953,64 @@ class CausalGraph(object):
                     edgerankpos = self.rankposdict[edge_str]
                     dot_str += ', pos={}'.format(edgerankpos)
             dot_str += '] ;\n'
-        # Draw each intermediary edge found in each mesh. Comment if
-        # Underlying. The occurrence of each intermediary edge within
-        # a mesh should be the same.
-        #for mesh in self.meshes:
-        #    mesh.check_indicators()
-        #    for midedge in mesh.midedges:
-        #        if showintro == False and mesh.underlying == True:
-        #            dot_str += "//"
-        #        dot_str += self.write_midedge(mesh, midedge, average_use,
-        #            minpenwidth, medpenwidth, maxpenwidth, addedgelabels,
-        #            showedgelabels, edgeid, edgeocc, edgeuse, statstype,
-        #            weightedges)
-        #        dot_str += '] ;\n'
-        if self.hypergraph == False:
-            for hyperedge in self.hyperedges:
-                u = hyperedge.underlying
-                if showintro == True or (showintro == False and u == False):
-                    for edge in hyperedge.edgelist:
-                        dot_str += self.write_edge(edge, params)
-        # Write hyperedges.
-        elif self.hypergraph == True:
-            midid = 1
-            for hyperedge in self.hyperedges:
-                u = hyperedge.underlying
-                if showintro == True or (showintro == False and u == False):
-                    dot_str += self.write_hyperedge(hyperedge, midid, params)
-                    midid += 1
-                #if len(hyperedge.edgelist) > 1:
-                #    midid_str = "mid{}".format(midid)
-                #    dot_str += self.write_midnode(midid_str)
-                #    dot_str += '] ;\n'
-                #    all_conflict = True
-                #    for edge in hyperedge.edgelist:
-                #        dot_str += self.write_custom_edge(edge.source.nodeid,
-                #                    midid_str, edge.color, edge.weight,
-                #                    edge.layout_weight, edge.relationtype,
-                #                    edge.reverse, False)
-                #        dot_str += '] ;\n'
-                #        if edge.relationtype != "conflict":
-                #            all_conflict = False
-                #    if all_conflict == True:
-                #        reltype = "conflict"
-                #    else:
-                #        reltype = "causal"
-                #    dot_str += self.write_custom_edge(midid_str,
-                #                    hyperedge.target.nodeid, "black",
-                #                    hyperedge.weight, hyperedge.layout_weight,
-                #                    reltype, hyperedge.reverse)
-                #    dot_str += '] ;\n'
-                #    midid += 1
-                #else:
-                #    dot_str += self.write_edge(hyperedge.edgelist[0])
-                #    dot_str += '] ;\n'
-        # Draw cover edges if intro nodes are not shown.
-        #if showintro == False:
-        #    for covermesh in self.covermeshes:
-        #        covermesh.check_indicators()
-        #        for midedge in covermesh.midedges:
-        #            dot_str += self.write_midedge(covermesh, midedge,
-        #                average_use, minpenwidth, medpenwidth, maxpenwidth,
-        #                addedgelabels, showedgelabels, edgeid, edgeocc,
-        #                edgeuse, statstype, weightedges)
-        #            dot_str += ', cover="True"] ;\n'
-        if showintro == False:
-            for coverhyperedge in self.coverhyperedges:
-                #coverhyperedge.check_indicators()
-                dot_str += self.write_hyperedge(coverhyperedge, midid, params)
+        # If showintro is True, write underlying edges and do not write cover
+        # edges.
+        # If showintro is False, write underlying edges as comments and write
+        # cover edges.
+        # The method read_dot reads all underlying edges, even if commented,
+        # and does not read cover edges.
+        if showintro == True:
+            hyperedges_to_write = self.hyperedges
+        elif showintro == False:
+            hyperedges_to_write = self.hyperedges + self.coverhyperedges
+        edges_str = ""
+        midid = 1
+        for hyperedge in hyperedges_to_write:
+            if self.hypergraph == False:
+                under = hyperedge.underlying
+                for subedge in hyperedge.edgelist:
+                    edges_str += self.write_edge(subedge, params,
+                                                 underlying=under,
+                                                 cover=hyperedge.cover,
+                                                 showintro=showintro)
+            elif self.hypergraph == True:
+                edges_str += self.write_hyperedge(hyperedge, midid, params,
+                                                  showintro=showintro)
                 midid += 1
+        dot_str += edges_str
         # Close graph.
         dot_str += "}"
         self.dot_file = dot_str
 
 
-    def write_midnode(self, midid, color, scale):
+    def write_midnode(self, midid, color, scale, underlying=False, cover=False,
+                      showintro=True):
         """ Write the line of a dot file for a single midnode."""
 
-        mid_str = '"{}" [label=""'.format(midid)
+        mid_str = ""
+        if showintro == False and underlying == True:
+            mid_str += "//"
+        mid_str += '"{}" [label=""'.format(midid)
         mid_str += ', shape=circle'
         mid_str += ', style=filled'
         mid_str += ', fillcolor={}, color={}'.format(color, color)
-        mid_str += ', width={}'.format(0.1*math.sqrt(scale))
-        mid_str += ', height={}'.format(0.1*math.sqrt(scale))
+        mid_str += ', width={:.2}'.format(0.1*math.sqrt(scale))
+        mid_str += ', height={:.2}'.format(0.1*math.sqrt(scale))
+        if cover == True:
+            mid_str += ', cover=True'
         mid_str += '] ;\n'
 
         return mid_str
 
 
-    def write_edge(self, edge, params, arrow=True,
-                   custom_src_id=None, custom_trg_id=None):
+    def write_edge(self, edge, params, arrow=True, custom_src_id=None,
+                   custom_trg_id=None, underlying=False, cover=False,
+                   showintro=True):
         """ Write the line of a dot file for a single edge. """
 
+        edge_str = ""
+        if showintro == False and underlying == True:
+            edge_str += "//"
         # Check if a custom source or target is used.
         source_id = custom_src_id
         if custom_src_id == None:
@@ -2994,9 +3020,9 @@ class CausalGraph(object):
             target_id = edge.target.nodeid
         # Write source and target node ids.
         if edge.reverse == False:
-            edge_str = ('{} -> {} ['.format(source_id, target_id))
+            edge_str += ('{} -> {} ['.format(source_id, target_id))
         elif edge.reverse == True:
-            edge_str = ('{} -> {} ['.format(target_id, source_id))
+            edge_str += ('{} -> {} ['.format(target_id, source_id))
             edge_str += 'rev=True, '
         # Write edge color.
         edge_str += 'color={}'.format(edge.color)
@@ -3022,7 +3048,7 @@ class CausalGraph(object):
             pensize = params["minpenwidth"]
         if pensize > params["maxpenwidth"]:
             pensize = params["maxpenwidth"]
-        edge_str += ', penwidth={}'.format(pensize)
+        edge_str += ', penwidth={:.2}'.format(pensize)
         # Write labels.
         if params["addedgelabels"] == True:
             if edge.labelcarrier == True:
@@ -3035,6 +3061,8 @@ class CausalGraph(object):
         # Write whether edge is essential.
         if edge.essential == True:
             edge_str += ', ess=True'
+        if cover == True:
+            edge_str += ', cover=True'
         #if addedgelabels == True:
         #    if midedge.overridelabel == None:
         #        if midedge.labelcarrier == True:
@@ -3065,28 +3093,40 @@ class CausalGraph(object):
         return edge_str
 
 
-    def write_hyperedge(self, hyperedge, midid, params):
+    def write_hyperedge(self, hyperedge, midid, params, showintro=True):
         """
         Write the dot lines for the subedges an midnode of an hyperedge.
         """
 
         if len(hyperedge.edgelist) == 1:
-            hyper_str = self.write_edge(hyperedge.edgelist[0], params)
+            hyper_str = self.write_edge(hyperedge.edgelist[0], params,
+                                        underlying=hyperedge.underlying,
+                                        cover=hyperedge.cover,
+                                        showintro=showintro)
         elif len(hyperedge.edgelist) > 1:
             # Write mid node.
             midid_str = "mid{}".format(midid)
             hyper_str = self.write_midnode(midid_str, hyperedge.midcolor,
-                                           params["edgewidthscale"])
+                                           params["edgewidthscale"],
+                                           underlying=hyperedge.underlying,
+                                           cover=hyperedge.cover,
+                                           showintro=showintro)
             # Write subedges without arrow.
             all_conflict = True
             for subedge in hyperedge.edgelist:
                 hyper_str += self.write_edge(subedge, params, arrow=False,
-                                             custom_trg_id=midid_str)
+                                             custom_trg_id=midid_str,
+                                             underlying=hyperedge.underlying,
+                                             cover=hyperedge.cover,
+                                             showintro=showintro)
                 if subedge.relationtype != "conflict":
                     all_conflict = False
             # Write final edge with arrow (if target not shrunk).
             hyper_str += self.write_edge(hyperedge, params,
-                                         custom_src_id=midid_str)
+                                         custom_src_id=midid_str,
+                                         underlying=hyperedge.underlying,
+                                         cover=hyperedge.cover,
+                                         showintro=showintro)
 
         return hyper_str
 
@@ -6629,22 +6669,24 @@ def mergedualstories(eoi, prefix, causalgraphs=None, siphon=False, showintro=Tru
             #story.compute_relstats()
             #story.compute_visuals(showintro, color)
             story.get_maxrank()
+            story.build_nointro()
             story.build_dot_file(showintro, addedgelabels, showedgelabels,
                                  edgeid, edgeocc, edgeprob, statstype, weightedges)
             output_path = "{}/unique/{}".format(eoi, story.filename)
             outfile = open(output_path, "w")
             outfile.write(story.dot_file)
             outfile.close()
-        # Write state dict in json format.
-        for i in range(len(sorted_stories)):
-            statedict = {"states": {}, "edits": {}}
-            for statenode in sorted_stories[i].statenodes:
-                statedict["states"][statenode.nodeid] = statenode.state
-                statedict["edits"][statenode.nodeid] = statenode.edit
-            json_path = "{}/unique/statefile-{}.json".format(eoi, i+1)
-            statefile = open(json_path, "w")
-            json.dump(statedict, statefile)
-            statefile.close()
+        if prefix == "dualstory":
+            # Write state dict in json format.
+            for i in range(len(sorted_stories)):
+                statedict = {"states": {}, "edits": {}}
+                for statenode in sorted_stories[i].statenodes:
+                    statedict["states"][statenode.nodeid] = statenode.state
+                    statedict["edits"][statenode.nodeid] = statenode.edit
+                json_path = "{}/unique/statefile-{}.json".format(eoi, i+1)
+                statefile = open(json_path, "w")
+                json.dump(statedict, statefile)
+                statefile.close()
 
     return sorted_stories
 
@@ -7262,12 +7304,27 @@ def foldpathway(eoi, prefix, causalgraphs=None, siphon=False, ignorelist=[],
         if primed_rule != None:
             hgroup = []
             for hyperedge in eventnode.outgoing:
-                slbls = []
-                for s in hyperedge.sources:
-                    slbls.append(s.label.replace("'", "").strip())
-                tlbl = hyperedge.target.label.replace("'", "").strip()
-                h = {"sources": slbls, "target": tlbl}
-                hgroup.append(h)
+                if isinstance(hyperedge.target, EventNode):
+                    slbls = []
+                    for s in hyperedge.sources:
+                        slbls.append(s.label.replace("'", "").strip())
+                    tlbl = hyperedge.target.label.replace("'", "").strip()
+                    h = {"sources": slbls, "target": tlbl}
+                    hgroup.append(h)
+                elif isinstance(hyperedge.target, StateNode):
+                    # Need to reach one level more up and down to get to
+                    # the event nodes.
+                    for hyperedge2 in hyperedge.target.outgoing:
+                        slbls = []
+                        for s in hyperedge2.sources:
+                            if s != hyperedge.target:
+                                for hyperedge3 in s.incoming:
+                                    for s2 in hyperedge3.sources:
+                                        slbls.append(s2.label.replace("'", "")
+                                                     .strip())
+                        tlbl = hyperedge2.target.label.replace("'", "").strip()
+                        h = {"sources": slbls, "target": tlbl}
+                        hgroup.append(h)
             if primed_rule not in outedge_dict.keys():
                 outedge_dict[primed_rule] = [hgroup]
             else:
@@ -7276,6 +7333,7 @@ def foldpathway(eoi, prefix, causalgraphs=None, siphon=False, ignorelist=[],
     # same (ignoring 's), then the primed_rule is NOT a path dependent hub.
     # It is a PDH otherwise.
     pdhs = {}
+    pdh_num = 1
     for primed_rule in outedge_dict.keys():
         firstgroup = outedge_dict[primed_rule][0]
         all_same = True
@@ -7305,20 +7363,19 @@ def foldpathway(eoi, prefix, causalgraphs=None, siphon=False, ignorelist=[],
         if all_same == True:
             pdhs[primed_rule] = False
         else:
-            pdhs[primed_rule] = True       
+            pdhs[primed_rule] = pdh_num
+            pdh_num += 1
     for eventnode in pathway.eventnodes:
         if eventnode.rule != None:
             eventnode.pdh = pdhs[eventnode.rule]
     # Set state nodes that are outputs of PDH events as PDH themselves.
     # Also assign a number to each state PDH so they can be selected later.
-    state_pdh_num = 1
     for eventnode in pathway.eventnodes:
-        if eventnode.pdh == True:
+        if eventnode.pdh != False:
             output_state_nodes = []
             for hyperedge in eventnode.outgoing:
                 if isinstance(hyperedge.target, StateNode):
-                    hyperedge.target.pdh = state_pdh_num
-            state_pdh_num += 1
+                    hyperedge.target.pdh = eventnode.pdh
 
     # Save a copy of the pathway up to that point. Will be used to create
     # the final pathway where context is ignored.
@@ -7342,6 +7399,9 @@ def foldpathway(eoi, prefix, causalgraphs=None, siphon=False, ignorelist=[],
     pathway.reverse_subedges()
     pathway.assign_label_carriers(showintro)
     #pathway.align_vertical()
+    # Remove 's
+    for eventnode in pathway.eventnodes:
+        eventnode.label = eventnode.label.replace("'", "").strip()
     pathway.build_dot_file(showintro, addedgelabels, showedgelabels,
                            edgeid, edgeocc, edgeprob, statstype,
                            weightedges, edgewidthscale=1.5)
@@ -7355,6 +7415,7 @@ def foldpathway(eoi, prefix, causalgraphs=None, siphon=False, ignorelist=[],
         pathway.filename = "statepathway-split.dot"
         pathway.build_adjacency(hyper=True)
         keep_states_only(pathway)
+        pathway.build_nointro()
         pathway.build_dot_file(showintro, addedgelabels, showedgelabels,
                                edgeid, edgeocc, edgeprob, statstype,
                                weightedges, edgewidthscale=1.5)
@@ -7399,6 +7460,7 @@ def foldpathway(eoi, prefix, causalgraphs=None, siphon=False, ignorelist=[],
         pathwaycopy.filename = "statepathway.dot"
         pathwaycopy.build_adjacency(hyper=True)
         keep_states_only(pathwaycopy)
+        pathwaycopy.build_nointro()
         pathwaycopy.build_dot_file(showintro, addedgelabels, showedgelabels,
                                    edgeid, edgeocc, edgeprob, statstype,
                                    weightedges, edgewidthscale=1.5)
@@ -7665,18 +7727,12 @@ def colorpaths(eoi, causalgraph=None, siphon=False, ignorelist=[],
                edgeid=edgeid, edgeocc=edgeocc, edgeprob=edgeprob,
                weightedges=weightedges, color=color, writedot=writedot,
                rmprev=rmprev, intropos=intropos, rulepos=rulepos, sel=sel)
-    #print("dualpathway")
-    #colorgraph(eoi, "dualpathway", showintro=showintro,
-    #           addedgelabels=addedgelabels, showedgelabels=showedgelabels,
-    #           edgeid=edgeid, edgeocc=edgeocc, edgeprob=edgeprob,
-    #           weightedges=weightedges, color=color, writedot=writedot,
-    #           rmprev=rmprev, intropos=intropos, rulepos=rulepos)
-    #print("statepathway")
-    #colorgraph(eoi, "statepathway", showintro=showintro,
-    #           addedgelabels=addedgelabels, showedgelabels=showedgelabels,
-    #           edgeid=edgeid, edgeocc=edgeocc, edgeprob=edgeprob,
-    #           weightedges=weightedges, color=color, writedot=writedot,
-    #           rmprev=rmprev, intropos=intropos, rulepos=rulepos)
+    print("dualpathway")
+    colorgraph(eoi, "dualpathway", showintro=showintro,
+               addedgelabels=addedgelabels, showedgelabels=showedgelabels,
+               edgeid=edgeid, edgeocc=edgeocc, edgeprob=edgeprob,
+               weightedges=weightedges, color=color, writedot=writedot,
+               rmprev=rmprev, intropos=intropos, rulepos=rulepos, sel=sel)
 
 
 def colorgraph(eoi, prefix, causalgraph=None, siphon=False, ignorelist=[],
@@ -7695,161 +7751,164 @@ def colorgraph(eoi, prefix, causalgraph=None, siphon=False, ignorelist=[],
         pathway = CausalGraph(pathway_path, eoi)
     else:
         pathway = causalgraph
-    # Color pathways to distiguish admissible paths.
+    # Read PDHs.
+    pdhs = []
+    for node in pathway.eventnodes + pathway.statenodes:
+        if ":" in node.label:
+            colon = node.label.index(":")
+            pdh_num = int(node.label[colon+1:])
+            node.pdh = pdh_num
+            if pdh_num not in pdhs:
+                pdhs.append(pdh_num)
+    if len(pdhs) == 0:
+        raise ValueError("No edge coloration required, nothing done.")
+    elif len(pdhs) == 1 and sel == None:
+        sel = pdhs[0]
+    elif sel not in pdhs:
+        raise ValueError("Please select a valid PDH number (integer "
+                         "after colon : on node labels)")
+    # Name output graph according to selected PDH.
     if prefix == "eventpathway":
-        pathway.filename = "eventpathway-color.dot"
+        pathway.filename = "eventpathway-color{}.dot".format(sel)
     if prefix == "dualpathway":
-        pathway.filename = "dualpathway-color.dot"
-    #if prefix == "statestory":
-    #    pathway.filename = "statepathway-color.dot"
-    #selectedlabel = "C binds D"
-    #selectedlabel = "D binds G"
-    #selectedlabel = "E binds F"
-    #selectedlabel = "A binds B"
-    #selectedlabel = "ABL1 act"
-    selectedlabel = sel
-    # Get selected nodes.
+        pathway.filename = "dualpathway-color{}.dot".format(sel)
+    # Select PDH nodes. If state nodes are present, select them instead
+    # of the events.
     selectednodes = []
-    for eventnode in pathway.eventnodes:
-        if eventnode.rule == selectedlabel:
-            selectednodes.append(eventnode)
-            eventnode.highlighted = True
-    # Check that all selected nodes are a PDH.
-    all_pdh = True
-    for node in selectednodes:
-        if node.pdh == False:
-            all_pdh = False
-            break
-    if all_pdh == False:
-        raise ValueError("Selected node is not a Path Dependent Hub (PDH), "
-                         "colored graph not written.")
+    if len(pathway.statenodes) == 0:
+        for eventnode in pathway.eventnodes:
+            if eventnode.pdh == sel:
+                selectednodes.append(eventnode)
     else:
-        # For each selected node, get the upstream concurrent path of every
-        # target node. If, while building the upstream path, an other selected
-        # node is reached, remove it from list selectednodes or remove its
-        # corresponding upstream path from paths_nodes if it was already
-        # processed.
-        # Get the targets of selected nodes.
-        selectedtargets = []
-        for node in selectednodes:
-            for hyperedge in node.outgoing:
-                if hyperedge.target not in selectedtargets:
-                    selectedtargets.append(hyperedge.target)
-        # Get upstream paths (concurrent) from selected targets.
-        paths_nodes = []
-        paths_hedges = []
-        for selectedtarget in selectedtargets:
-            up_nodes, up_hedges = concurr_paths_up(pathway, selectedtarget)
-            for pn in up_nodes:
-                paths_nodes.append(pn)
-            for ph in up_hedges:
-                paths_hedges.append(ph)
-        #for path in paths_nodes:
-        #    print("====")
-        #    for n in path:
-        #        print(n)
-        # Make a list of all path dependent hubs present in each path.
-        paths_pdhs = []
-        for path in paths_nodes:
-            path_pdhs = []
-            for node in path:
-                if node.pdh != False:
-                    path_pdhs.append(node)
-            paths_pdhs.append(path_pdhs)
-        for path in paths_pdhs:
-            print("---")
-            for n in path:
-                print(n)
-        #sets_pdhs = list(set(paths_pdhs))
-        #for path in sets_pdhs:
-        #    print("+++")
-        #    for n in path:
-        #        print(n)
-        # Manually build a set of all combinations of pdhs found.
-        sets_pdhs = []
-        for path_pdhs in paths_pdhs:
-            pdhs_already_present = False
-            for set_pdhs in sets_pdhs:
-                same_pdhs = False
-                if len(set_pdhs) == len(path_pdhs):
-                    same_pdhs = True
-                    for i in range(len(path_pdhs)):
-                        if path_pdhs[i].label != set_pdhs[i].label:
-                            same_pdhs = False
-                            break
-                if same_pdhs == True:
-                    pdhs_already_present = True
-                    break
-            if pdhs_already_present == False:
-                sets_pdhs.append(path_pdhs)
-        print("")
-        for path in sets_pdhs:
-            print("+++")
-            for n in path:
-                print(n)
-        # Find to which element of sets_pdhs corresponds each element
-        # of paths_pdhs.
-        set_indexes = []
-        for path_pdhs in paths_pdhs:
-            for i in range(len(sets_pdhs)):
-                set_pdhs = sets_pdhs[i]
-                same_pdhs = False
-                if len(set_pdhs) == len(path_pdhs):
-                    same_pdhs = True
-                    for j in range(len(path_pdhs)):
-                        if path_pdhs[j].label != set_pdhs[j].label:
-                            same_pdhs = False
-                            break
-                if same_pdhs == True:
-                    set_indexes.append(i)
-                    break
-        print("")
-        print(set_indexes)
-        # Assign color ids to each hyperedge from each path.
-        for hyperedge in pathway.hyperedges:
-            hyperedge.color_ids = []
-        for i in range(len(paths_hedges)):
-            color_id = set_indexes[i] + 1
-            path_hedges = paths_hedges[i]
-            for hedge in path_hedges:
-                if color_id not in hedge.color_ids:
-                    hedge.color_ids.append(color_id)
-        # Remove color from any hyperedge that has all the colors.
-        a = list(range(1, len(sets_pdhs)+1))
-        for hyperedge in pathway.hyperedges:
-            c = hyperedge.color_ids
-            if collections.Counter(c) == collections.Counter(a):
-                hyperedge.color_ids = []
-        # Redo quotient, but ignoring context.
-        for eventnode in pathway.eventnodes:       
-            eventnode.label = eventnode.label.replace("'", "").strip()
-        foldstory(pathway, fusedges=False)
-        # Fuse identical hyperedges take colors into account.
-        pair_found = True
-        while pair_found == True:
-            pair_found = False
-            for i in range(len(pathway.hyperedges)):
-                h1 = pathway.hyperedges[i]
-                for j in range(i+1, len(pathway.hyperedges)):
-                    h2 = pathway.hyperedges[j]
-                    are_equi, corr = equivalent_hyperedges(h1, h2, False, True)
-                    if are_equi == True:
-                        for k in range(len(h1.edgelist)):
-                            main_edge = h1.edgelist[k]
-                            other_edge = h2.edgelist[corr[k]]
-                            main_edge.weight += other_edge.weight
-                            main_edge.number += other_edge.number
-                        h1.color_ids += h2.color_ids
-                        del(pathway.hyperedges[j])
-                        pair_found = True
+        for statenode in pathway.statenodes:
+            if statenode.pdh == sel:
+                selectednodes.append(statenode)
+    # For each selected node, get the upstream concurrent path of every
+    # target node. If, while building the upstream path, an other selected
+    # node is reached, remove it from list selectednodes or remove its
+    # corresponding upstream path from paths_nodes if it was already
+    # processed.
+    # Get the targets of selected nodes.
+    pathway.build_adjacency(hyper=True)
+    selectedtargets = []
+    for node in selectednodes:
+        for hyperedge in node.outgoing:
+            if hyperedge.target not in selectedtargets:
+                selectedtargets.append(hyperedge.target)
+    # Get upstream paths (concurrent) from selected targets.
+    paths_nodes = []
+    paths_hedges = []
+    for selectedtarget in selectedtargets:
+        up_nodes, up_hedges = concurr_paths_up(pathway, selectedtarget)
+        for pn in up_nodes:
+            paths_nodes.append(pn)
+        for ph in up_hedges:
+            paths_hedges.append(ph)
+    # Make a list of all path dependent hubs present in each path.
+    paths_pdhs = []
+    for path in paths_nodes:
+        path_pdhs = []
+        for node in path:
+            if node.pdh != False:
+                path_pdhs.append(node)
+        paths_pdhs.append(path_pdhs)
+    # Manually build a set of all combinations of pdhs found.
+    sets_pdhs = []
+    for path_pdhs in paths_pdhs:
+        pdhs_already_present = False
+        for set_pdhs in sets_pdhs:
+            same_pdhs = False
+            if len(set_pdhs) == len(path_pdhs):
+                same_pdhs = True
+                for i in range(len(path_pdhs)):
+                    #if path_pdhs[i].label != set_pdhs[i].label:
+                    if path_pdhs[i] != set_pdhs[i]:
+                        same_pdhs = False
                         break
-                if pair_found == True:
+            if same_pdhs == True:
+                pdhs_already_present = True
+                break
+        if pdhs_already_present == False:
+            sets_pdhs.append(path_pdhs)
+    # Find to which element of sets_pdhs corresponds each element
+    # of paths_pdhs.
+    set_indexes = []
+    for path_pdhs in paths_pdhs:
+        for i in range(len(sets_pdhs)):
+            set_pdhs = sets_pdhs[i]
+            same_pdhs = False
+            if len(set_pdhs) == len(path_pdhs):
+                same_pdhs = True
+                for j in range(len(path_pdhs)):
+                    #if path_pdhs[j].label != set_pdhs[j].label:
+                    if path_pdhs[j] != set_pdhs[j]:
+                        same_pdhs = False
+                        break
+            if same_pdhs == True:
+                set_indexes.append(i)
+                break
+    # Assign color ids to each hyperedge from each path.
+    for hyperedge in pathway.hyperedges:
+        hyperedge.color_ids = []
+    for i in range(len(paths_hedges)):
+        color_id = set_indexes[i] + 1
+        path_hedges = paths_hedges[i]
+        for hedge in path_hedges:
+            if color_id not in hedge.color_ids:
+                hedge.color_ids.append(color_id)
+    # Redo quotient, but ignoring context.
+    #for eventnode in pathway.eventnodes:       
+    #    eventnode.label = eventnode.label.replace("'", "").strip()
+    for statenode in pathway.statenodes:
+        statenode.label = statenode.stdedit
+    foldstory(pathway, fusedges=False)
+    # Fuse identical hyperedges take colors into account.
+    pair_found = True
+    while pair_found == True:
+        pair_found = False
+        for i in range(len(pathway.hyperedges)):
+            h1 = pathway.hyperedges[i]
+            for j in range(i+1, len(pathway.hyperedges)):
+                h2 = pathway.hyperedges[j]
+                are_equi, corr = equivalent_hyperedges(h1, h2, False, True)
+                if are_equi == True:
+                    for k in range(len(h1.edgelist)):
+                        main_edge = h1.edgelist[k]
+                        other_edge = h2.edgelist[corr[k]]
+                        main_edge.weight += other_edge.weight
+                        main_edge.number += other_edge.number
+                    h1.color_ids += h2.color_ids
+                    del(pathway.hyperedges[j])
+                    pair_found = True
                     break
-        pathway.rank_sequentially(intropos=intropos, rulepos=rulepos)
+            if pair_found == True:
+                break
+    # Remove color from any hyperedge that has all the colors.
+    a = list(range(1, len(sets_pdhs)+1))
+    for hyperedge in pathway.hyperedges:
+        c = hyperedge.color_ids
+        if collections.Counter(c) == collections.Counter(a):
+            hyperedge.color_ids = []
+    #pathway.rank_sequentially(intropos=intropos, rulepos=rulepos)
+    pathway.build_nointro()
+    # Assign colors.
+    assign_colors(pathway, len(sets_pdhs))
+    # Write colored pathway.
+    pathway.get_maxrank()
+    pathway.build_dot_file(showintro, addedgelabels, showedgelabels,
+                           edgeid, edgeocc, edgeprob, statstype,
+                           weightedges, edgewidthscale=1.5)
+    output_path = "{}/{}".format(eoi, pathway.filename)
+    outfile = open(output_path, "w")
+    outfile.write(pathway.dot_file)
+    outfile.close()
+
+    if prefix == "dualpathway":
+        # Write state nodes only on colored graph.
+        pathway.filename = "statepathway-color{}.dot".format(sel)
+        pathway.build_adjacency(hyper=True)
+        keep_states_only(pathway)
         pathway.build_nointro()
-        # Assign colors.
-        assign_colors(pathway, len(sets_pdhs))
-        # Write colored pathway.
         pathway.build_dot_file(showintro, addedgelabels, showedgelabels,
                                edgeid, edgeocc, edgeprob, statstype,
                                weightedges, edgewidthscale=1.5)
@@ -7857,6 +7916,7 @@ def colorgraph(eoi, prefix, causalgraph=None, siphon=False, ignorelist=[],
         outfile = open(output_path, "w")
         outfile.write(pathway.dot_file)
         outfile.close()
+
 
 
 def concurr_paths_up(graph, from_node):
@@ -8526,84 +8586,84 @@ def same_instance(hedge1, hedge2):
 #    outfile.close()
 
 
-def foldcores(eoi, causalgraphs=None, siphon=False, ignorelist=[],
-              showintro=False, addedgelabels=True, showedgelabels=True,
-              edgeid=True, edgeocc=False, edgeuse=True, statstype="rel",
-              weightedges=True, color=True, writedot=True, rmprev=False):
-    """ Fold meshed cores into a single event pathway. """
-
-    # Reading section.
-    if causalgraphs == None:
-        # Using cores or eventpaths both work. But it can suffle the nodes
-        # horizontally, yielding a different graph, but with same ranks for
-        # all nodes.
-        core_files = get_dot_files(eoi, "unique")
-        meshedcores = []
-        for core_file in core_files:
-            core_path = "{}/{}".format(eoi, core_file)
-            meshedcores.append(CausalGraph(core_path, eoi))
-    else:
-        meshedcores = causalgraphs
-        core_files = None
-    # Doing the work.
-    flush_ignored(meshedcores, core_files, ignorelist)
-    pathway = CausalGraph(eoi=eoi, meshedgraph=True)
-    pathway.occurrence = 0
-    node_number = 1
-    seen_labels = []
-    midid = 1
-    for meshedcore in meshedcores:
-        # Add nodes.
-        pathway.occurrence += meshedcore.occurrence
-        for node in meshedcore.eventnodes:
-            if node.label not in seen_labels:
-                seen_labels.append(node.label)
-                n_id = "node{}".format(node_number)
-                pathway.eventnodes.append(EventNode(n_id, node.label,
-                                                    node.rank,
-                                                    intro=node.intro,
-                                                    first=node.first))
-                node_number += 1
-        # Add meshes (edges).
-        for mesh in meshedcore.meshes:
-            mesh_found = False
-            for pathwaymesh in pathway.meshes:
-                if analogous_meshes(mesh, pathwaymesh, enforcerank=False):
-                    mesh_found = True
-                    pathwaymesh.uses += mesh.uses
-                    pathwaymesh.weight += mesh.uses
-                    break
-            if mesh_found == False:
-                add_mesh(pathway, mesh, midid)
-                midid += len(mesh.midnodes)
-
-    # Uncomment the next 3 lines and comment pathway.rank_sequentially()
-    # to build unranked version of graph
-    #pathway.rank_intermediary()
-    #pathway.get_maxrank()
-    #pathway.sequentialize_ids()
-    pathway.rank_sequentially()
-    pathway.filename = "eventpathway.dot"
-    compute_mesh_occurrence(eoi, pathway)
-    pathway.compute_visuals(showintro, color)
-    pathway.compute_relstats()
-    pathway.build_dot_file(showintro, addedgelabels, showedgelabels, edgeid,
-                           edgeocc, edgeuse, statstype, weightedges)
-    # Writing section.
-    if writedot == True:
-        output_path1 = "{}/{}".format(eoi, pathway.filename)
-        outfile1 = open(output_path1, "w")
-        outfile1.write(pathway.dot_file)
-        outfile1.close()
-    if rmprev == True:
-        if path_files == None:
-            path_files = get_dot_files(eoi, "meshedcore")
-        for path_file in path_files:
-            file_path = "{}/{}".format(eoi, path_file)
-            os.remove(file_path)
-    print("Merging all event paths into one event pathway.")
-
-    return pathway        
+#def foldcores(eoi, causalgraphs=None, siphon=False, ignorelist=[],
+#              showintro=False, addedgelabels=True, showedgelabels=True,
+#              edgeid=True, edgeocc=False, edgeuse=True, statstype="rel",
+#              weightedges=True, color=True, writedot=True, rmprev=False):
+#    """ Fold meshed cores into a single event pathway. """
+#
+#    # Reading section.
+#    if causalgraphs == None:
+#        # Using cores or eventpaths both work. But it can suffle the nodes
+#        # horizontally, yielding a different graph, but with same ranks for
+#        # all nodes.
+#        core_files = get_dot_files(eoi, "unique")
+#        meshedcores = []
+#        for core_file in core_files:
+#            core_path = "{}/{}".format(eoi, core_file)
+#            meshedcores.append(CausalGraph(core_path, eoi))
+#    else:
+#        meshedcores = causalgraphs
+#        core_files = None
+#    # Doing the work.
+#    flush_ignored(meshedcores, core_files, ignorelist)
+#    pathway = CausalGraph(eoi=eoi, meshedgraph=True)
+#    pathway.occurrence = 0
+#    node_number = 1
+#    seen_labels = []
+#    midid = 1
+#    for meshedcore in meshedcores:
+#        # Add nodes.
+#        pathway.occurrence += meshedcore.occurrence
+#        for node in meshedcore.eventnodes:
+#            if node.label not in seen_labels:
+#                seen_labels.append(node.label)
+#                n_id = "node{}".format(node_number)
+#                pathway.eventnodes.append(EventNode(n_id, node.label,
+#                                                    node.rank,
+#                                                    intro=node.intro,
+#                                                    first=node.first))
+#                node_number += 1
+#        # Add meshes (edges).
+#        for mesh in meshedcore.meshes:
+#            mesh_found = False
+#            for pathwaymesh in pathway.meshes:
+#                if analogous_meshes(mesh, pathwaymesh, enforcerank=False):
+#                    mesh_found = True
+#                    pathwaymesh.uses += mesh.uses
+#                    pathwaymesh.weight += mesh.uses
+#                    break
+#            if mesh_found == False:
+#                add_mesh(pathway, mesh, midid)
+#                midid += len(mesh.midnodes)
+#
+#    # Uncomment the next 3 lines and comment pathway.rank_sequentially()
+#    # to build unranked version of graph
+#    #pathway.rank_intermediary()
+#    #pathway.get_maxrank()
+#    #pathway.sequentialize_ids()
+#    pathway.rank_sequentially()
+#    pathway.filename = "eventpathway.dot"
+#    compute_mesh_occurrence(eoi, pathway)
+#    pathway.compute_visuals(showintro, color)
+#    pathway.compute_relstats()
+#    pathway.build_dot_file(showintro, addedgelabels, showedgelabels, edgeid,
+#                           edgeocc, edgeuse, statstype, weightedges)
+#    # Writing section.
+#    if writedot == True:
+#        output_path1 = "{}/{}".format(eoi, pathway.filename)
+#        outfile1 = open(output_path1, "w")
+#        outfile1.write(pathway.dot_file)
+#        outfile1.close()
+#    if rmprev == True:
+#        if path_files == None:
+#            path_files = get_dot_files(eoi, "meshedcore")
+#        for path_file in path_files:
+#            file_path = "{}/{}".format(eoi, path_file)
+#            os.remove(file_path)
+#    print("Merging all event paths into one event pathway.")
+#
+#    return pathway        
 
 
 def flush_ignored(graph_list, graph_files, ignorelist, msg=True):
